@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -87,6 +90,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         val db = CameraDb(this).also { activityDb=it }
         val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         setContent {
@@ -172,6 +176,12 @@ class MainActivity : ComponentActivity() {
             val speed = state.speedMph
             val moving = state.active && (speed == null || speed >= 5.0)
             SpeedBuddyTheme(prefs) {
+                val lightBars=MaterialTheme.colorScheme.background.luminance()>.5f
+                SideEffect {
+                    WindowInsetsControllerCompat(window,window.decorView).apply {
+                        isAppearanceLightStatusBars=lightBars;isAppearanceLightNavigationBars=lightBars
+                    }
+                }
                 Surface(Modifier.fillMaxSize(), color = Background, contentColor = Ink) {
                   Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                     when (page) {
