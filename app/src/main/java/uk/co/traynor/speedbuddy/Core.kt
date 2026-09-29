@@ -99,9 +99,14 @@ class RoadLimitStabilizer {
     fun resolve(fix: Fix, match: RoadMatch?, limit: Int?, nowMs: Long,
         roads: List<Road> = emptyList()): Int? {
         if (match != null) {
-            if (limit != null) { lastMatch = match; lastLimit = limit; lastSeenMs = nowMs }
-            else reset()
-            return limit
+            if (limit != null) {
+                lastMatch = match; lastLimit = limit; lastSeenMs = nowMs
+                return limit
+            }
+            // A weak match to a tagged road is still ambiguous, not evidence of an unknown limit.
+            if (match.confidence >= .35 || SpeedLimits.mph(match.road.tags) == null) {
+                reset(); return null
+            }
         }
         val previous = lastMatch ?: return null
         if (nowMs - lastSeenMs !in 0..30_000 || fix.accuracyM > 25) { reset(); return null }

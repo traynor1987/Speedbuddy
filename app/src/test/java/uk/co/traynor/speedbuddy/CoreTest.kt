@@ -211,4 +211,12 @@ class CoreTest {
         stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000)
         assertNull(stable.resolve(fix(53.0034), null, null, 2000, listOf(current, next, unknown)))
     }
+
+    @Test fun lowConfidenceMatchToTaggedRoadDoesNotEraseTheRecentLimit() {
+        val stable = RoadLimitStabilizer()
+        val start = fix(53.005)
+        stable.resolve(start, RoadMatch(road, 2.0, 0.0, .9), 30, 1000)
+        assertEquals(30, stable.resolve(start, RoadMatch(road, 18.0, 55.0, .2), null, 2000,
+            listOf(road)))
+    }
 }
