@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             var page by remember { mutableStateOf("drive") }
             BackHandler(enabled = page != "drive") { page = when (page) {
-                "edit" -> "cameras"; "cameras", "mapData" -> "settings"; else -> "drive"
+                "edit" -> "cameras"; "cameras", "mapData", "updates" -> "settings"; else -> "drive"
             } }
             val state by DriveBus.state.collectAsState()
             var records by remember { mutableStateOf(db.userCameras()) }
@@ -177,7 +177,8 @@ class MainActivity : ComponentActivity() {
                             { importBackup.launch(arrayOf("application/json", "text/plain")) }, importedInfo,
                             { if (moving) message = "Import cameras while parked."
                               else importLufop.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
-                            { page = "map" }, { page = "mapData" })
+                            { page = "map" }, { page = "mapData" }, { page = "updates" })
+                        "updates" -> UpdateCenterScreen(this@MainActivity, moving) { page = "settings" }
                         "map" -> CameraMapScreen(db, state.fix?.point, moving,
                             importedInfo?.importedAtMs ?: 0L, importedInfo?.count ?: 0) { page = "drive" }
                         "mapData" -> MapDataScreen(db, importedInfo, { page = "settings" },
@@ -449,7 +450,7 @@ class MainActivity : ComponentActivity() {
 @Composable private fun SettingsScreen(prefs: android.content.SharedPreferences, back: () -> Unit,
     cameras: () -> Unit, diagnostics: () -> Unit, exportBackup: () -> Unit, importBackup: () -> Unit,
     imported: CameraDb.ImportedInfo?, importLufop: () -> Unit, openMap: () -> Unit,
-    openMapData: () -> Unit) {
+    openMapData: () -> Unit, openUpdates: () -> Unit) {
     var version by remember { mutableIntStateOf(0) }
     Page("Settings", back) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
@@ -500,6 +501,10 @@ class MainActivity : ComponentActivity() {
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     MenuRow("Diagnostics", "GPS, road match and camera decisions", diagnostics)
                 }
+            }
+            Spacer(Modifier.height(22.dp)); SectionLabel("APP")
+            Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
+                MenuRow("Updates", "Check signed Speed Buddy releases on GitHub", openUpdates)
             }
             Spacer(Modifier.height(22.dp)); SectionLabel("PUBLIC CAMERA FILE")
             Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
