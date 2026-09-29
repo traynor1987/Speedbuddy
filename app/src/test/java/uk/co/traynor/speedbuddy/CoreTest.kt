@@ -96,6 +96,14 @@ class CoreTest {
         assertTrue(gate.update(33.0, 30, 2)); assertFalse(gate.update(34.0, 30, 2))
         assertFalse(gate.update(30.0, 30, 2)); assertTrue(gate.update(33.0, 30, 2))
     }
+    @Test fun lowerLimitTriggersOneOverspeedTransition() {
+        val gate = OverspeedGate()
+        assertFalse(gate.update(28.0, 30, 2))
+        assertTrue(gate.update(28.0, 20, 2))
+        assertFalse(gate.update(28.0, 20, 2))
+        assertFalse(gate.update(19.0, 20, 2))
+        assertTrue(gate.update(26.0, 20, 2))
+    }
     @Test fun geometryDistancesAndDirections() {
         assertEquals(500.0, Geo.distance(GeoPoint(53.0, -2.0), GeoPoint(53.0045, -2.0)), 5.0)
         assertEquals(0.0, Geo.bearing(GeoPoint(53.0, -2.0), GeoPoint(53.0045, -2.0)), .01)

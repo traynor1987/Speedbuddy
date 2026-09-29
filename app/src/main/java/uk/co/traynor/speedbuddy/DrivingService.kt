@@ -13,6 +13,7 @@ import android.media.ToneGenerator
 import android.os.*
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -128,14 +129,18 @@ class DrivingService : Service(), LocationListener {
         }
     }
     private fun signal(sound: Boolean, vibration: Boolean) {
-        if (sound) ToneGenerator(AudioManager.STREAM_NOTIFICATION, 75).also { tone ->
-            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 250)
-            Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 450)
-        }
-        if (vibration) {
+        if (sound) runCatching {
+            ToneGenerator(AudioManager.STREAM_NOTIFICATION, 75).also { tone ->
+                try {
+                    tone.startTone(ToneGenerator.TONE_PROP_BEEP, 250)
+                    Handler(Looper.getMainLooper()).postDelayed({ runCatching { tone.release() } }, 450)
+                } catch (error: Exception) { tone.release(); throw error }
+            }
+        }.onFailure { Log.w("SpeedBuddy", "Sound alert unavailable", it) }
+        if (vibration) runCatching {
             val vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
-            vibrator.vibrate(VibrationEffect.createOneShot(220, VibrationEffect.DEFAULT_AMPLITUDE))
-        }
+            if (vibrator.hasVibrator()) vibrator.vibrate(VibrationEffect.createOneShot(220, VibrationEffect.DEFAULT_AMPLITUDE))
+        }.onFailure { Log.w("SpeedBuddy", "Vibration alert unavailable", it) }
     }
     override fun onDestroy() {
         tick?.cancel(); scope.cancel(); locationManager.removeUpdates(this); db.close()
