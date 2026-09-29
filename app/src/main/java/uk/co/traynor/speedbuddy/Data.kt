@@ -21,7 +21,7 @@ interface CameraRepository {
     fun upsert(camera: Camera)
     fun delete(id: String)
 }
-object OwnerDataRevision { @Volatile var roads: Long = 0L }
+object OwnerDataRevision { @Volatile var roads: Long = 0L; @Volatile var cameras: Long = 0L }
 
 data class CameraCorrection(val id: String, val source: CameraSource, val point: GeoPoint,
     val type: CameraType, val direction: Double?, val note: String?,
@@ -83,8 +83,9 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
         writableDatabase.insertWithOnConflict("suppressed_cameras", null, ContentValues().apply {
             put("id", id); put("source", source.name); put("updated", System.currentTimeMillis())
         }, SQLiteDatabase.CONFLICT_REPLACE)
+        OwnerDataRevision.cameras++
     }
-    fun unsuppressCamera(id: String) { writableDatabase.delete("suppressed_cameras", "id=?", arrayOf(id)) }
+    fun unsuppressCamera(id: String) { writableDatabase.delete("suppressed_cameras", "id=?", arrayOf(id)); OwnerDataRevision.cameras++ }
     fun resetCameraOverrides() {
         val database = writableDatabase
         database.beginTransaction()
@@ -93,6 +94,7 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
             database.delete("suppressed_cameras", null, null)
             database.setTransactionSuccessful()
         } finally { database.endTransaction() }
+        OwnerDataRevision.cameras++
     }
     fun mergeSuppressed(ids: Set<String>) {
         val database = writableDatabase
@@ -119,8 +121,9 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
             put("source_lon", value.sourcePoint?.lon)
             put("updated", value.updatedAtMs.takeIf { it > 0 } ?: System.currentTimeMillis())
         }, SQLiteDatabase.CONFLICT_REPLACE)
+        OwnerDataRevision.cameras++
     }
-    fun deleteCameraCorrection(id: String) { writableDatabase.delete("camera_corrections", "id=?", arrayOf(id)) }
+    fun deleteCameraCorrection(id: String) { writableDatabase.delete("camera_corrections", "id=?", arrayOf(id)); OwnerDataRevision.cameras++ }
     fun roadCorrections(): List<RoadLimitCorrection> = readableDatabase.rawQuery(
         "SELECT id,mph,kind,source_value,updated FROM road_limits", null).use { c ->
         buildList { while (c.moveToNext()) {
@@ -249,6 +252,7 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
             })
             database.setTransactionSuccessful()
         } finally { database.endTransaction() }
+        OwnerDataRevision.cameras++
         return cameras.size
     }
     override fun userCameras(): List<Camera> = readableDatabase.rawQuery("SELECT id,lat,lon,type,direction,mph,note,updated FROM cameras", null).use { cursor ->
@@ -267,8 +271,9 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
             put("note", camera.note); put("updated", System.currentTimeMillis())
         }
         writableDatabase.insertWithOnConflict("cameras", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+        OwnerDataRevision.cameras++
     }
-    override fun delete(id: String) { writableDatabase.delete("cameras", "id=?", arrayOf(id)) }
+    override fun delete(id: String) { writableDatabase.delete("cameras", "id=?", arrayOf(id)); OwnerDataRevision.cameras++ }
     fun merge(cameras: List<Camera>) {
         val database = writableDatabase
         database.beginTransaction()
@@ -285,6 +290,7 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
             }
             database.setTransactionSuccessful()
         } finally { database.endTransaction() }
+        OwnerDataRevision.cameras++
     }
     fun create(point: GeoPoint, type: CameraType, direction: Double? = null, mph: Int? = null, note: String? = null): Camera {
         val camera = Camera(UUID.randomUUID().toString(), point, type, CameraSource.USER, direction, mph, note)

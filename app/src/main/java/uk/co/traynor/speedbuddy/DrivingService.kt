@@ -47,6 +47,14 @@ class DrivingService : Service(), LocationListener {
     private var lastAlertId: String? = null
     private var roadRevision = -1L
     private var roadOverrides: Map<String, RoadLimitCorrection> = emptyMap()
+    private var cameraRevision = -1L
+    private var ownerCameras: List<Camera> = emptyList()
+    private var cameraCorrections: List<CameraCorrection> = emptyList()
+    private var correctedImportedPoints: Map<String, GeoPoint> = emptyMap()
+    private var suppressedCameraIds: Set<String> = emptySet()
+    private var importedCount = 0
+    private var importedCenter: GeoPoint? = null
+    private var importedCache: List<Camera> = emptyList()
     private var tick: Job? = null
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
@@ -105,16 +113,37 @@ class DrivingService : Service(), LocationListener {
         val settings = getSharedPreferences("settings", Context.MODE_PRIVATE)
         val publicCameras = listOfNotNull(snapshot, previousSnapshot).filter { it.usable(fix.point, wallNow) }
             .flatMap { it.cameras }.distinctBy { it.id }
-        val userCameras = db.userCameras()
-        val imported = db.importedNearby(fix.point).filterNot { candidate ->
+        if (cameraRevision != OwnerDataRevision.cameras) {
+            ownerCameras = db.userCameras()
+            cameraCorrections = db.cameraCorrections()
+            correctedImportedPoints = cameraCorrections.filter { it.source == CameraSource.LUFOP }
+                .mapNotNull { correction -> db.importedPoint(correction.id)?.let { correction.id to it } }.toMap()
+            suppressedCameraIds = db.suppressedCameraIds()
+            importedCount = db.importedInfo()?.count ?: 0
+            importedCenter = null
+            cameraRevision = OwnerDataRevision.cameras
+        }
+        if (importedCenter?.let { Geo.distance(it, fix.point) > 250 } != false) {
+            importedCache = db.importedNearby(fix.point)
+            importedCenter = fix.point
+        }
+        val imported = importedCache.filterNot { candidate ->
             publicCameras.any { it.type == candidate.type && Geo.distance(it.point, candidate.point) < 25 }
         }
         val sourceCameras = publicCameras + imported
-        val movedIntoArea = db.cameraCorrections().filter { correction ->
+        val movedIntoArea = cameraCorrections.filter { correction ->
             sourceCameras.none { it.id == correction.id } && Geo.distance(fix.point, correction.point) < 1200
-        }.map { correction -> Camera(correction.id, correction.point, correction.type, correction.source,
-            correction.direction, correction.enforcedMph, correction.note) }
-        val cameras = db.effectiveCameras(sourceCameras + movedIntoArea, userCameras)
+        }.mapNotNull { correction ->
+            val point = when (correction.source) {
+                CameraSource.LUFOP -> correctedImportedPoints[correction.id]
+                CameraSource.OSM -> listOfNotNull(snapshot, previousSnapshot)
+                    .flatMap { it.cameras }.firstOrNull { it.id == correction.id }?.point
+                CameraSource.USER -> null
+            }
+            point?.let { Camera(correction.id, it, correction.type, correction.source) }
+        }
+        val cameras = CameraLayers.merge(sourceCameras + movedIntoArea, ownerCameras,
+            cameraCorrections, suppressedCameraIds)
         val enabled = cameras.filter { when (it.type) {
             CameraType.SPEED, CameraType.AVERAGE -> settings.getBoolean("speedCamera", true)
             CameraType.RED_LIGHT -> settings.getBoolean("redCamera", true)
@@ -130,7 +159,7 @@ class DrivingService : Service(), LocationListener {
             cached?.let { wallNow - it.fetchedAt },
             when { speed == null -> "GPS speed unavailable"; cached == null -> "Road and public camera data unavailable"; limit == null -> "Road limit unknown"; else -> "" },
             settings.getBoolean("overspeed", false) && overspeed.isOver(speed, limit, tolerance), mapStatus,
-            upcoming, publicCameras.size, userCameras.size, db.importedInfo()?.count ?: 0, imported.size))
+            upcoming, publicCameras.size, ownerCameras.size, importedCount, imported.size))
         val target = OsmCoverage.refreshTarget(snapshot, fix, wallNow, lastAttempt)
         if (target != null && !fetching) {
             fetching = true; lastAttempt = wallNow; mapStatus = "Fetching road data"
