@@ -65,6 +65,8 @@ class CoreTest {
         val parallel = camera.copy(id = "parallel", direction = null, point = camera.point.copy(lon = -1.9994))
         assertEquals("Different road", detector.evaluate(fix(53.002), match, listOf(parallel), 28.0).second.reason)
         assertEquals("Camera behind or off heading", detector.evaluate(fix(53.006), match, listOf(camera.copy(direction = null)), 28.0).second.reason)
+        assertEquals(camera.id, CameraApproachDetector().evaluate(fix(53.002), match,
+            listOf(camera.copy(bidirectional = true)), 28.0).first?.camera?.id)
     }
     @Test fun cameraOnFollowingRoadSegmentIsNotDiscarded() {
         val shortRoad = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.002, -2.0)))

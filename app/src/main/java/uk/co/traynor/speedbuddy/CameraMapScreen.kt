@@ -228,7 +228,9 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
                 else android.graphics.Color.rgb(239, 176, 74)
             val angle = item?.direction?.let { ((it - ready.cameraPosition.bearing + 360) % 360).toInt() / 15 * 15 }
             val key = "$colour:$label:$angle"
-            val icon = iconCache.getOrPut(key) { icons.fromBitmap(mapPin(colour, label, angle?.toDouble())) }
+            val icon = iconCache.getOrPut("$key:${item?.bidirectional}") {
+                icons.fromBitmap(mapPin(colour, label, angle?.toDouble(), item?.bidirectional == true))
+            }
             val marker = ready.addMarker(MarkerOptions().position(LatLng(group.point.lat, group.point.lon))
                 .title(if (group.count > 1) "${group.count} cameras · zoom in" else when (item?.type) {
                     CameraType.SPEED -> "Speed camera"; CameraType.RED_LIGHT -> "Red-light camera"
@@ -294,13 +296,13 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
         if (pin != null) Text("✚", Modifier.align(Alignment.Center), color = Color(0xFF004A62),
             style = MaterialTheme.typography.headlineLarge)
         when {
-            pin != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(null, pin!!, { pin = null }, { point, type, direction, mph, note ->
-                db.create(point, type, direction, mph, note); revision++; pin = null
+            pin != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(null, pin!!, { pin = null }, { point, type, direction, mph, note, both ->
+                db.create(point, type, direction, mph, note, both); revision++; pin = null
             }) }
-            camera != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(camera, camera!!.point, { camera = null }, { point, type, direction, mph, note ->
+            camera != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(camera, camera!!.point, { camera = null }, { point, type, direction, mph, note, both ->
                 val item = camera!!
                 if (item.source == CameraSource.USER) db.upsert(item.copy(point = point, type = type,
-                    direction = direction, enforcedMph = mph, note = note))
+                    direction = direction, enforcedMph = mph, note = note, bidirectional = both))
                 else {
                     val previous = db.cameraCorrections().firstOrNull { it.id == item.id }
                     val sourcePoint = previous?.sourcePoint ?: when (item.source) {
@@ -309,7 +311,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
                         else -> null
                     }
                     db.saveCameraCorrection(CameraCorrection(item.id, item.source, point, type,
-                        direction, note, mph, sourcePoint))
+                        direction, note, mph, sourcePoint, bidirectional = both))
                 }
                 revision++; camera = null
             }, onDelete = { item ->
@@ -349,7 +351,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
     }
 }
 
-private fun mapPin(color: Int, letter: String, direction: Double? = null): Bitmap {
+private fun mapPin(color: Int, letter: String, direction: Double? = null, both: Boolean = false): Bitmap {
     val bitmap = Bitmap.createBitmap(72, 72, Bitmap.Config.ARGB_8888)
     val canvas = AndroidCanvas(bitmap)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
@@ -366,17 +368,19 @@ private fun mapPin(color: Int, letter: String, direction: Double? = null): Bitma
             moveTo(36f, 0f); lineTo(29f, 14f); lineTo(43f, 14f); close()
         }
         canvas.drawPath(arrow, paint)
+        if (both) { canvas.rotate(180f, 36f, 36f); canvas.drawPath(arrow, paint) }
         canvas.restore()
     }
     return bitmap
 }
 
 @Composable private fun CameraMapEditor(existing: Camera?, initial: GeoPoint, close: () -> Unit,
-    save: (GeoPoint, CameraType, Double?, Int?, String?) -> Unit,
+    save: (GeoPoint, CameraType, Double?, Int?, String?, Boolean) -> Unit,
     onDelete: ((Camera) -> Unit)? = null, sourcePoint: GeoPoint? = null) {
     var advanced by remember(existing?.id) { mutableStateOf(false) }
     var type by remember(existing?.id) { mutableStateOf(existing?.type ?: CameraType.SPEED) }
     var direction by remember(existing?.id) { mutableStateOf(existing?.direction?.toInt()?.toString() ?: "") }
+    var both by remember(existing?.id) { mutableStateOf(existing?.bidirectional ?: false) }
     var note by remember(existing?.id) { mutableStateOf(existing?.note ?: "") }
     var mph by remember(existing?.id) { mutableStateOf(existing?.enforcedMph?.toString() ?: "") }
     var lat by remember(existing?.id, initial) { mutableStateOf(initial.lat.toString()) }
@@ -426,16 +430,19 @@ private fun mapPin(color: Int, letter: String, direction: Double? = null): Bitma
                     FilterChip(direction == angle.toString(), { direction = angle.toString() },
                         label = { Text(label) }, modifier = Modifier.weight(1f))
                 }
-                FilterChip(direction.isBlank(), { direction = "" }, label = { Text("?") })
+                FilterChip(direction.isBlank(), { direction = ""; both = false }, label = { Text("?") })
             }
+            FilterChip(both, { both = !both }, enabled = direction.isNotBlank(),
+                label = { Text("Enforces both directions") })
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = close) { Text("Cancel") }
                 if (existing != null && onDelete != null) TextButton(onClick = { onDelete(existing) }) {
                     Text(if (existing.source == CameraSource.USER) "Delete pin" else "Hide locally")
                 }
                 Spacer(Modifier.weight(1f))
-                Button(onClick = { point?.let { save(it, type, direction.toDoubleOrNull(), mph.toIntOrNull(), note.ifBlank { null }) } },
-                    enabled = point != null && (direction.isBlank() || direction.toIntOrNull()?.let { it in 0..359 } == true) &&
+                Button(onClick = { point?.let { save(it, type, direction.toDoubleOrNull(), mph.toIntOrNull(), note.ifBlank { null }, both) } },
+                    enabled = point != null && (!both || direction.isNotBlank()) &&
+                        (direction.isBlank() || direction.toIntOrNull()?.let { it in 0..359 } == true) &&
                         (mph.isBlank() || mph.toIntOrNull()?.let { it in 5..130 } == true)) { Text("Save") }
             }
         }

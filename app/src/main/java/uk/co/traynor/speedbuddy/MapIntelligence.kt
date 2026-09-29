@@ -17,8 +17,9 @@ object RoadSelection {
 
 /** A bearing denotes the vehicle's enforced travel direction, clockwise from north. */
 object CameraDirections {
-    fun applies(enforcedTravelBearing: Double?, vehicleBearing: Double): Boolean =
-        enforcedTravelBearing == null || Geo.difference(enforcedTravelBearing, vehicleBearing) <= 50.0
+    fun applies(enforcedTravelBearing: Double?, vehicleBearing: Double, bidirectional: Boolean = false): Boolean =
+        enforcedTravelBearing == null || Geo.difference(enforcedTravelBearing, vehicleBearing) <= 50.0 ||
+            bidirectional && Geo.difference((enforcedTravelBearing + 180.0) % 360.0, vehicleBearing) <= 50.0
 }
 
 object CameraCategories {

@@ -15,7 +15,7 @@ enum class CameraSource { OSM, USER, LUFOP }
 data class Camera(
     val id: String, val point: GeoPoint, val type: CameraType, val source: CameraSource,
     val direction: Double? = null, val enforcedMph: Int? = null, val note: String? = null,
-    val updatedAtMs: Long = 0L,
+    val updatedAtMs: Long = 0L, val bidirectional: Boolean = false,
 )
 data class RoadMatch(val road: Road, val distanceM: Double, val headingDifference: Double?, val confidence: Double)
 data class CameraDecision(val camera: Camera?, val distanceM: Double?, val accepted: Boolean, val reason: String, val bearingDifference: Double? = null)
@@ -195,7 +195,7 @@ class CameraApproachDetector {
             val reason = when {
                 camera.id in passed -> "Already passed"
                 bearingDiff > 65 -> "Camera behind or off heading"
-                !CameraDirections.applies(camera.direction, fix.bearing) -> "Opposite enforced direction"
+                !CameraDirections.applies(camera.direction, fix.bearing, camera.bidirectional) -> "Opposite enforced direction"
                 // A camera beyond the mapped way's endpoint can be on the next segment of this road.
                 road != null && roadDistance > 30 && roadFraction in 0.02..0.98 -> "Different road"
                 previousDistance[camera.id]?.let { distance > it + 25 } == true -> "Travelling away"

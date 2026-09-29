@@ -22,7 +22,7 @@ object OwnerBackupCodec {
             records.put(JSONObject().put("id", camera.id).put("lat", camera.point.lat).put("lon", camera.point.lon)
                 .put("type", camera.type.name).put("direction", camera.direction ?: JSONObject.NULL)
                 .put("mph", camera.enforcedMph ?: JSONObject.NULL).put("note", camera.note ?: JSONObject.NULL)
-                .put("updated", camera.updatedAtMs))
+                .put("updated", camera.updatedAtMs).put("bidirectional", camera.bidirectional))
         }
         val settings = JSONObject()
         booleans.forEach { (key, default) -> settings.put(key, prefs.getBoolean(key, default)) }
@@ -34,14 +34,14 @@ object OwnerBackupCodec {
             .put("mph", item.enforcedMph ?: JSONObject.NULL)
             .put("sourceLat", item.sourcePoint?.lat ?: JSONObject.NULL)
             .put("sourceLon", item.sourcePoint?.lon ?: JSONObject.NULL)
-            .put("updated", item.updatedAtMs)) }
+            .put("updated", item.updatedAtMs).put("bidirectional", item.bidirectional)) }
         val limits = JSONObject()
         roadLimits.forEach { (id, mph) -> limits.put(id, mph) }
         val roadRecords = JSONArray()
         roadCorrections.forEach { item -> roadRecords.put(JSONObject().put("id", item.id)
             .put("kind", item.kind.name).put("mph", item.mph ?: JSONObject.NULL)
             .put("sourceValue", item.sourceValue ?: JSONObject.NULL).put("updated", item.updatedAtMs)) }
-        return JSONObject().put("format", "speed-buddy-owner-backup").put("version", 4)
+        return JSONObject().put("format", "speed-buddy-owner-backup").put("version", 5)
             .put("cameras", records).put("settings", settings)
             .put("cameraCorrections", overrides).put("roadLimits", limits)
             .put("suppressedCameraIds", JSONArray(suppressedCameraIds.sorted()))
@@ -51,7 +51,7 @@ object OwnerBackupCodec {
     fun parse(text: String): OwnerBackup {
         require(text.length <= 2_000_000) { "Backup is too large" }
         val root = JSONObject(text)
-        require(root.getString("format") == "speed-buddy-owner-backup" && root.getInt("version") in 1..4) {
+        require(root.getString("format") == "speed-buddy-owner-backup" && root.getInt("version") in 1..5) {
             "Unsupported Speed Buddy backup"
         }
         val records = root.getJSONArray("cameras")
@@ -63,11 +63,13 @@ object OwnerBackupCodec {
             val direction = if (item.isNull("direction")) null else item.getDouble("direction")
             val mph = if (item.isNull("mph")) null else item.getInt("mph")
             val note = if (item.isNull("note")) null else item.getString("note")
+            val both = item.optBoolean("bidirectional", false)
             require(id.isNotBlank() && id.length <= 100 && lat.isFinite() && lat in -90.0..90.0 &&
                 lon.isFinite() && lon in -180.0..180.0 && (direction == null || direction.isFinite() && direction in 0.0..359.0) &&
-                (mph == null || mph in 5..130) && (note == null || note.length <= 100)) { "Invalid camera record" }
+                (mph == null || mph in 5..130) && (note == null || note.length <= 100) &&
+                (!both || direction != null)) { "Invalid camera record" }
             Camera(id, GeoPoint(lat, lon), CameraType.valueOf(item.getString("type")), CameraSource.USER,
-                direction, mph, note, item.getLong("updated"))
+                direction, mph, note, item.getLong("updated"), both)
         }
         require(cameras.map { it.id }.distinct().size == cameras.size) { "Duplicate camera IDs" }
         val source = root.getJSONObject("settings")
@@ -96,14 +98,15 @@ object OwnerBackupCodec {
                     !item.isNull("sourceLat") && !item.isNull("sourceLon"))
                     GeoPoint(item.getDouble("sourceLat"), item.getDouble("sourceLon")) else null
                 val updated = item.optLong("updated", 0L)
+                val both = item.optBoolean("bidirectional", false)
                 require(id.isNotBlank() && id.length <= 100 && sourceType != CameraSource.USER &&
                     lat.isFinite() && lat in -90.0..90.0 && lon.isFinite() && lon in -180.0..180.0 &&
                     (direction == null || direction.isFinite() && direction in 0.0..359.0) &&
                     (mph == null || mph in 5..130) && (sourcePoint == null || sourcePoint.lat.isFinite() &&
                         sourcePoint.lat in -90.0..90.0 && sourcePoint.lon.isFinite() && sourcePoint.lon in -180.0..180.0) &&
-                    (note == null || note.length <= 100)) { "Invalid camera correction" }
+                    (note == null || note.length <= 100) && (!both || direction != null)) { "Invalid camera correction" }
                 CameraCorrection(id, sourceType, GeoPoint(lat, lon), CameraType.valueOf(item.getString("type")),
-                    direction, note, mph, sourcePoint, updated)
+                    direction, note, mph, sourcePoint, updated, both)
             }.also { require(it.map(CameraCorrection::id).distinct().size == it.size) { "Duplicate camera corrections" } }
         }
         val roadLimits = if (root.getInt("version") == 1) emptyMap() else root.getJSONObject("roadLimits").let { limits ->

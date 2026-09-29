@@ -25,15 +25,17 @@ object OwnerDataRevision { @Volatile var roads: Long = 0L; @Volatile var cameras
 
 data class CameraCorrection(val id: String, val source: CameraSource, val point: GeoPoint,
     val type: CameraType, val direction: Double?, val note: String?,
-    val enforcedMph: Int? = null, val sourcePoint: GeoPoint? = null, val updatedAtMs: Long = 0L) {
+    val enforcedMph: Int? = null, val sourcePoint: GeoPoint? = null, val updatedAtMs: Long = 0L,
+    val bidirectional: Boolean = false) {
     fun apply(camera: Camera): Camera = if (camera.id == id && camera.source == source)
         camera.copy(point = point, type = type, direction = direction, note = note,
-            enforcedMph = enforcedMph ?: camera.enforcedMph, updatedAtMs = updatedAtMs) else camera
+            enforcedMph = enforcedMph ?: camera.enforcedMph, updatedAtMs = updatedAtMs,
+            bidirectional = bidirectional) else camera
 }
 
-class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null, 6), CameraRepository {
+class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null, 7), CameraRepository {
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE cameras(id TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, mph INTEGER, note TEXT, updated INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE cameras(id TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, mph INTEGER, note TEXT, updated INTEGER NOT NULL, bidirectional INTEGER NOT NULL DEFAULT 0)")
         createImported(db)
         createCorrections(db)
         createSuppressed(db)
@@ -55,6 +57,10 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
             db.execSQL("ALTER TABLE road_limits ADD COLUMN updated INTEGER NOT NULL DEFAULT 0")
         }
         if (oldVersion < 6) createImportStatus(db)
+        if (oldVersion < 7) {
+            db.execSQL("ALTER TABLE cameras ADD COLUMN bidirectional INTEGER NOT NULL DEFAULT 0")
+            if (oldVersion >= 3) db.execSQL("ALTER TABLE camera_corrections ADD COLUMN bidirectional INTEGER NOT NULL DEFAULT 0")
+        }
     }
     private fun createImportStatus(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE import_status(attempted INTEGER NOT NULL, failure TEXT)")
@@ -63,17 +69,17 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
         db.execSQL("CREATE TABLE suppressed_cameras(id TEXT PRIMARY KEY, source TEXT NOT NULL, updated INTEGER NOT NULL)")
     }
     private fun createCorrections(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE camera_corrections(id TEXT PRIMARY KEY, source TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, note TEXT, mph INTEGER, source_lat REAL, source_lon REAL, updated INTEGER NOT NULL DEFAULT 0)")
+        db.execSQL("CREATE TABLE camera_corrections(id TEXT PRIMARY KEY, source TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, note TEXT, mph INTEGER, source_lat REAL, source_lon REAL, updated INTEGER NOT NULL DEFAULT 0, bidirectional INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE TABLE road_limits(id TEXT PRIMARY KEY, mph INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'NUMERIC', source_value TEXT, updated INTEGER NOT NULL DEFAULT 0)")
     }
     fun cameraCorrections(): List<CameraCorrection> = readableDatabase.rawQuery(
-        "SELECT id,source,lat,lon,type,direction,note,mph,source_lat,source_lon,updated FROM camera_corrections", null).use { cursor ->
+        "SELECT id,source,lat,lon,type,direction,note,mph,source_lat,source_lon,updated,bidirectional FROM camera_corrections", null).use { cursor ->
         buildList { while (cursor.moveToNext()) add(CameraCorrection(cursor.getString(0), CameraSource.valueOf(cursor.getString(1)),
             GeoPoint(cursor.getDouble(2), cursor.getDouble(3)), CameraType.valueOf(cursor.getString(4)),
             if (cursor.isNull(5)) null else cursor.getDouble(5), cursor.getString(6),
             if (cursor.isNull(7)) null else cursor.getInt(7),
             if (cursor.isNull(8) || cursor.isNull(9)) null else GeoPoint(cursor.getDouble(8), cursor.getDouble(9)),
-            cursor.getLong(10))) }
+            cursor.getLong(10), cursor.getInt(11) != 0)) }
     }
     fun suppressedCameraIds(): Set<String> = readableDatabase.rawQuery("SELECT id FROM suppressed_cameras", null).use { c ->
         buildSet { while (c.moveToNext()) add(c.getString(0)) }
@@ -113,6 +119,7 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
     fun saveCameraCorrection(value: CameraCorrection) {
         require(value.source != CameraSource.USER && value.point.lat in -90.0..90.0 && value.point.lon in -180.0..180.0 &&
             (value.direction == null || value.direction.isFinite() && value.direction in 0.0..359.0) &&
+            (!value.bidirectional || value.direction != null) &&
             (value.enforcedMph == null || value.enforcedMph in 5..130))
         writableDatabase.insertWithOnConflict("camera_corrections", null, ContentValues().apply {
             put("id", value.id); put("source", value.source.name); put("lat", value.point.lat); put("lon", value.point.lon)
@@ -120,6 +127,7 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
             put("mph", value.enforcedMph); put("source_lat", value.sourcePoint?.lat)
             put("source_lon", value.sourcePoint?.lon)
             put("updated", value.updatedAtMs.takeIf { it > 0 } ?: System.currentTimeMillis())
+            put("bidirectional", if (value.bidirectional) 1 else 0)
         }, SQLiteDatabase.CONFLICT_REPLACE)
         OwnerDataRevision.cameras++
     }
@@ -255,20 +263,21 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
         OwnerDataRevision.cameras++
         return cameras.size
     }
-    override fun userCameras(): List<Camera> = readableDatabase.rawQuery("SELECT id,lat,lon,type,direction,mph,note,updated FROM cameras", null).use { cursor ->
+    override fun userCameras(): List<Camera> = readableDatabase.rawQuery("SELECT id,lat,lon,type,direction,mph,note,updated,bidirectional FROM cameras", null).use { cursor ->
         buildList {
             while (cursor.moveToNext()) add(Camera(cursor.getString(0), GeoPoint(cursor.getDouble(1), cursor.getDouble(2)),
                 CameraType.valueOf(cursor.getString(3)), CameraSource.USER,
                 if (cursor.isNull(4)) null else cursor.getDouble(4), if (cursor.isNull(5)) null else cursor.getInt(5),
-                cursor.getString(6), cursor.getLong(7)))
+                cursor.getString(6), cursor.getLong(7), cursor.getInt(8) != 0))
         }
     }
     override fun upsert(camera: Camera) {
-        require(camera.source == CameraSource.USER)
+        require(camera.source == CameraSource.USER && (!camera.bidirectional || camera.direction != null))
         val values = ContentValues().apply {
             put("id", camera.id); put("lat", camera.point.lat); put("lon", camera.point.lon)
             put("type", camera.type.name); put("direction", camera.direction); put("mph", camera.enforcedMph)
             put("note", camera.note); put("updated", System.currentTimeMillis())
+            put("bidirectional", if (camera.bidirectional) 1 else 0)
         }
         writableDatabase.insertWithOnConflict("cameras", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         OwnerDataRevision.cameras++
@@ -284,6 +293,7 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
                     put("id", camera.id); put("lat", camera.point.lat); put("lon", camera.point.lon)
                     put("type", camera.type.name); put("direction", camera.direction)
                     put("mph", camera.enforcedMph); put("note", camera.note); put("updated", camera.updatedAtMs)
+                    put("bidirectional", if (camera.bidirectional) 1 else 0)
                 }
                 if (database.insertWithOnConflict("cameras", null, values, SQLiteDatabase.CONFLICT_REPLACE) < 0)
                     error("Could not restore camera")
@@ -292,8 +302,10 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
         } finally { database.endTransaction() }
         OwnerDataRevision.cameras++
     }
-    fun create(point: GeoPoint, type: CameraType, direction: Double? = null, mph: Int? = null, note: String? = null): Camera {
-        val camera = Camera(UUID.randomUUID().toString(), point, type, CameraSource.USER, direction, mph, note)
+    fun create(point: GeoPoint, type: CameraType, direction: Double? = null, mph: Int? = null,
+        note: String? = null, bidirectional: Boolean = false): Camera {
+        val camera = Camera(UUID.randomUUID().toString(), point, type, CameraSource.USER,
+            direction, mph, note, bidirectional = bidirectional)
         upsert(camera); return camera
     }
 }

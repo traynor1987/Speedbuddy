@@ -14,7 +14,7 @@ class CameraDbTest {
         SQLiteDatabase.create(null).use { database ->
             database.execSQL("CREATE TABLE cameras(id TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, mph INTEGER, note TEXT, updated INTEGER NOT NULL)")
             database.execSQL("INSERT INTO cameras VALUES('owner-old',53.0,-2.0,'SPEED',NULL,30,'saved',123)")
-            CameraDb(context).use { helper -> helper.onUpgrade(database, 2, 6) }
+            CameraDb(context).use { helper -> helper.onUpgrade(database, 2, 7) }
             database.rawQuery("SELECT note FROM cameras WHERE id='owner-old'", null).use { c ->
                 assertTrue(c.moveToFirst()); assertEquals("saved", c.getString(0))
             }
@@ -23,16 +23,20 @@ class CameraDbTest {
                 while (c.moveToNext()) columns.add(c.getString(1))
                 assertTrue(columns.containsAll(setOf("mph", "kind", "source_value", "updated")))
             }
+            database.rawQuery("SELECT bidirectional FROM cameras WHERE id='owner-old'", null).use { c ->
+                assertTrue(c.moveToFirst()); assertEquals(0, c.getInt(0))
+            }
         }
     }
     @Test fun schemaThreeMigrationRetainsCameraAndRoadCorrections() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         SQLiteDatabase.create(null).use { database ->
+            database.execSQL("CREATE TABLE cameras(id TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, mph INTEGER, note TEXT, updated INTEGER NOT NULL)")
             database.execSQL("CREATE TABLE camera_corrections(id TEXT PRIMARY KEY, source TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, note TEXT)")
             database.execSQL("CREATE TABLE road_limits(id TEXT PRIMARY KEY, mph INTEGER NOT NULL)")
             database.execSQL("INSERT INTO camera_corrections VALUES('lufop:old','LUFOP',53.0,-2.0,'SPEED',90.0,'kept')")
             database.execSQL("INSERT INTO road_limits VALUES('way/old',20)")
-            CameraDb(context).use { helper -> helper.onUpgrade(database, 3, 6) }
+            CameraDb(context).use { helper -> helper.onUpgrade(database, 3, 7) }
             database.rawQuery("SELECT note,mph FROM camera_corrections WHERE id='lufop:old'", null).use { c ->
                 assertTrue(c.moveToFirst()); assertEquals("kept", c.getString(0)); assertTrue(c.isNull(1))
             }
@@ -44,6 +48,22 @@ class CameraDbTest {
             }
             database.rawQuery("SELECT COUNT(*) FROM import_status", null).use { c ->
                 assertTrue(c.moveToFirst()); assertEquals(0, c.getInt(0))
+            }
+        }
+    }
+    @Test fun schemaSixMigrationRetainsOwnerAndCorrectionDirection() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        SQLiteDatabase.create(null).use { database ->
+            database.execSQL("CREATE TABLE cameras(id TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, mph INTEGER, note TEXT, updated INTEGER NOT NULL)")
+            database.execSQL("CREATE TABLE camera_corrections(id TEXT PRIMARY KEY, source TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, note TEXT, mph INTEGER, source_lat REAL, source_lon REAL, updated INTEGER NOT NULL DEFAULT 0)")
+            database.execSQL("INSERT INTO cameras VALUES('owner',53,-2,'SPEED',90,30,NULL,123)")
+            database.execSQL("INSERT INTO camera_corrections VALUES('lufop:old','LUFOP',53,-2,'SPEED',180,NULL,NULL,53,-2,124)")
+            CameraDb(context).use { it.onUpgrade(database, 6, 7) }
+            database.rawQuery("SELECT direction,bidirectional FROM cameras WHERE id='owner'", null).use { c ->
+                assertTrue(c.moveToFirst()); assertEquals(90.0, c.getDouble(0), 0.0); assertEquals(0, c.getInt(1))
+            }
+            database.rawQuery("SELECT direction,bidirectional FROM camera_corrections WHERE id='lufop:old'", null).use { c ->
+                assertTrue(c.moveToFirst()); assertEquals(180.0, c.getDouble(0), 0.0); assertEquals(0, c.getInt(1))
             }
         }
     }
@@ -211,6 +231,25 @@ class CameraDbTest {
         assertEquals(correction, parsed.corrections.single())
         assertEquals(setOf(correction.id), parsed.suppressedCameraIds)
         prefs.edit().clear().commit()
+    }
+    @Test fun bidirectionalCameraAndOverrideSurviveDatabaseAndBackup() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val prefs = context.getSharedPreferences("both-backup-test", 0)
+        val owner = Camera("both-owner-test", GeoPoint(53.0, -2.0), CameraType.SPEED,
+            CameraSource.USER, 90.0, bidirectional = true)
+        val override = CameraCorrection("lufop:both-test", CameraSource.LUFOP,
+            GeoPoint(53.01, -2.0), CameraType.SPEED, 0.0, null, bidirectional = true)
+        CameraDb(context).use { db ->
+            try {
+                db.upsert(owner); db.saveCameraCorrection(override)
+                assertTrue(db.userCameras().single { it.id == owner.id }.bidirectional)
+                assertTrue(db.cameraCorrections().single { it.id == override.id }.bidirectional)
+                val restored = OwnerBackupCodec.parse(OwnerBackupCodec.export(listOf(owner), prefs,
+                    listOf(override)))
+                assertTrue(restored.cameras.single().bidirectional)
+                assertTrue(restored.corrections.single().bidirectional)
+            } finally { db.delete(owner.id); db.deleteCameraCorrection(override.id); prefs.edit().clear().commit() }
+        }
     }
     @Test fun ownerBackupRetainsNationalAndUnknownRoadSemantics() {
         val prefs = InstrumentationRegistry.getInstrumentation().targetContext.getSharedPreferences("road-backup-test", 0)

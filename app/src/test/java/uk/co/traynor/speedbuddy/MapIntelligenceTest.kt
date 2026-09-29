@@ -21,6 +21,8 @@ class MapIntelligenceTest {
         assertFalse(CameraDirections.applies(270.0, 92.0))
         assertTrue(CameraDirections.applies(null, 270.0))
         assertTrue(CameraDirections.applies(359.0, 3.0))
+        assertTrue(CameraDirections.applies(90.0, 270.0, bidirectional = true))
+        assertFalse(CameraDirections.applies(90.0, 180.0, bidirectional = true))
     }
 
     @Test fun wideZoomClusteringRetainsCountsAndIndividualCameraAtDrivingZoom() {
