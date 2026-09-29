@@ -14,6 +14,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '8.13' }
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
-      - run: gradle testDebugUnitTest assembleDebug --no-daemon
+      - run: gradle testDebugUnitTest assembleDebug assembleDebugAndroidTest --no-daemon
       - uses: actions/upload-artifact@v4
         with: { name: speed-buddy-debug, path: app/build/outputs/apk/debug/*.apk }
