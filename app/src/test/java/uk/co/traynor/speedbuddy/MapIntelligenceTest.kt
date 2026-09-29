@@ -32,7 +32,12 @@ class MapIntelligenceTest {
         val clusters = CameraClustering.group(cameras, 10.0)
         assertTrue(clusters.size < 100)
         assertEquals(5_000, clusters.sumOf { it.count })
-        assertEquals(5_000, CameraClustering.group(cameras, 16.0).size)
+        val driving=CameraClustering.group(cameras,16.0)
+        assertTrue(driving.size<=300)
+        assertEquals(5_000,driving.sumOf { it.count })
+        val sparse=CameraClustering.group(cameras.take(50),16.0)
+        assertEquals(50,sparse.size)
+        assertTrue(sparse.all { it.camera!=null && it.count==1 })
     }
     @Test fun osmEnforcementCategoriesDoNotCollapseCombinedOrAverageDevices() {
         assertEquals(CameraType.COMBINED,
