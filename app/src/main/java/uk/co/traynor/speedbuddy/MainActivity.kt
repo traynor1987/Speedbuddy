@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
     }
     private val permission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result[Manifest.permission.ACCESS_FINE_LOCATION] == true) startDriving()
+        else DriveBus.set(DriveState(status="Allow precise location to start driving mode"))
     }
     private fun startDriving() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
@@ -119,7 +120,7 @@ class MainActivity : ComponentActivity() {
                         val batch = assets.open("lufop-uk-2026-09.zip").use(LufopAscImporter::inspect)
                         require(batch.cameras.size == 5_233) { "Bundled camera data incomplete" }
                         synchronized(db) {
-                            if (db.importedInfo() == null) db.replaceImported(batch.cameras, "2026-09-01 · Lufop UK")
+                            db.seedImportedIfEmpty(batch.cameras,"2026-09-01 · Lufop UK")
                         }
                     } }.onSuccess { importedInfo = db.importedInfo() }
                         .onFailure { runCatching {
@@ -180,11 +181,11 @@ class MainActivity : ComponentActivity() {
                             { if (state.fix == null) message = "Wait for a GPS fix"
                               else if (moving) message = "Stop before editing a camera"
                               else { editing = null; page = "edit" } },
-                            { type -> state.fix?.let {
-                                db.create(it.point, type, it.bearing)
-                                records = db.userCameras()
-                                message = "Camera position saved. Edit the details while stopped."
-                            } }, onUnknownLimit = {
+                            { type -> state.fix?.let { selected->lifecycleScope.launch {
+                                runCatching { withContext(Dispatchers.IO) { db.create(selected.point,type,selected.bearing);db.userCameras() } }
+                                    .onSuccess { records=it;message="Camera position saved. Edit the details while stopped." }
+                                    .onFailure { message="Could not save camera: ${it.message ?: "Try again"}" }
+                            } } }, onUnknownLimit = {
                                 val currentFix = state.fix
                                 when {
                                     moving -> message = "Stop before correcting a road limit."
@@ -198,7 +199,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             })
                         "settings" -> SettingsScreen(prefs, { page = "drive" },
-                            { records = db.userCameras(); page = "cameras" }, { page = "diagnostics" },
+                            { page="cameras";lifecycleScope.launch { records=withContext(Dispatchers.IO) { db.userCameras() } } }, { page = "diagnostics" },
                             { exportBackup.launch("SpeedBuddy-backup.json") },
                             { importBackup.launch(arrayOf("application/json", "text/plain")) }, importedInfo,
                             { if (moving) message = "Import cameras while parked."
@@ -220,14 +221,22 @@ class MainActivity : ComponentActivity() {
                         "edit" -> CameraEditor(editing, state.fix?.point, moving, { page = "cameras" }) { point, type, direction, mph, note, both ->
                             if (!moving) {
                                 val old = editing
-                                if (old == null) db.create(point, type, direction, mph, note,both)
-                                else db.upsert(old.copy(point = point, type = type, direction = direction, enforcedMph = mph, note = note,bidirectional=both))
-                                records = db.userCameras(); page = "cameras"
+                                lifecycleScope.launch {
+                                    runCatching { withContext(Dispatchers.IO) {
+                                        if(old==null) db.create(point,type,direction,mph,note,both)
+                                        else db.upsert(old.copy(point=point,type=type,direction=direction,enforcedMph=mph,note=note,bidirectional=both))
+                                        db.userCameras()
+                                    } }.onSuccess { records=it;page="cameras" }
+                                        .onFailure { message="Could not save camera: ${it.message ?: "Try again"}" }
+                                }
                             }
                         }
                     }
                     deleting?.let { selected->AlertDialog(onDismissRequest={deleting=null},title={Text("Delete added camera?")},text={Text("This removes your saved camera from Map and driving alerts.")},confirmButton={TextButton(onClick={
-                        lifecycleScope.launch { withContext(Dispatchers.IO) { db.delete(selected.id) };records=withContext(Dispatchers.IO) { db.userCameras() } };deleting=null
+                        lifecycleScope.launch {
+                            runCatching { withContext(Dispatchers.IO) { db.delete(selected.id);db.userCameras() } }
+                                .onSuccess { records=it;deleting=null }.onFailure { message="Could not delete camera: ${it.message ?: "Try again"}" }
+                        }
                     },enabled=!moving) { Text("Delete") }},dismissButton={TextButton(onClick={deleting=null}) { Text("Cancel") }}) }
                     roadEdit?.let { selected -> DriveRoadLimitEditor(selected, db.roadCorrection(selected.id),
                         close = { roadEdit = null }, save = { kind, mph ->
@@ -305,7 +314,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun DriveRoadLimitEditor(road: Road, correction: RoadLimitCorrection?,
     close: () -> Unit, save: (RoadLimitKind, Int?) -> Unit) {
-    var selected by remember(road.id) { mutableStateOf<Pair<RoadLimitKind, Int?>?>(null) }
+    var selected by rememberSaveable(road.id) { mutableStateOf<Pair<RoadLimitKind, Int?>?>(null) }
     AlertDialog(onDismissRequest = close,
         title = { Text("Set road speed limit") },
         text = {
@@ -331,6 +340,7 @@ class MainActivity : ComponentActivity() {
                         onClick = { selected = RoadLimitKind.NATIONAL_DUAL to 70 },
                         label = { Text("National · dual") })
                 }
+                FilterChip(selected==(RoadLimitKind.UNKNOWN to null),onClick={selected=RoadLimitKind.UNKNOWN to null},label={Text("Unknown")})
                 Text("Source: ${correction?.sourceValue ?: road.tags["maxspeed"] ?: road.tags["maxspeed:type"] ?: "not tagged"}",
                     color = Muted, style = MaterialTheme.typography.bodySmall)
             }
@@ -776,7 +786,7 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
     var longitude by rememberSaveable(existing?.id) { mutableStateOf(initial?.lon?.format() ?: "") }
     var type by rememberSaveable(existing?.id) { mutableStateOf(existing?.type ?: CameraType.SPEED) }
     var mph by rememberSaveable(existing?.id) { mutableStateOf(existing?.enforcedMph?.toString() ?: "") }
-    var direction by rememberSaveable(existing?.id) { mutableStateOf(existing?.direction?.roundToInt()?.toString() ?: "") }
+    var direction by rememberSaveable(existing?.id) { mutableStateOf(existing?.direction?.toInt()?.toString() ?: "") }
     var note by rememberSaveable(existing?.id) { mutableStateOf(existing?.note ?: "") }
     var both by rememberSaveable(existing?.id) { mutableStateOf(existing?.bidirectional==true) }
     var advanced by rememberSaveable { mutableStateOf(false) }

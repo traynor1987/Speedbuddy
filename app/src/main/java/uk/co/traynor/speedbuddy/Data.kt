@@ -138,6 +138,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         finally { writableDatabase.endTransaction() }
     }
     fun hideEffectiveCamera(camera: Camera) {
+        require(camera.source!=CameraSource.USER)
         val database = writableDatabase
         database.beginTransaction()
         try {
@@ -262,6 +263,11 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         writableDatabase.insertOrThrow("import_status", null, ContentValues().apply {
             put("attempted", System.currentTimeMillis()); put("failure", reason.take(160))
         })
+    }
+    fun seedImportedIfEmpty(cameras: List<Camera>,sourceDate: String) {
+        val database=writableDatabase;database.beginTransaction()
+        try { if(importedInfo()==null) replaceImported(cameras,sourceDate);database.setTransactionSuccessful() }
+        finally { database.endTransaction() }
     }
     fun importedInfo(): ImportedInfo? = readableDatabase.rawQuery("SELECT imported_at,source_date,count FROM imported_info LIMIT 1", null).use {
         if (it.moveToFirst()) ImportedInfo(it.getLong(0), it.getString(1), it.getInt(2)) else null

@@ -41,4 +41,11 @@ class LufopImportTest {
         assertTrue(decision.accepted)
         assertEquals(CameraType.RED_LIGHT, alert?.camera?.type)
     }
+    @Test fun expansionBudgetAppliesToIgnoredArchiveMembersToo() {
+        assertThrows(IllegalArgumentException::class.java) {
+            LufopAscImporter.inspectLimited(zip("ignored.asc" to "x".repeat(2000),
+                "GBFixeGB.asc" to "-2, 53, \"UK camera\""),1000)
+        }
+    }
+
 }
