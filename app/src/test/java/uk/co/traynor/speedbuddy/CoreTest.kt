@@ -135,6 +135,14 @@ class CoreTest {
         detector.evaluate(fix(53.003), null, listOf(camera), 28.0)
         assertNull(detector.evaluate(fix(53.003).copy(speedMps = 0.0), null, emptyList(), 0.0).first)
     }
+    @Test fun driveCorrectionRequiresAConfidentRoadAtTheActualFix() {
+        val near = RoadMatch(road, 2.0, 0.0, .9)
+        assertEquals(road.id, DriveRoadEditTarget.select(fix(53.005), near)?.id)
+        assertNull(DriveRoadEditTarget.select(fix(53.005), near.copy(confidence = .25)))
+        assertNull(DriveRoadEditTarget.select(fix(53.005).copy(accuracyM = 35.0), near))
+        assertNull(DriveRoadEditTarget.select(fix(53.005).copy(point = GeoPoint(53.005, -1.999)), near))
+        assertNull(DriveRoadEditTarget.select(null, near))
+    }
     @Test fun overspeedGateRearms() {
         val gate = OverspeedGate()
         assertFalse(gate.update(30.0, 30, 2)); assertFalse(gate.update(33.0, null, 2))

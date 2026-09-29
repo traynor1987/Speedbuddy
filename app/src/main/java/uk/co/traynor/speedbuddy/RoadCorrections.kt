@@ -2,6 +2,15 @@ package uk.co.traynor.speedbuddy
 
 enum class RoadLimitKind { NUMERIC, NATIONAL_SINGLE, NATIONAL_DUAL, UNKNOWN }
 
+/** Direct Drive edits need a road identity and a fresh, precise position on its geometry. */
+object DriveRoadEditTarget {
+    fun select(fix: Fix?, match: RoadMatch?): Road? {
+        if (fix == null || fix.accuracyM > 25 || match == null || match.confidence < .55 ||
+            match.distanceM > 15 || !match.road.id.startsWith("way/")) return null
+        return match.road.takeIf { Geo.projection(fix.point, it.points).first <= 15 }
+    }
+}
+
 data class RoadLimitCorrection(val id: String, val kind: RoadLimitKind, val mph: Int?,
     val sourceValue: String?, val updatedAtMs: Long) {
     init {

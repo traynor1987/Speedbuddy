@@ -265,9 +265,19 @@ class CameraApproachDetector {
     private val notified = mutableSetOf<String>()
     private val passed = mutableSetOf<String>()
     private val previousDistance = mutableMapOf<String, Double>()
+    private var activeCameraId: String? = null
     fun evaluate(fix: Fix, road: RoadMatch?, cameras: List<Camera>, speedMph: Double?): Pair<Alert?, CameraDecision> {
-        if (fix.accuracyM > 35 || speedMph == null || speedMph < 5 || fix.bearing == null)
+        if (fix.accuracyM > 35)
             return null to CameraDecision(null, null, false, "GPS, heading or movement insufficient")
+        if (speedMph == null || speedMph < 5 || fix.bearing == null) {
+            val active = cameras.firstOrNull { it.id == activeCameraId && it.id !in passed }
+            val distance = active?.let { Geo.distance(fix.point, it.point) }
+            if (active != null && distance != null && distance <= CAMERA_ALERT_METERS + 35) {
+                return Alert(active, distance) to CameraDecision(active, distance, true, "Approach active")
+            }
+            activeCameraId = null
+            return null to CameraDecision(null, null, false, "GPS, heading or movement insufficient")
+        }
         val candidates = cameras.map { it to Geo.distance(fix.point, it.point) }.filter { it.second < 900 }.sortedBy { it.second }
         var diagnostic = CameraDecision(null, null, false, "No nearby camera")
         for ((camera, distance) in candidates) {
@@ -285,13 +295,20 @@ class CameraApproachDetector {
             previousDistance[camera.id] = distance
             if (reason == "Camera behind or off heading" && distance < 120 && camera.id in notified) passed += camera.id
             if (reason != "Approaching") { diagnostic = CameraDecision(camera, distance, false, reason, bearingDiff); continue }
-            if (camera.id in notified) return Alert(camera, distance) to CameraDecision(camera, distance, true, "Approach active", bearingDiff)
-            if (distance <= CAMERA_ALERT_METERS) { notified += camera.id; return Alert(camera, distance) to CameraDecision(camera, distance, true, "New approach", bearingDiff) }
+            if (camera.id in notified) {
+                activeCameraId = camera.id
+                return Alert(camera, distance) to CameraDecision(camera, distance, true, "Approach active", bearingDiff)
+            }
+            if (distance <= CAMERA_ALERT_METERS) {
+                notified += camera.id; activeCameraId = camera.id
+                return Alert(camera, distance) to CameraDecision(camera, distance, true, "New approach", bearingDiff)
+            }
             diagnostic = CameraDecision(camera, distance, false, "Beyond alert range", bearingDiff)
         }
+        activeCameraId = null
         return null to diagnostic
     }
-    fun reset() { notified.clear(); passed.clear(); previousDistance.clear() }
+    fun reset() { notified.clear(); passed.clear(); previousDistance.clear(); activeCameraId = null }
 }
 
 class OverspeedGate {

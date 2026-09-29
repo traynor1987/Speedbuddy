@@ -27,6 +27,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,6 +75,7 @@ class MainActivity : ComponentActivity() {
             val state by DriveBus.state.collectAsState()
             var records by remember { mutableStateOf(db.userCameras()) }
             var editing by remember { mutableStateOf<Camera?>(null) }
+            var roadEdit by remember { mutableStateOf<Road?>(null) }
             var message by remember { mutableStateOf("") }
             var importedInfo by remember { mutableStateOf(db.importedInfo()) }
             LaunchedEffect(Unit) {
@@ -155,7 +158,18 @@ class MainActivity : ComponentActivity() {
                                 db.create(it.point, type, it.bearing)
                                 records = db.userCameras()
                                 message = "Camera position saved. Edit the details while stopped."
-                            } })
+                            } }, onUnknownLimit = {
+                                when {
+                                    moving -> message = "Stop before correcting a road limit."
+                                    state.fix == null || SystemClock.elapsedRealtime() - state.fix.elapsedMs > 5000 ->
+                                        message = "Wait for a current GPS fix, then select the road on the map."
+                                    else -> {
+                                        val target = DriveRoadEditTarget.select(state.fix, state.road)
+                                        if (target != null) roadEdit = target
+                                        else { page = "map"; message = "Tap your road on the map to set its limit." }
+                                    }
+                                }
+                            })
                         "settings" -> SettingsScreen(prefs, { page = "drive" },
                             { records = db.userCameras(); page = "cameras" }, { page = "diagnostics" },
                             { exportBackup.launch("SpeedBuddy-backup.json") },
@@ -185,6 +199,22 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                    roadEdit?.let { selected -> DriveRoadLimitEditor(selected, db.roadCorrection(selected.id),
+                        close = { roadEdit = null }, save = { kind, mph ->
+                            val live = DriveBus.state.value
+                            val current = DriveRoadEditTarget.select(live.fix, live.road)
+                            if (current?.id != selected.id || live.fix == null ||
+                                SystemClock.elapsedRealtime() - live.fix.elapsedMs > 5000 ||
+                                live.active && (live.speedMph == null || live.speedMph >= 5.0)) {
+                                message = "Road position changed. Select the road again while stopped."
+                            } else {
+                                val source = db.roadCorrection(selected.id)?.sourceValue
+                                    ?: selected.tags["maxspeed"] ?: selected.tags["maxspeed:type"]
+                                db.saveRoadCorrection(RoadLimitCorrection(selected.id, kind, mph,
+                                    source, System.currentTimeMillis()))
+                            }
+                            roadEdit = null
+                        }) }
                     if (message.isNotEmpty()) AlertDialog(onDismissRequest = { message = "" },
                         confirmButton = { TextButton(onClick = { message = "" }) { Text("OK") } },
                         text = { Text(message, color = Ink) })
@@ -243,9 +273,46 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable private fun DriveRoadLimitEditor(road: Road, correction: RoadLimitCorrection?,
+    close: () -> Unit, save: (RoadLimitKind, Int?) -> Unit) {
+    var selected by remember(road.id) { mutableStateOf<Pair<RoadLimitKind, Int?>?>(null) }
+    AlertDialog(onDismissRequest = close,
+        title = { Text("Set road speed limit") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(road.name ?: "This road", fontWeight = FontWeight.Bold)
+                Text("Choose the posted limit for this road. This correction is saved on your phone.",
+                    color = Muted, style = MaterialTheme.typography.bodySmall)
+                listOf(listOf(20, 30, 40), listOf(50, 60, 70)).forEach { values ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        values.forEach { mph ->
+                            FilterChip(selected == (RoadLimitKind.NUMERIC to mph),
+                                onClick = { selected = RoadLimitKind.NUMERIC to mph },
+                                label = { Text("$mph") })
+                        }
+                    }
+                }
+                Row(Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected == (RoadLimitKind.NATIONAL_SINGLE to 60),
+                        onClick = { selected = RoadLimitKind.NATIONAL_SINGLE to 60 },
+                        label = { Text("National · single") })
+                    FilterChip(selected == (RoadLimitKind.NATIONAL_DUAL to 70),
+                        onClick = { selected = RoadLimitKind.NATIONAL_DUAL to 70 },
+                        label = { Text("National · dual") })
+                }
+                Text("Source: ${correction?.sourceValue ?: road.tags["maxspeed"] ?: road.tags["maxspeed:type"] ?: "not tagged"}",
+                    color = Muted, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { TextButton(onClick = { selected?.let { save(it.first, it.second) } },
+            enabled = selected != null) { Text("Save limit") } },
+        dismissButton = { TextButton(onClick = close) { Text("Cancel") } })
+}
+
 @Composable private fun DriveScreen(state: DriveState, onStart: () -> Unit, onStop: () -> Unit,
     onSettings: () -> Unit, onMap: () -> Unit, onDiagnostic: () -> Unit,
-    onAdd: () -> Unit, onQuick: (CameraType) -> Unit) {
+    onAdd: () -> Unit, onQuick: (CameraType) -> Unit, onUnknownLimit: () -> Unit) {
     val speed = state.speedMph
     val moving = state.active && (speed == null || speed >= 5.0)
     val fix = state.fix
@@ -280,28 +347,38 @@ class MainActivity : ComponentActivity() {
         Spacer(Modifier.height(28.dp))
         Text("CURRENT ROAD LIMIT", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)
         Spacer(Modifier.height(12.dp))
-        val hasPreview = state.upcoming != null || state.turns.isNotEmpty()
-        if (state.upcoming == null && state.turns.size == 1) {
-            BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                val mainSize = minOf(158.dp, (maxWidth - 152.dp).coerceAtLeast(96.dp))
-                LimitSign(state.limitMph, national, Modifier.size(mainSize))
-                TurnLimitPreview(state.turns.single(), Modifier.align(Alignment.CenterEnd).width(72.dp))
-            }
-        } else {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = if (hasPreview) Arrangement.spacedBy(10.dp) else Arrangement.Center) {
-                LimitSign(state.limitMph, national, Modifier.size(if (hasPreview) 142.dp else 158.dp))
-                if (hasPreview) Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    state.upcoming?.let { next ->
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("AHEAD", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            LimitSign(next.mph, next.national, Modifier.size(58.dp))
-                            Text("${(next.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
-                        }
+        BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            val mainSize = if (state.turns.isEmpty()) 158.dp else
+                minOf(158.dp, (maxWidth - 152.dp).coerceAtLeast(96.dp))
+            Box(Modifier.fillMaxWidth().height(mainSize + if (state.limitMph == null) 32.dp else 0.dp),
+                contentAlignment = Alignment.TopCenter) {
+                Box(Modifier.fillMaxWidth().height(mainSize), contentAlignment = Alignment.Center) {
+                    LimitSign(state.limitMph, national, Modifier.size(mainSize))
+                    state.turns.firstOrNull { it.direction == TurnDirection.LEFT }?.let {
+                        TurnLimitPreview(it, Modifier.align(Alignment.CenterStart).width(72.dp))
                     }
-                    state.turns.forEach { turn -> TurnLimitPreview(turn) }
+                    state.turns.firstOrNull { it.direction == TurnDirection.RIGHT }?.let {
+                        TurnLimitPreview(it, Modifier.align(Alignment.CenterEnd).width(72.dp))
+                    }
                 }
+                if (state.limitMph == null) Surface(
+                    onClick = onUnknownLimit,
+                    modifier = Modifier.align(Alignment.BottomCenter).size(48.dp)
+                        .semantics { contentDescription = "Set this road's speed limit" },
+                    shape = CircleShape, color = Accent, contentColor = Background,
+                    border = BorderStroke(3.dp, Background)) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("+", fontSize = 30.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+        state.upcoming?.let { next ->
+            Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("AHEAD", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                LimitSign(next.mph, next.national, Modifier.size(42.dp))
+                Text("${(next.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 12.sp)
             }
         }
         Spacer(Modifier.height(9.dp))
