@@ -47,8 +47,9 @@ class MainActivity : ComponentActivity() {
             val state by DriveBus.state.collectAsState()
             var records by remember { mutableStateOf(db.userCameras()) }
             var editing by remember { mutableStateOf<Camera?>(null) }
-                    var message by remember { mutableStateOf("") }
-            val moving = state.active && (state.speedMph == null || state.speedMph >= 5.0)
+            var message by remember { mutableStateOf("") }
+            val currentSpeed = state.speedMph
+            val moving = state.active && (currentSpeed == null || currentSpeed >= 5.0)
             MaterialTheme(colorScheme = darkColorScheme(
                 background = Color(0xFF080D13), surface = Color(0xFF111A25), primary = Color(0xFF6ED5F6),
                 onBackground = Color.White, onSurface = Color.White)) {
