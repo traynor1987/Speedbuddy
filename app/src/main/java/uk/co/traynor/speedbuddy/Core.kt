@@ -17,6 +17,7 @@ data class Camera(
     val direction: Double? = null, val enforcedMph: Int? = null, val note: String? = null,
     val updatedAtMs: Long = 0L, val bidirectional: Boolean = false,
     val aliasIds: Set<String> = emptySet(),
+    val locallyCorrected: Boolean = false,
 ) : java.io.Serializable
 data class RoadMatch(val road: Road, val distanceM: Double, val headingDifference: Double?, val confidence: Double)
 data class CameraDecision(val camera: Camera?, val distanceM: Double?, val accepted: Boolean, val reason: String, val bearingDifference: Double? = null)

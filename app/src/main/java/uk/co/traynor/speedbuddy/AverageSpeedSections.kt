@@ -63,7 +63,7 @@ class AverageSectionTracker {
             val heading=projection.second
             if(road==null || road.confidence<.55 || road.road.id !in section.wayIds || projection.first>20 ||
                 heading==null || Geo.difference(fix.bearing,heading)>50) continue
-            if(active==null && projection.third>.12) continue // Must observe entry, not guess mid-section.
+            if(active==null && Geo.distance(fix.point,section.points.first())>150) continue // Must observe entry, not guess mid-section.
             active=section
             if(projection.third>.985 && Geo.distance(fix.point,section.points.last())<25) { active=null;return null }
             val length=section.points.zipWithNext().sumOf { Geo.distance(it.first,it.second) }

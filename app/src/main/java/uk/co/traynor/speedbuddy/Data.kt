@@ -30,7 +30,7 @@ data class CameraCorrection(val id: String, val source: CameraSource, val point:
     fun apply(camera: Camera): Camera = if (camera.id == id && camera.source == source)
         camera.copy(point = point, type = type, direction = direction, note = note,
             enforcedMph = enforcedMph, updatedAtMs = updatedAtMs,
-            bidirectional = bidirectional) else camera
+            bidirectional = bidirectional,locallyCorrected=true) else camera
 }
 
 class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOpenHelper(context, databaseName, null, 8), CameraRepository {
@@ -436,7 +436,7 @@ class OsmDataSource(private val context: Context, private val cacheName: String 
             return snapshot
         } finally { connection.disconnect() }
     }
-    private fun decode(json: JSONObject, fetched: Long, centerOverride: GeoPoint? = null): OsmSnapshot {
+    internal fun decode(json: JSONObject, fetched: Long, centerOverride: GeoPoint? = null): OsmSnapshot {
         val center = centerOverride ?: run {
             val saved = context.getSharedPreferences(cachePrefs, Context.MODE_PRIVATE)
             GeoPoint(saved.getString("lat", "0")!!.toDouble(), saved.getString("lon", "0")!!.toDouble())
@@ -444,33 +444,46 @@ class OsmDataSource(private val context: Context, private val cacheName: String 
         val roads = mutableListOf<Road>(); val cameras = linkedMapOf<String, Camera>()
         val sections=mutableListOf<AverageSpeedSection>()
         val elements = json.getJSONArray("elements")
-        for (i in 0 until elements.length()) {
-            val element = elements.getJSONObject(i); val kind = element.getString("type")
+        require(elements.length()<=50_000) { "Road response has too many records" }
+        val ordered=(0 until elements.length()).mapNotNull { elements.optJSONObject(it) }.sortedBy { if(it.optString("type")=="relation") 1 else 0 }
+        val ambiguousDirections=hashSetOf<String>()
+        fun point(value: JSONObject): GeoPoint {
+            val result=GeoPoint(value.getDouble("lat"),value.getDouble("lon"))
+            require(result.lat.isFinite() && result.lat in -90.0..90.0 && result.lon.isFinite() && result.lon in -180.0..180.0)
+            return result
+        }
+        for (element in ordered) { try {
+            val kind = element.getString("type")
             val tags = element.optJSONObject("tags") ?: JSONObject()
             if (kind == "way") {
                 val geometry = element.optJSONArray("geometry") ?: continue
-                val points = (0 until geometry.length()).map { geometry.getJSONObject(it) }.map { GeoPoint(it.getDouble("lat"), it.getDouble("lon")) }
+                require(geometry.length()<=10_000)
+                val points = (0 until geometry.length()).map { point(geometry.getJSONObject(it)) }
                 if (points.size > 1) roads += Road("way/${element.getLong("id")}", tags.optString("name").takeIf { it.isNotBlank() }, points, tagMap(tags))
             } else if (kind == "node") {
                 val type = CameraCategories.fromOsm(tags.optString("enforcement"), tags.optString("highway")) ?: continue
-                val id = "node/${element.getLong("id")}"; cameras[id] = Camera(id, GeoPoint(element.getDouble("lat"), element.getDouble("lon")), type,
+                val id = "node/${element.getLong("id")}"; cameras[id] = Camera(id, point(element), type,
                     CameraSource.OSM, null, SpeedLimits.mph(tagMap(tags)), updatedAtMs = fetched)
             } else if (kind == "relation") {
                 AverageSpeedSections.parse(element)?.let(sections::add)
                 val type = CameraCategories.fromOsm(tags.optString("enforcement"), "") ?: continue
                 val members = element.optJSONArray("members") ?: continue
-                val relationBearing = OsmEnforcementDirection.travel(members)
+                val relationBearing = runCatching { OsmEnforcementDirection.travel(members) }.getOrNull()
                 for (j in 0 until members.length()) {
                     val member = members.getJSONObject(j)
                     if (member.optString("role") != "device" || member.optString("type") != "node") continue
                     val id = "node/${member.getLong("ref")}"
                     val existing=cameras[id]
                     if (!member.has("lat") || !member.has("lon")) continue
-                    cameras[id] = Camera(id, GeoPoint(member.getDouble("lat"), member.getDouble("lon")), type,
-                        CameraSource.OSM, relationBearing ?: existing?.direction, SpeedLimits.mph(tagMap(tags)) ?: existing?.enforcedMph, updatedAtMs = fetched)
+                    val opposite=existing?.direction!=null && relationBearing!=null && Geo.difference(existing.direction,(relationBearing+180)%360)<15
+                    if(existing?.direction!=null && relationBearing!=null && !opposite && Geo.difference(existing.direction,relationBearing)>15) ambiguousDirections+=id
+                    cameras[id] = Camera(id, point(member), type,
+                        CameraSource.OSM, if(id in ambiguousDirections) null else existing?.direction ?: relationBearing,
+                        SpeedLimits.mph(tagMap(tags)) ?: existing?.enforcedMph, updatedAtMs = fetched,
+                        bidirectional=id !in ambiguousDirections && (opposite || existing?.bidirectional==true))
                 }
             }
-        }
+        } catch(_: Exception) { /* Malformed individual records do not discard valid neighbours. */ } }
         return OsmSnapshot(center, fetched, roads, cameras.values.toList(),sections)
     }
     private fun tagMap(tags: JSONObject): Map<String, String> = tags.keys().asSequence().associateWith { tags.getString(it) }

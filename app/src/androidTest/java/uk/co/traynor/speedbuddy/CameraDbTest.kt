@@ -346,4 +346,11 @@ class CameraDbTest {
         } finally { context.deleteDatabase(name) }
     }
 
+    @Test fun osmParserSkipsMalformedRecordsAndDoesNotUseRawFacingDirection() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val json=org.json.JSONObject("""{"elements":[{"type":"node","id":1,"lat":999,"lon":-2,"tags":{"highway":"speed_camera"}},{"type":"node","id":2,"lat":53.0,"lon":-2.0,"tags":{"highway":"speed_camera","direction":"180"}}]}""")
+        val snapshot=OsmDataSource(context).decode(json,1234,GeoPoint(53.0,-2.0))
+        assertEquals("node/2",snapshot.cameras.single().id);assertNull(snapshot.cameras.single().direction)
+    }
+
 }

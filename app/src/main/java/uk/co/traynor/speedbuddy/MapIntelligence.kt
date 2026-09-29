@@ -42,8 +42,12 @@ data class CameraMapGroup(val point: GeoPoint, val count: Int, val camera: Camer
 /** Bounded viewport aggregation; grouping occurs off the UI thread. */
 object CameraClustering {
     fun group(cameras: List<Camera>, zoom: Double): List<CameraMapGroup> {
-        if (zoom >= 15.0) return cameras.map { CameraMapGroup(it.point, 1, it) }
-        val cell = .06 / 2.0.pow((zoom - 10.0).coerceIn(0.0, 5.0))
+        if (zoom >= 15.0 && cameras.size<=300) return cameras.map { CameraMapGroup(it.point, 1, it) }
+        var cell = if(zoom>=15) .00025 else .06 / 2.0.pow((zoom - 10.0).coerceIn(0.0, 5.0))
+        repeat(8) {
+            val count=cameras.asSequence().map { floor(it.point.lat/cell).toLong() to floor(it.point.lon/cell).toLong() }.distinct().take(301).count()
+            if(count>300) cell*=1.8
+        }
         return cameras.groupBy { floor(it.point.lat / cell).toLong() to floor(it.point.lon / cell).toLong() }
             .values.map { group -> CameraMapGroup(
                 GeoPoint(group.sumOf { it.point.lat } / group.size, group.sumOf { it.point.lon } / group.size),

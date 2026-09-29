@@ -210,10 +210,9 @@ class MainActivity : ComponentActivity() {
                         "mapData" -> MapDataScreen(db, importedInfo, { page = "settings" },
                             { importLufop.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
                             { exportBackup.launch("SpeedBuddy-backup.json") },
-                            { org.maplibre.android.MapLibre.getInstance(this@MainActivity)
-                              org.maplibre.android.offline.OfflineManager.getInstance(this@MainActivity).clearAmbientCache(null)
-                              java.io.File(filesDir, "osm-editor-snapshot.json").delete()
-                              message = "Map tile cache cleared. Driving data remains available." })
+                            { SpeedBuddyMapProvider.clearTileCache(this@MainActivity) { error->
+                                message=if(error==null) "Map tile cache cleared. Driving data remains available." else "Could not clear map cache: $error"
+                            } })
                         "diagnostics" -> DiagnosticsScreen(state) { page = "drive" }
                         "cameras" -> CameraList(records, moving, { page = "settings" },
                             { editing = it; page = "edit" },
@@ -639,7 +638,7 @@ class MainActivity : ComponentActivity() {
             Surface(shape=RoundedCornerShape(18.dp),color=Panel) {
                 Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                     Text("$owners added cameras · ${corrections.size} camera corrections · ${hidden.size} hidden source records · ${roads.size} road corrections",color=Ink)
-                    Text("MapLibre · OpenFreeMap Liberty · OpenStreetMap road tags",color=Muted,style=MaterialTheme.typography.bodySmall)
+                    Text("${SpeedBuddyMapProvider.name} · OpenStreetMap road tags",color=Muted,style=MaterialTheme.typography.bodySmall)
                     Text("Saved road coverage: ${cache.first} visited areas · ${"%.1f".format(Locale.UK,cache.second/1_000_000.0)} MB. Refresh after 24 hours when online; available offline for up to 30 days. Map tiles cache separately.",color=Muted,style=MaterialTheme.typography.bodySmall)
                     OutlinedButton(onClick=export) { Text("Export owner data") }
                     TextButton(onClick={confirm="camera"},enabled=parked) { Text("Reset camera corrections") }

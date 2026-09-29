@@ -92,6 +92,10 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
     BackHandler(enabled = pendingRemoval != null || pin != null || camera != null || road != null) {
         pendingRemoval = null; pin = null; camera = null; editingPosition = null; road = null
     }
+    fun saveChange(operation: ()->Unit,done: ()->Unit) { scope.launch {
+        runCatching { withContext(Dispatchers.IO) { operation() } }
+            .onSuccess { done() }.onFailure { status="Could not save change: ${it.message?.take(80) ?: "Try again"}" }
+    } }
     val mapView = remember(context) {
         MapLibre.getInstance(context)
         MapView(context).apply {
@@ -118,7 +122,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
         mapView.getMapAsync { ready ->
             ready.cameraPosition = CameraPosition.Builder()
                 .target(LatLng(mapLatitude ?: current?.lat ?: 53.550, mapLongitude ?: current?.lon ?: -2.777)).zoom(mapZoom).bearing(mapBearing).build()
-            ready.setStyle("https://tiles.openfreemap.org/styles/liberty") {
+            ready.setStyle(SpeedBuddyMapProvider.styleUrl) {
                 ready.addOnCameraMoveStartedListener { reason ->
                     if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) following = false
                 }
@@ -136,7 +140,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                 ready.setOnMarkerClickListener { selected ->
                     if(clusters[selected.id]!=null) {
                         val target=clusters.getValue(selected.id);following=false
-                        ready.cameraPosition=CameraPosition.Builder().target(LatLng(target.lat,target.lon)).zoom((ready.cameraPosition.zoom+2).coerceAtMost(17.0)).build()
+                        ready.cameraPosition=CameraPosition.Builder().target(LatLng(target.lat,target.lon)).zoom((ready.cameraPosition.zoom+2).coerceAtMost(19.0)).build()
                     } else if (!currentMoving && markers[selected.id] != null) {
                         camera = markers[selected.id]; editingPosition = null; road = null; pin = null
                     } else if (!currentMoving && roadMarkers[selected.id] != null) {
@@ -215,7 +219,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
         val center = ready.cameraPosition.target ?: return@LaunchedEffect
         val point = GeoPoint(center.latitude, center.longitude)
         val zoom = ready.cameraPosition.zoom
-        if (zoom < 9) { ready.clear(); locationMarker=null;markers.clear(); roadMarkers.clear(); status = "Zoom in to see camera coverage"; return@LaunchedEffect }
+        if (zoom < 9) { ready.clear(); locationMarker=null;markers.clear();clusters.clear(); roadMarkers.clear(); status = "Zoom in to see camera coverage"; return@LaunchedEffect }
         val span = (0.045 * Math.pow(2.0, 14.0 - zoom)).coerceIn(0.002, 1.0)
         val draw = withContext(Dispatchers.IO) {
             val public = snapshot?.cameras.orEmpty()
@@ -357,13 +361,13 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
             style = MaterialTheme.typography.headlineLarge)
         when {
             pin != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(null, pin!!, { pin = null }, { point, type, direction, mph, note, both ->
-                db.create(point, type, direction, mph, note, both); revision++; pin = null
+                saveChange({ db.create(point,type,direction,mph,note,both) }) { revision++;pin=null }
             }) }
             camera != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(camera, editingPosition ?: camera!!.point, {
                 camera = null; editingPosition = null
             }, { point, type, direction, mph, note, both ->
                 val item = camera!!
-                if (item.source == CameraSource.USER) db.upsert(item.copy(point = point, type = type,
+                saveChange({ if (item.source == CameraSource.USER) db.upsert(item.copy(point = point, type = type,
                     direction = direction, enforcedMph = mph, note = note, bidirectional = both))
                 else {
                     val previous = db.cameraCorrections().firstOrNull { it.id == item.id }
@@ -375,7 +379,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                     db.saveCameraCorrection(CameraCorrection(item.id, item.source, point, type,
                         direction, note, mph, sourcePoint, bidirectional = both))
                 }
-                revision++; camera = null; editingPosition = null
+                }) { revision++;camera=null;editingPosition=null }
             }, onDelete = { item ->
                 pendingRemoval = item
             }, sourcePoint = camera?.let { item -> when (item.source) {
@@ -386,8 +390,8 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
             road != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { RoadMapEditor(road!!, db.roadCorrection(road!!.id), {
                 road = null
             }, { correction ->
-                if (correction == null) db.deleteRoadLimit(road!!.id) else db.saveRoadCorrection(correction)
-                revision++; road = null
+                val id=road!!.id
+                saveChange({ if(correction==null) db.deleteRoadLimit(id) else db.saveRoadCorrection(correction) }) { revision++;road=null }
             }) }
             else -> Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
                 color = MapPanel, shape = RoundedCornerShape(12.dp)) {
@@ -397,7 +401,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                     style = MaterialTheme.typography.bodySmall)
             }
         }
-        Text("© OpenStreetMap contributors · OpenMapTiles · OpenFreeMap",
+        Text(SpeedBuddyMapProvider.attribution,
             Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = if (camera != null || road != null || pin != null) 220.dp else 72.dp)
                 .background(MapPanel.copy(alpha = .88f))
                 .clickable { uriHandler.openUri("https://www.openstreetmap.org/copyright") }
@@ -408,8 +412,9 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
             text = { Text(if (item.source == CameraSource.USER) "This pin will be removed from this phone."
                 else "The imported record remains available; Speed Buddy will hide it from the map and alerts.") },
             confirmButton = { TextButton(onClick = {
-                if (item.source == CameraSource.USER) db.delete(item.id) else db.hideEffectiveCamera(item)
-                revision++; camera = null; editingPosition = null; pendingRemoval = null
+                saveChange({ if(item.source==CameraSource.USER) db.delete(item.id) else db.hideEffectiveCamera(item) }) {
+                    revision++;camera=null;editingPosition=null;pendingRemoval=null
+                }
             }) { Text(if (item.source == CameraSource.USER) "Delete" else "Hide") } },
             dismissButton = { TextButton(onClick = { pendingRemoval = null }) { Text("Cancel") } }) }
     }

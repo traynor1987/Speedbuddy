@@ -29,7 +29,7 @@ class DrivingUiTest {
             val landscape=Configuration(LocalConfiguration.current).apply { screenHeightDp=360;screenWidthDp=720;orientation=Configuration.ORIENTATION_LANDSCAPE }
             CompositionLocalProvider(LocalConfiguration provides landscape) { MaterialTheme { DriveScreen(DriveState(),{},{},{},{},{},{},{},{}) } }
         }
-        compose.onNodeWithText("Start driving mode").performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText("Start driving mode") and hasClickAction()).performScrollTo().assertIsDisplayed()
     }
     @Test fun cameraEditorRetainsOwnerInputAfterRecreation() {
         val restoration=StateRestorationTester(compose)

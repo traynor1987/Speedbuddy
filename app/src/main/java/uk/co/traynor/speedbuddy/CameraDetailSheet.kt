@@ -20,7 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
             .verticalScroll(rememberScrollState()).padding(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
             Text(when(camera.type) { CameraType.SPEED->"Speed camera";CameraType.RED_LIGHT->"Red-light camera";CameraType.COMBINED->"Speed + red-light camera";CameraType.AVERAGE->"Average-speed enforcement point" },
                 style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)
-            Text(if(camera.source==CameraSource.USER) "USER ADDED · unverified" else "${camera.source.name} · source record",
+            Text(if(camera.source==CameraSource.USER) "USER ADDED · unverified" else "${camera.source.name} · ${if(camera.locallyCorrected) "local correction · unverified" else "source record · not locally verified"}",
                 color=MaterialTheme.colorScheme.onSurfaceVariant)
             Text(camera.enforcedMph?.let { "Speed limit $it mph" } ?: "Camera speed limit unknown")
             Text(camera.direction?.let { "Enforced travel direction ${it.toInt()}°${if(camera.bidirectional) " and opposite direction" else ""}" } ?: "Enforced direction unknown")

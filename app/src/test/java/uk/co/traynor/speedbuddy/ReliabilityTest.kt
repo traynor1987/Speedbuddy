@@ -74,4 +74,10 @@ class ReliabilityTest {
         assertEquals("Different carriageway",decision.reason)
     }
 
+    @Test fun denseDrivingZoomClustersThousandsWithinRenderingBudget() {
+        val records=(0 until 5000).map { i->camera.copy(id="dense-$i",point=GeoPoint(53.0+(i%100)*.00001,-2.0+(i/100)*.00001)) }
+        val groups=CameraClustering.group(records,17.0)
+        assertTrue(groups.size<=300);assertEquals(5000,groups.sumOf { it.count })
+    }
+
 }
