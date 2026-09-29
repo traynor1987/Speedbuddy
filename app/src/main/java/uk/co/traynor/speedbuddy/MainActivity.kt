@@ -234,6 +234,15 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable private fun TurnLimitPreview(turn: TurnLimit, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(if (turn.direction == TurnDirection.LEFT) "↰ IF LEFT" else "IF RIGHT ↱",
+            color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        LimitSign(turn.mph, turn.national, Modifier.size(58.dp))
+        Text("${(turn.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
+    }
+}
+
 @Composable private fun DriveScreen(state: DriveState, onStart: () -> Unit, onStop: () -> Unit,
     onSettings: () -> Unit, onMap: () -> Unit, onDiagnostic: () -> Unit,
     onAdd: () -> Unit, onQuick: (CameraType) -> Unit) {
@@ -272,25 +281,26 @@ class MainActivity : ComponentActivity() {
         Text("CURRENT ROAD LIMIT", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)
         Spacer(Modifier.height(12.dp))
         val hasPreview = state.upcoming != null || state.turns.isNotEmpty()
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = if (hasPreview) Arrangement.spacedBy(10.dp) else Arrangement.Center) {
-            LimitSign(state.limitMph, national, Modifier.size(if (hasPreview) 142.dp else 158.dp))
-            if (hasPreview) Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                state.upcoming?.let { next ->
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("AHEAD", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        LimitSign(next.mph, next.national, Modifier.size(58.dp))
-                        Text("${(next.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
+        if (state.upcoming == null && state.turns.size == 1) {
+            BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                val mainSize = minOf(158.dp, (maxWidth - 152.dp).coerceAtLeast(96.dp))
+                LimitSign(state.limitMph, national, Modifier.size(mainSize))
+                TurnLimitPreview(state.turns.single(), Modifier.align(Alignment.CenterEnd).width(72.dp))
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = if (hasPreview) Arrangement.spacedBy(10.dp) else Arrangement.Center) {
+                LimitSign(state.limitMph, national, Modifier.size(if (hasPreview) 142.dp else 158.dp))
+                if (hasPreview) Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    state.upcoming?.let { next ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("AHEAD", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            LimitSign(next.mph, next.national, Modifier.size(58.dp))
+                            Text("${(next.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
+                        }
                     }
-                }
-                state.turns.forEach { turn ->
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(if (turn.direction == TurnDirection.LEFT) "↰ IF LEFT" else "IF RIGHT ↱",
-                            color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                        LimitSign(turn.mph, turn.national, Modifier.size(58.dp))
-                        Text("${(turn.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
-                    }
+                    state.turns.forEach { turn -> TurnLimitPreview(turn) }
                 }
             }
         }

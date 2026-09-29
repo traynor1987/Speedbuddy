@@ -47,6 +47,7 @@ class DrivingService : Service(), LocationListener {
     private var fetching = false; private var lastAttempt = 0L
     private var mapStatus = "Cached map data"
     private var lastAlertId: String? = null
+    private lateinit var cameraVoice: CameraVoice
     private var roadRevision = -1L
     private var roadOverrides: Map<String, RoadLimitCorrection> = emptyMap()
     private var cameraRevision = -1L
@@ -62,6 +63,7 @@ class DrivingService : Service(), LocationListener {
     override fun onCreate() {
         super.onCreate(); locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         db = CameraDb(this); osm = OsmDataSource(this); snapshot = osm.cached()
+        cameraVoice = CameraVoice(this) { signal(true, false) }
         val channel = NotificationChannel("drive", "Driving mode", NotificationManager.IMPORTANCE_LOW)
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
     }
@@ -155,7 +157,12 @@ class DrivingService : Service(), LocationListener {
         } }
         val (alert, decision) = detector.evaluate(fix, road, enabled, speed)
         if (alert != null && alert.camera.id != lastAlertId) {
-            lastAlertId = alert.camera.id; signal(settings.getBoolean("cameraSound", true), settings.getBoolean("vibrate", true))
+            lastAlertId = alert.camera.id
+            if (settings.getBoolean("cameraSound", true)) {
+                val matchedLimit = limit.takeIf { road != null && road.confidence >= .35 }
+                cameraVoice.say(CameraAnnouncement.text(alert.camera, matchedLimit))
+            }
+            signal(false, settings.getBoolean("vibrate", true))
         }
         val tolerance = settings.getInt("tolerance", 2)
         if (settings.getBoolean("overspeed", false) && overspeed.update(speed, limit, tolerance)) signal(false, settings.getBoolean("vibrate", true))
@@ -195,7 +202,7 @@ class DrivingService : Service(), LocationListener {
         }.onFailure { Log.w("SpeedBuddy", "Vibration alert unavailable", it) }
     }
     override fun onDestroy() {
-        tick?.cancel(); scope.cancel(); locationManager.removeUpdates(this); db.close()
+        tick?.cancel(); scope.cancel(); locationManager.removeUpdates(this); cameraVoice.close(); db.close()
         DriveBus.set(DriveState(status = "Driving mode stopped")); super.onDestroy()
     }
 }
