@@ -162,4 +162,34 @@ class CoreTest {
         val sideRoad = road.copy(id = "way/2", tags = emptyMap())
         assertNull(stable.resolve(start, RoadMatch(sideRoad, 2.0, 0.0, .9), null, 47_000))
     }
+
+    @Test fun connectedSameLimitRoadStaysKnownDuringAmbiguousMatch() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val next = current.copy(id = "way/next", points = listOf(current.points.last(), GeoPoint(53.006, -2.0)))
+        val stable = RoadLimitStabilizer()
+        assertEquals(30, stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000))
+        assertEquals(30, stable.resolve(fix(53.0034), null, null, 2000, listOf(current, next)))
+    }
+
+    @Test fun actualTurnUsesKnownSideRoadLimitWithoutChangingBeforeTurn() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val left = Road("way/left", "Side Lane", listOf(current.points.last(), GeoPoint(53.003, -2.003)),
+            mapOf("maxspeed" to "20 mph"))
+        val stable = RoadLimitStabilizer()
+        assertEquals(30, stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000))
+        assertEquals(30, stable.resolve(fix(53.0029), null, null, 1500, listOf(current, left)))
+        assertEquals(20, stable.resolve(fix(53.003).copy(point = GeoPoint(53.003, -2.0005),
+            bearing = 270.0), null, null, 2000, listOf(current, left)))
+    }
+
+    @Test fun untaggedOrUnconnectedRoadNeverInheritsAnOldLimit() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val unknown = Road("way/unknown", "Other Road", listOf(current.points.last(), GeoPoint(53.006, -2.0)), emptyMap())
+        val remote = current.copy(id = "way/remote", points = listOf(GeoPoint(53.0032, -2.0), GeoPoint(53.006, -2.0)))
+        val stable = RoadLimitStabilizer()
+        stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000)
+        assertNull(stable.resolve(fix(53.0034), null, null, 2000, listOf(current, unknown)))
+        stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 3000)
+        assertNull(stable.resolve(fix(53.0034), null, null, 4000, listOf(current, remote)))
+    }
 }
