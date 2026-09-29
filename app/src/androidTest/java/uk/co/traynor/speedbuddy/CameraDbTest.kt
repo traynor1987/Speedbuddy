@@ -353,4 +353,14 @@ class CameraDbTest {
         assertEquals("node/2",snapshot.cameras.single().id);assertNull(snapshot.cameras.single().direction)
     }
 
+    @Test fun roadCacheReadsRegionsLargerThanAndroidCursorWindow() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val name="large-road-cache-test.db";context.deleteDatabase(name)
+        try { RoadCache(context,name).use { cache->
+            val data="x".repeat(3_000_000)
+            cache.save(CachedRoadRegion(GeoPoint(53.0,-2.0),System.currentTimeMillis(),data))
+            assertEquals(data,cache.latest(GeoPoint(53.0,-2.0))?.json)
+        } } finally { context.deleteDatabase(name) }
+    }
+
 }
