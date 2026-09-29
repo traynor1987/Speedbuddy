@@ -171,6 +171,16 @@ class CoreTest {
         assertEquals(30, stable.resolve(fix(53.0034), null, null, 2000, listOf(current, next)))
     }
 
+    @Test fun differentKnownLimitBecomesCurrentOnlyAfterTheJunction() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val next = current.copy(id = "way/next", points = listOf(current.points.last(), GeoPoint(53.006, -2.0)),
+            tags = mapOf("maxspeed" to "20 mph"))
+        val stable = RoadLimitStabilizer()
+        stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000)
+        assertEquals(30, stable.resolve(fix(53.0029), null, null, 1500, listOf(current, next)))
+        assertEquals(20, stable.resolve(fix(53.0034), null, null, 2000, listOf(current, next)))
+    }
+
     @Test fun actualTurnUsesKnownSideRoadLimitWithoutChangingBeforeTurn() {
         val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
         val left = Road("way/left", "Side Lane", listOf(current.points.last(), GeoPoint(53.003, -2.003)),
@@ -191,5 +201,14 @@ class CoreTest {
         assertNull(stable.resolve(fix(53.0034), null, null, 2000, listOf(current, unknown)))
         stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 3000)
         assertNull(stable.resolve(fix(53.0034), null, null, 4000, listOf(current, remote)))
+    }
+
+    @Test fun overlappingKnownAndUnknownContinuationsStayUnknown() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val next = current.copy(id = "way/known", points = listOf(current.points.last(), GeoPoint(53.006, -2.0)))
+        val unknown = next.copy(id = "way/untagged", tags = emptyMap())
+        val stable = RoadLimitStabilizer()
+        stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000)
+        assertNull(stable.resolve(fix(53.0034), null, null, 2000, listOf(current, next, unknown)))
     }
 }

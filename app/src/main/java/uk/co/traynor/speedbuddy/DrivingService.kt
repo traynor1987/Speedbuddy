@@ -112,7 +112,7 @@ class DrivingService : Service(), LocationListener {
         }
         val correctedRoads = cached?.roads?.map { road -> roadOverrides[road.id]?.apply(road) ?: road }
         val road = if (correctedRoads != null && fix.accuracyM <= 35) matcher.match(fix, correctedRoads) else null
-        val limit = if (cached != null) limitStabilizer.resolve(fix, road, limits.limit(road), now)
+        val limit = if (cached != null) limitStabilizer.resolve(fix, road, limits.limit(road), now, correctedRoads.orEmpty())
             else { limitStabilizer.reset(); null }
         val upcoming = correctedRoads?.let { upcomingDetector.detect(fix, road, limit, it) }
         val turns = correctedRoads?.let { turnDetector.detect(fix, road, limit, it) }.orEmpty()

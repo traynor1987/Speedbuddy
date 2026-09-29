@@ -91,12 +91,13 @@ object SpeedLimits {
     }
 }
 
-/** Hold only a recently observed limit on the same geometry through a short ambiguous GPS fix. */
+/** Bridge brief GPS ambiguity using observed road geometry or a connected, tagged road. */
 class RoadLimitStabilizer {
     private var lastMatch: RoadMatch? = null
     private var lastLimit: Int? = null
     private var lastSeenMs: Long = 0
-    fun resolve(fix: Fix, match: RoadMatch?, limit: Int?, nowMs: Long): Int? {
+    fun resolve(fix: Fix, match: RoadMatch?, limit: Int?, nowMs: Long,
+        roads: List<Road> = emptyList()): Int? {
         if (match != null) {
             if (limit != null) { lastMatch = match; lastLimit = limit; lastSeenMs = nowMs }
             else reset()
@@ -108,11 +109,37 @@ class RoadLimitStabilizer {
         val direction = fix.bearing?.let { b -> heading?.let { h ->
             min(Geo.difference(b, h), Geo.difference(b, (h + 180) % 360))
         } }
-        if (distance > max(16.0, fix.accuracyM * 1.5) || direction != null && direction > 45) {
-            reset(); return null
+        if (distance <= max(16.0, fix.accuracyM * 1.5) && (direction == null || direction <= 45)) {
+            return lastLimit
         }
-        return lastLimit
+        val bearing = fix.bearing ?: return resetAndUnknown()
+        val nearbyJunctions = previous.road.points.filter { Geo.distance(it, fix.point) <= 100.0 }
+        val candidates = roads.asSequence().filter { road ->
+            road.id != previous.road.id && road.points.size > 1 &&
+                nearbyJunctions.any { junction ->
+                    Geo.distance(junction, road.points.first()) <= 12.0 ||
+                        Geo.distance(junction, road.points.last()) <= 12.0
+                }
+        }.mapNotNull { road ->
+            val (roadDistance, roadHeading, _) = Geo.projection(fix.point, road.points)
+            val headingDifference = roadHeading?.let { heading ->
+                if (road.tags["oneway"] == "yes") Geo.difference(bearing, heading)
+                else min(Geo.difference(bearing, heading), Geo.difference(bearing, (heading + 180) % 360))
+            } ?: return@mapNotNull null
+            if (roadDistance <= max(12.0, fix.accuracyM * 1.2) && headingDifference <= 40)
+                road to SpeedLimits.mph(road.tags) else null
+        }.toList()
+        if (candidates.any { it.second == null }) return resetAndUnknown()
+        val knownLimits = candidates.map { it.second }.distinct()
+        if (knownLimits.size != 1) return resetAndUnknown()
+        if (candidates.size == 1) {
+            lastMatch = RoadMatch(candidates.single().first, 0.0, null, .35)
+            lastLimit = knownLimits.single()
+            lastSeenMs = nowMs
+        }
+        return knownLimits.single()
     }
+    private fun resetAndUnknown(): Int? { reset(); return null }
     fun reset() { lastMatch = null; lastLimit = null; lastSeenMs = 0 }
 }
 
