@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
                   Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                     when (page) {
                         "drive" -> DriveScreen(state, ::startDriving,
-                            { stopService(Intent(this, DrivingService::class.java)) },
+                            { stopService(Intent(this@MainActivity, DrivingService::class.java)) },
                             { page = "settings" }, { page = "diagnostics" },
                             { if (state.fix == null) message = "Wait for a GPS fix"
                               else if (moving) message = "Stop before editing a camera"
