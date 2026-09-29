@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -69,6 +70,7 @@ class MainActivity : ComponentActivity() {
                 surfaceVariant = Color(0xFF203443), onSurfaceVariant = Muted,
                 outline = Line)) {
                 Surface(Modifier.fillMaxSize(), color = Background, contentColor = Ink) {
+                  Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                     when (page) {
                         "drive" -> DriveScreen(state, ::startDriving,
                             { stopService(Intent(this, DrivingService::class.java)) },
@@ -99,6 +101,7 @@ class MainActivity : ComponentActivity() {
                     if (message.isNotEmpty()) AlertDialog(onDismissRequest = { message = "" },
                         confirmButton = { TextButton(onClick = { message = "" }) { Text("OK") } },
                         text = { Text(message, color = Ink) })
+                  }
                 }
             }
         }
@@ -107,11 +110,13 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun Page(title: String, back: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        Row(Modifier.fillMaxWidth().height(72.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().height(64.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = back, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("‹  Back", color = Accent) }
             Spacer(Modifier.width(10.dp))
             Text(title, color = Ink, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         }
+        HorizontalDivider(color = Line)
+        Spacer(Modifier.height(16.dp))
         content()
     }
 }
@@ -139,6 +144,15 @@ class MainActivity : ComponentActivity() {
     onSettings: () -> Unit, onDiagnostic: () -> Unit, onAdd: () -> Unit, onQuick: (CameraType) -> Unit) {
     val speed = state.speedMph
     val moving = state.active && (speed == null || speed >= 5.0)
+    val fix = state.fix
+    val fixAge = fix?.let { SystemClock.elapsedRealtime() - it.elapsedMs }
+    val gpsLabel = when {
+        !state.active -> "READY WHEN YOU ARE"
+        fix == null -> "SEARCHING FOR GPS"
+        fixAge == null || fixAge > 5000 -> "GPS SIGNAL LOST"
+        fix.accuracyM > 50 -> "GPS SIGNAL WEAK"
+        else -> "GPS FIX · ${fix.accuracyM.roundToInt()} M"
+    }
     val tags = state.road?.road?.tags
     val national = state.limitMph != null && (
         tags?.get("maxspeed:type")?.startsWith("GB:nsl") == true ||
@@ -147,7 +161,7 @@ class MainActivity : ComponentActivity() {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text("SPEED BUDDY", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                Text(if (state.active) "DRIVING MODE ACTIVE" else "READY WHEN YOU ARE", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp)
+                Text(gpsLabel, color = Muted, fontSize = 11.sp, letterSpacing = 1.sp)
             }
             TextButton(onClick = onSettings, enabled = !moving) { Text("Settings") }
         }
@@ -291,12 +305,22 @@ class MainActivity : ComponentActivity() {
 }
 @Composable private fun DiagnosticsScreen(state: DriveState, back: () -> Unit) = Page("Diagnostics", back) {
     val fix = state.fix
+    val fixAge = fix?.let { SystemClock.elapsedRealtime() - it.elapsedMs }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
         DiagnosticCard("GPS", listOf(
+            "Status" to when {
+                !state.active -> "Driving mode stopped"
+                fix == null -> "Waiting for GPS"
+                fixAge == null || fixAge > 5000 -> "Fix stale"
+                fix.accuracyM > 50 -> "Weak fix"
+                else -> "Live GPS fix"
+            },
+            "Provider" to if (state.active) "Device GPS" else null,
+            "Location" to fix?.point?.let { "${it.lat.format()}, ${it.lon.format()}" },
             "Accuracy" to fix?.let { "${it.accuracyM.roundToInt()} m" },
             "Speed" to fix?.speedMps?.let { "${(it * MPS_TO_MPH).roundToInt()} mph" },
             "Heading" to fix?.bearing?.let { "${it.roundToInt()}°" },
-            "Fix age" to fix?.let { "${(android.os.SystemClock.elapsedRealtime() - it.elapsedMs) / 1000} s" }))
+            "Fix age" to fixAge?.let { "${it / 1000} s" }))
         DiagnosticCard("ROAD", listOf(
             "Matched road" to state.road?.road?.let { "${it.name ?: "Unnamed"} · ${it.id}" },
             "Confidence" to state.road?.let { String.format(Locale.UK, "%.2f", it.confidence) },
@@ -344,7 +368,7 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
     var direction by remember(existing) { mutableStateOf(existing?.direction?.roundToInt()?.toString() ?: "") }
     var note by remember(existing) { mutableStateOf(existing?.note ?: "") }
     Page(if (existing == null) "Add camera" else "Edit camera", back) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
             Text("Edit only while parked. Save your current GPS position or correct the coordinates below.",
                 color = Muted, fontSize = 14.sp, lineHeight = 20.sp)
             Spacer(Modifier.height(16.dp))
@@ -377,14 +401,14 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
                     OutlinedTextField(note, { note = it.take(100) }, label = { Text("Note") }, modifier = Modifier.fillMaxWidth())
                 }
             }
-            Spacer(Modifier.height(20.dp))
-            val corrected = latitude.toDoubleOrNull()?.let { lat -> longitude.toDoubleOrNull()?.let { lon ->
-                if (lat in -90.0..90.0 && lon in -180.0..180.0) GeoPoint(lat, lon) else null
-            } }
-            Button(onClick = { corrected?.let { save(it, type, direction.toDoubleOrNull(), mph.toIntOrNull(), note.ifBlank { null }) } },
-                enabled = !moving && corrected != null && (direction.isEmpty() || direction.toIntOrNull()?.let { it in 0..359 } == true) &&
-                    (mph.isEmpty() || mph.toIntOrNull()?.let { it in 5..130 } == true),
-                modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp)) { Text("Save camera") }
         }
+        val corrected = latitude.toDoubleOrNull()?.let { lat -> longitude.toDoubleOrNull()?.let { lon ->
+            if (lat in -90.0..90.0 && lon in -180.0..180.0) GeoPoint(lat, lon) else null
+        } }
+        Button(onClick = { corrected?.let { save(it, type, direction.toDoubleOrNull(), mph.toIntOrNull(), note.ifBlank { null }) } },
+            enabled = !moving && corrected != null && (direction.isEmpty() || direction.toIntOrNull()?.let { it in 0..359 } == true) &&
+                (mph.isEmpty() || mph.toIntOrNull()?.let { it in 5..130 } == true),
+            modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp)) { Text("Save camera") }
+        Spacer(Modifier.height(12.dp))
     }
 }
