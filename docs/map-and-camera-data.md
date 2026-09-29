@@ -1,0 +1,33 @@
+# Map and camera data contract
+
+Speed Buddy's driving intelligence must continue without map tiles. MapLibre Native Android renders the management map; it is not a source of camera or speed-limit truth. The renderer is BSD 2-Clause licensed. The selected stable `android-sdk-opengl:13.6.0` avoids the Vulkan-only Android 17 initialization failures reported upstream; physical acceptance on the Fold is still required. The current base style uses OpenFreeMap's Liberty vector tiles, which its public instance offers to apps (https://openfreemap.org/). OpenStreetMap road and camera tags are ODbL data and require visible `© OpenStreetMap contributors` attribution and a link to https://www.openstreetmap.org/copyright. The UI also credits OpenMapTiles and OpenFreeMap. Do not prefetch regions from public tile services. A tile outage leaves the saved road extract and camera database usable.
+
+## Supplied Lufop archive, inspected 29 September 2026
+
+The owner supplied `Lufop-Zones-de-danger-EU-ASC.zip` (620,001 bytes). The UK portion contains eight `GBFixeGB*.asc` files with 4,220 rows and `GBFeuRougeGB.asc` with 1,013 rows. Every inspected row follows `longitude, latitude, "label"`. ZIP entry timestamps are 1 September 2026. The filename suffixes include 30, 40, 50, 60, 70, 80, 100 and 120, but the archive does not define their unit or authoritative enforced limit. It provides no enforcement bearing, bidirectional flag, segment identity or stable source identifier. Do not present a filename suffix as mph or infer direction. A coordinate-derived ID can change after a source correction; migration/reconciliation must account for that limitation.
+
+The existing import is manual: the free archive requires registration/download in the owner's browser and is published monthly (https://lufop.net/en/asc-and-csv-speed-camera-files/). Lufop licenses the data under ODbL 1.0, while API plans govern access; its free API plan currently focuses on France, Belgium and Switzerland, rather than UK daily synchronization (https://lufop.net/en/lufop-evolves-new-odbl-license-continent-based-files-and-expanded-international-coverage/). There is no verified unattended UK download entitlement. A background worker must not repeatedly request a sign-in page or imply that a stale file was refreshed. A successful manual import can replace only the source layer in one transaction; malformed or empty input must retain the previous layer. Source provenance and archive date stay visible.
+
+## Layer contract
+
+The effective repository merges source cameras, owner cameras, source-record corrections and source-record suppressions before both Map and Drive consume them. Owner records and corrections persist independently of source replacement. Corrections retain original source coordinates and current effective coordinates, the source ID, change time, type, direction and speed when specified. Suppression hides an imported camera from both views without deleting source data. Imported records cannot be directly deleted.
+
+The owner backup is JSON format `speed-buddy-owner-backup`, version 4. It exports owner cameras, source-camera corrections, suppressed IDs, road corrections and settings; it excludes the third-party source database, map tiles and location history. Restore accepts earlier versions. If a Lufop coordinate-derived ID moves during refresh, an unambiguous same-type camera within 35 m can inherit the local choice; ambiguous matches remain unresolved rather than assigning a correction to another camera.
+
+Road corrections bind to a specific OSM way or finer segment identity in the same road extract used by Drive. The map highlights that geometry before save and refuses ambiguous selections. Persist source tag, override value and time. The UI distinguishes explicit numeric limits, UK national speed limit and unknown; an unknown or variable limit never becomes a guessed number. A correction is immediately visible to Drive's current and upcoming computations.
+
+The v6 SQLite migration adds camera suppression, corrected mph and source coordinates, typed road-limit choices, and import attempt diagnostics without destructive migration. The source camera table alone is replaceable. A failed parse or replacement retains the prior camera layer. There is no unattended UK update worker because the verified free source is monthly and requires a browser download; `Update from ZIP` records successful and failed attempts.
+
+Direction is the **vehicle travel bearing that the camera enforces**, clockwise from true north. Unknown means no direction filter. A single direction accepts a heading within 50°; a camera must still be ahead and on a credible road approach. A bearing alone cannot reliably distinguish opposite carriageways. The current data model does not represent an explicit bidirectional camera; keep such a source record unknown rather than inventing one direction. The user can choose a compass direction while parked, with a degree field for finer correction.
+
+## Physical acceptance, parked setup and passenger observation
+
+1. Import the supplied archive while parked. Confirm 5,233 UK records, the source/date in Settings and no invented bearings or mph.
+2. Add a pin at a known missing camera, move it before save, choose type and direction. Restart, refresh the source, and confirm it remains. Approach later with the phone mounted; observe as a passenger.
+3. Correct an imported camera's position, type and direction. Check original and effective coordinates in details. Verify Drive alert behaviour, then hide it and confirm both Map and Drive omit it. Refresh the source and confirm corrections survive.
+4. Observe a fixed camera in its enforcement direction, the reverse approach, a parallel carriageway, a red-light camera and a user-created camera. Note GPS accuracy, travel heading, road match and rejection reason.
+5. Highlight one unambiguous road way and set a 20 mph correction. Compare the map and Drive after a 30→20 transition, then 20→30, same-limit continuation and known↔unknown. Current limit remains active until the matched segment changes; a same-limit continuation has no upcoming sign.
+6. Repeat with mobile data disabled. Camera alerts and owner corrections continue; cached road intelligence works within its coverage. Blank/missing base tiles communicate a map availability issue without disabling Drive.
+7. Simulate a failed camera import/update and verify the previous source count remains. Background and resume the app during an active drive and confirm one location subscription, live speed, camera alert and map follow/recenter behaviour.
+
+Do not edit the map while driving. Camera and limit data are advisory; compare against posted signs.

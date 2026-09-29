@@ -45,6 +45,8 @@ class DrivingService : Service(), LocationListener {
     private var fetching = false; private var lastAttempt = 0L
     private var mapStatus = "Cached map data"
     private var lastAlertId: String? = null
+    private var roadRevision = -1L
+    private var roadOverrides: Map<String, RoadLimitCorrection> = emptyMap()
     private var tick: Job? = null
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
@@ -91,10 +93,15 @@ class DrivingService : Service(), LocationListener {
         val cached = listOfNotNull(snapshot, previousSnapshot)
             .filter { it.usable(fix.point, wallNow) }
             .minByOrNull { Geo.distance(it.center, fix.point) }
-        val road = if (cached != null && fix.accuracyM <= 35) matcher.match(fix, cached.roads) else null
+        if (roadRevision != OwnerDataRevision.roads) {
+            roadOverrides = db.roadCorrections().associateBy { it.id }
+            roadRevision = OwnerDataRevision.roads
+        }
+        val correctedRoads = cached?.roads?.map { road -> roadOverrides[road.id]?.apply(road) ?: road }
+        val road = if (correctedRoads != null && fix.accuracyM <= 35) matcher.match(fix, correctedRoads) else null
         val limit = if (cached != null) limitStabilizer.resolve(fix, road, limits.limit(road), now)
             else { limitStabilizer.reset(); null }
-        val upcoming = cached?.let { upcomingDetector.detect(fix, road, limit, it.roads) }
+        val upcoming = correctedRoads?.let { upcomingDetector.detect(fix, road, limit, it) }
         val settings = getSharedPreferences("settings", Context.MODE_PRIVATE)
         val publicCameras = listOfNotNull(snapshot, previousSnapshot).filter { it.usable(fix.point, wallNow) }
             .flatMap { it.cameras }.distinctBy { it.id }
@@ -102,9 +109,17 @@ class DrivingService : Service(), LocationListener {
         val imported = db.importedNearby(fix.point).filterNot { candidate ->
             publicCameras.any { it.type == candidate.type && Geo.distance(it.point, candidate.point) < 25 }
         }
-        val cameras = publicCameras + userCameras + imported
-        val enabled = cameras.filter { (it.type == CameraType.SPEED && settings.getBoolean("speedCamera", true)) ||
-            (it.type == CameraType.RED_LIGHT && settings.getBoolean("redCamera", true)) }
+        val sourceCameras = publicCameras + imported
+        val movedIntoArea = db.cameraCorrections().filter { correction ->
+            sourceCameras.none { it.id == correction.id } && Geo.distance(fix.point, correction.point) < 1200
+        }.map { correction -> Camera(correction.id, correction.point, correction.type, correction.source,
+            correction.direction, correction.enforcedMph, correction.note) }
+        val cameras = db.effectiveCameras(sourceCameras + movedIntoArea, userCameras)
+        val enabled = cameras.filter { when (it.type) {
+            CameraType.SPEED, CameraType.AVERAGE -> settings.getBoolean("speedCamera", true)
+            CameraType.RED_LIGHT -> settings.getBoolean("redCamera", true)
+            CameraType.COMBINED -> settings.getBoolean("speedCamera", true) || settings.getBoolean("redCamera", true)
+        } }
         val (alert, decision) = detector.evaluate(fix, road, enabled, speed)
         if (alert != null && alert.camera.id != lastAlertId) {
             lastAlertId = alert.camera.id; signal(settings.getBoolean("cameraSound", true), settings.getBoolean("vibrate", true))

@@ -10,7 +10,7 @@ data class Fix(
     val speedAccuracyMps: Double?, val bearing: Double?, val elapsedMs: Long,
 )
 data class Road(val id: String, val name: String?, val points: List<GeoPoint>, val tags: Map<String, String>)
-enum class CameraType { SPEED, RED_LIGHT }
+enum class CameraType { SPEED, RED_LIGHT, COMBINED, AVERAGE }
 enum class CameraSource { OSM, USER, LUFOP }
 data class Camera(
     val id: String, val point: GeoPoint, val type: CameraType, val source: CameraSource,
@@ -195,7 +195,7 @@ class CameraApproachDetector {
             val reason = when {
                 camera.id in passed -> "Already passed"
                 bearingDiff > 65 -> "Camera behind or off heading"
-                camera.direction != null && Geo.difference(fix.bearing, camera.direction) > 50 -> "Opposite enforced direction"
+                !CameraDirections.applies(camera.direction, fix.bearing) -> "Opposite enforced direction"
                 // A camera beyond the mapped way's endpoint can be on the next segment of this road.
                 road != null && roadDistance > 30 && roadFraction in 0.02..0.98 -> "Different road"
                 previousDistance[camera.id]?.let { distance > it + 25 } == true -> "Travelling away"
