@@ -63,6 +63,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
     var mapAvailable by remember { mutableStateOf(true) }
     var status by remember { mutableStateOf("Tap Load road limits to inspect this area") }
     var camera by remember { mutableStateOf<Camera?>(null) }
+    var editingPosition by remember { mutableStateOf<GeoPoint?>(null) }
     var pendingRemoval by remember { mutableStateOf<Camera?>(null) }
     var road by remember { mutableStateOf<Road?>(null) }
     var pin by remember { mutableStateOf<GeoPoint?>(null) }
@@ -72,7 +73,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
     val markers = remember { mutableMapOf<Long, Camera>() }
     var locationMarker by remember { mutableStateOf<org.maplibre.android.annotations.Marker?>(null) }
     BackHandler(enabled = pendingRemoval != null || pin != null || camera != null || road != null) {
-        pendingRemoval = null; pin = null; camera = null; road = null
+        pendingRemoval = null; pin = null; camera = null; editingPosition = null; road = null
     }
     val mapView = remember(context) {
         MapLibre.getInstance(context)
@@ -82,7 +83,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
             addOnDidFinishLoadingMapListener { mapAvailable = true }
         }
     }
-    LaunchedEffect(moving) { if (moving) { pin = null; camera = null; road = null } }
+    LaunchedEffect(moving) { if (moving) { pin = null; camera = null; editingPosition = null; road = null } }
     DisposableEffect(mapView, lifecycle) {
         val observer = LifecycleEventObserver { _, event -> when (event) {
             Lifecycle.Event.ON_START -> mapView.onStart()
@@ -114,13 +115,16 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
                     if (pin != null) ready.cameraPosition.target?.let { pin = GeoPoint(it.latitude, it.longitude) }
                 }
                 ready.setOnMarkerClickListener { selected ->
-                    if (!moving) { camera = markers[selected.id]; road = null; pin = null }
+                    if (!moving && markers[selected.id] != null) {
+                        camera = markers[selected.id]; editingPosition = null; road = null; pin = null
+                    }
                     true
                 }
                 ready.addOnMapClickListener { clicked ->
                     if (moving) return@addOnMapClickListener false
                     val point = GeoPoint(clicked.latitude, clicked.longitude)
                     if (pin != null) { pin = point; return@addOnMapClickListener true }
+                    if (camera != null) { editingPosition = point; following = false; return@addOnMapClickListener true }
                     road = snapshot?.roads?.let { RoadSelection.select(point, it) }
                     camera = null; pin = null
                     road != null
@@ -173,7 +177,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
         ready.cameraPosition = CameraPosition.Builder().target(LatLng(target.lat, target.lon))
             .zoom(ready.cameraPosition.zoom).bearing(ready.cameraPosition.bearing).build()
     }
-    LaunchedEffect(map, snapshot, viewport, revision, road?.id) {
+    LaunchedEffect(map, snapshot, viewport, revision, road?.id, editingPosition) {
         val ready = map ?: return@LaunchedEffect
         val center = ready.cameraPosition.target ?: return@LaunchedEffect
         val point = GeoPoint(center.latitude, center.longitude)
@@ -247,6 +251,9 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
                     mph <= 30 -> android.graphics.Color.YELLOW
                     else -> android.graphics.Color.GREEN }).width(if (item.id == road?.id) 9f else 4f))
         }
+        editingPosition?.let { selected -> ready.addMarker(MarkerOptions()
+            .position(LatLng(selected.lat, selected.lon)).title("Proposed camera position")
+            .icon(icons.fromBitmap(mapPin(android.graphics.Color.rgb(50, 168, 215), "+")))) }
         if (draw.groups.size > 600) status = "Zoom in for more cameras · ${draw.cameraCount} nearby"
     }
     Box(Modifier.fillMaxSize().background(Color(0xFF071019))) {
@@ -299,7 +306,9 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
             pin != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(null, pin!!, { pin = null }, { point, type, direction, mph, note, both ->
                 db.create(point, type, direction, mph, note, both); revision++; pin = null
             }) }
-            camera != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(camera, camera!!.point, { camera = null }, { point, type, direction, mph, note, both ->
+            camera != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(camera, editingPosition ?: camera!!.point, {
+                camera = null; editingPosition = null
+            }, { point, type, direction, mph, note, both ->
                 val item = camera!!
                 if (item.source == CameraSource.USER) db.upsert(item.copy(point = point, type = type,
                     direction = direction, enforcedMph = mph, note = note, bidirectional = both))
@@ -313,7 +322,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
                     db.saveCameraCorrection(CameraCorrection(item.id, item.source, point, type,
                         direction, note, mph, sourcePoint, bidirectional = both))
                 }
-                revision++; camera = null
+                revision++; camera = null; editingPosition = null
             }, onDelete = { item ->
                 pendingRemoval = item
             }, sourcePoint = camera?.let { item -> when (item.source) {
@@ -345,7 +354,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
                 else "The imported record remains available; Speed Buddy will hide it from the map and alerts.") },
             confirmButton = { TextButton(onClick = {
                 if (item.source == CameraSource.USER) db.delete(item.id) else db.suppressCamera(item.id, item.source)
-                revision++; camera = null; pendingRemoval = null
+                revision++; camera = null; editingPosition = null; pendingRemoval = null
             }) { Text(if (item.source == CameraSource.USER) "Delete" else "Hide") } },
             dismissButton = { TextButton(onClick = { pendingRemoval = null }) { Text("Cancel") } }) }
     }
@@ -397,7 +406,7 @@ private fun mapPin(color: Int, letter: String, direction: Double? = null, both: 
                 CameraSource.LUFOP -> "LUFOP · imported · unverified direction"
                 CameraSource.OSM -> "OPENSTREETMAP · community data"
             }, color = MapMuted, style = MaterialTheme.typography.labelSmall)
-            Text("${if (existing == null) "Drag the map or tap to move the pin · " else ""}Direction is enforced travel bearing",
+            Text("${if (existing == null) "Drag the map or tap to move the pin · " else "Tap the map to move this camera · "}Direction is enforced travel bearing",
                 color = MapMuted, style = MaterialTheme.typography.labelSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(type == CameraType.SPEED, { type = CameraType.SPEED }, label = { Text("Speed") })
