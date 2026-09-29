@@ -271,10 +271,11 @@ class MainActivity : ComponentActivity() {
         Spacer(Modifier.height(28.dp))
         Text("CURRENT ROAD LIMIT", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)
         Spacer(Modifier.height(12.dp))
+        val hasPreview = state.upcoming != null || state.turns.isNotEmpty()
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            LimitSign(state.limitMph, national, Modifier.size(if (state.turns.isEmpty()) 158.dp else 142.dp))
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = if (hasPreview) Arrangement.spacedBy(10.dp) else Arrangement.Center) {
+            LimitSign(state.limitMph, national, Modifier.size(if (hasPreview) 142.dp else 158.dp))
+            if (hasPreview) Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 state.upcoming?.let { next ->
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {

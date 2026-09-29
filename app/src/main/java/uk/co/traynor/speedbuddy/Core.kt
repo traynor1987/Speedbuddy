@@ -129,7 +129,7 @@ class TurnLimitDetector {
         if (currentMph == null || fix.accuracyM > 25 || current.confidence < .35) return emptyList()
         val junctions = road.points.filter { point ->
             val distance = Geo.distance(fix.point, point)
-            distance in 25.0..CAMERA_ALERT_METERS &&
+            distance in 25.0..LIMIT_PREVIEW_METERS &&
                 Geo.difference(heading, Geo.bearing(fix.point, point)) <= 35.0
         }
         val candidates = junctions.flatMap { junction ->
@@ -162,8 +162,10 @@ class TurnLimitDetector {
     }
 }
 
-/** 300 imperial yards, shared by alert onset and the junction preview window. */
+/** 300 imperial yards for camera alert onset. */
 const val CAMERA_ALERT_METERS = 274.32
+/** 200 imperial yards for conditional and straight-ahead speed-limit previews. */
+const val LIMIT_PREVIEW_METERS = 182.88
 
 /** Preview only a connected continuation of the current named road, never a nearby side road. */
 class UpcomingLimitDetector {
@@ -181,7 +183,7 @@ class UpcomingLimitDetector {
             else -> return null
         }
         val distance = Geo.distance(fix.point, junction)
-        if (distance !in 25.0..450.0 || Geo.difference(heading, Geo.bearing(fix.point, junction)) > 35) return null
+        if (distance !in 25.0..LIMIT_PREVIEW_METERS || Geo.difference(heading, Geo.bearing(fix.point, junction)) > 35) return null
         val identity = road.tags["ref"] ?: road.name ?: return null
         val candidates = roads.asSequence().filter { it.id != road.id && it.points.size > 1 &&
             (it.tags["ref"] ?: it.name) == identity }

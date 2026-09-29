@@ -80,9 +80,10 @@ class CoreTest {
         val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
         val next = road.copy(id = "way/2", points = listOf(GeoPoint(53.003, -2.0), GeoPoint(53.008, -2.0)), tags = mapOf("maxspeed" to "40 mph"))
         val match = RoadMatch(current, 0.0, 0.0, .9)
-        val result = UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next))
+        val result = UpcomingLimitDetector().detect(fix(53.0015), match, 30, listOf(current, next))
         assertEquals(40, result?.mph)
-        assertTrue(result!!.distanceM in 180.0..260.0)
+        assertTrue(result!!.distanceM in 150.0..180.0)
+        assertNull(UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next)))
         assertNull(UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next.copy(tags = emptyMap()))))
         assertNull(UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next.copy(name = "Side street"))))
     }
@@ -98,6 +99,8 @@ class CoreTest {
         assertEquals(listOf(TurnDirection.LEFT, TurnDirection.RIGHT), previews.map { it.direction })
         assertEquals(listOf(20, 40), previews.map { it.mph })
         assertTrue(previews.all { it.distanceM in 150.0..180.0 })
+        assertTrue(TurnLimitDetector().detect(fix(53.001), match, 30,
+            listOf(current, left, right)).isEmpty())
         assertEquals(30, SpeedLimits.mph(current.tags))
         assertTrue(TurnLimitDetector().detect(fix(53.0015).copy(accuracyM = 40.0), match, 30,
             listOf(current, left, right)).isEmpty())
