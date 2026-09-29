@@ -24,8 +24,7 @@ data class RoadLimitCorrection(val id: String, val kind: RoadLimitKind, val mph:
     fun apply(road: Road): Road {
         if (road.id != id) return road
         val tags = road.tags - setOf("maxspeed", "maxspeed:type", "source:maxspeed",
-            "maxspeed:conditional", "maxspeed:variable", "maxspeed:lanes",
-            "maxspeed:forward", "maxspeed:backward")
+            "source:maxspeed:local")
         val value = when (kind) {
             RoadLimitKind.NUMERIC -> "$mph mph"
             RoadLimitKind.NATIONAL_SINGLE -> "GB:nsl_single"

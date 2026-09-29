@@ -14,6 +14,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -39,9 +44,9 @@ import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import kotlin.math.abs
 
-private val MapInk = Color(0xFFF4F8FB)
-private val MapMuted = Color(0xFFB5C9D7)
-private val MapPanel = Color(0xFF142331)
+private val MapInk: Color @Composable get() = MaterialTheme.colorScheme.onSurface
+private val MapMuted: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+private val MapPanel: Color @Composable get() = MaterialTheme.colorScheme.surface
 private data class RoadMapData(val road: Road, val mph: Int?, val national: Boolean)
 private data class MapDrawData(val groups: List<CameraMapGroup>, val roads: List<RoadMapData>,
     val cameraCount: Int)
@@ -65,14 +70,20 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
     var mapAvailable by remember { mutableStateOf(true) }
     var status by remember { mutableStateOf("Loading nearby road limits…") }
     var lastRoadFetchMs by remember { mutableLongStateOf(0L) }
-    var camera by remember { mutableStateOf<Camera?>(null) }
-    var editingPosition by remember { mutableStateOf<GeoPoint?>(null) }
+    var camera by rememberSaveable { mutableStateOf<Camera?>(null) }
+    var editingPosition by rememberSaveable { mutableStateOf<GeoPoint?>(null) }
     var pendingRemoval by remember { mutableStateOf<Camera?>(null) }
-    var road by remember { mutableStateOf<Road?>(null) }
-    var pin by remember { mutableStateOf<GeoPoint?>(null) }
-    var following by remember { mutableStateOf(true) }
-    var headingUp by remember { mutableStateOf(false) }
+    var road by rememberSaveable { mutableStateOf<Road?>(null) }
+    var pin by rememberSaveable { mutableStateOf<GeoPoint?>(null) }
+    var following by rememberSaveable { mutableStateOf(true) }
+    var headingUp by rememberSaveable { mutableStateOf(false) }
     val drive by DriveBus.state.collectAsState()
+    val currentMoving by rememberUpdatedState(moving)
+    var mapLatitude by rememberSaveable { mutableStateOf<Double?>(null) }
+    var mapLongitude by rememberSaveable { mutableStateOf<Double?>(null) }
+    var mapZoom by rememberSaveable { mutableDoubleStateOf(14.0) }
+    var mapBearing by rememberSaveable { mutableDoubleStateOf(0.0) }
+    var drawnBearing by remember { mutableDoubleStateOf(-1.0) }
     val markers = remember { mutableMapOf<Long, Camera>() }
     val roadMarkers = remember { mutableMapOf<Long, Road>() }
     var locationMarker by remember { mutableStateOf<org.maplibre.android.annotations.Marker?>(null) }
@@ -99,12 +110,12 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
         lifecycle.addObserver(observer)
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) mapView.onStart()
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) mapView.onResume()
-        onDispose { lifecycle.removeObserver(observer); mapView.onDestroy() }
+        onDispose { lifecycle.removeObserver(observer); mapView.onPause();mapView.onStop();mapView.onDestroy() }
     }
     LaunchedEffect(mapView) {
         mapView.getMapAsync { ready ->
             ready.cameraPosition = CameraPosition.Builder()
-                .target(LatLng(current?.lat ?: 53.550, current?.lon ?: -2.777)).zoom(14.0).build()
+                .target(LatLng(mapLatitude ?: current?.lat ?: 53.550, mapLongitude ?: current?.lon ?: -2.777)).zoom(mapZoom).bearing(mapBearing).build()
             ready.setStyle("https://tiles.openfreemap.org/styles/liberty") {
                 ready.addOnCameraMoveStartedListener { reason ->
                     if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) following = false
@@ -112,22 +123,24 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                 ready.addOnCameraIdleListener {
                     val center = ready.cameraPosition.target
                     if (center != null) {
+                        mapLatitude=center.latitude;mapLongitude=center.longitude;mapZoom=ready.cameraPosition.zoom;mapBearing=ready.cameraPosition.bearing
                         val point = GeoPoint(center.latitude, center.longitude)
                         if (drawnCenter?.let { Geo.distance(it, point) > 300 } != false ||
-                            abs(drawnZoom - ready.cameraPosition.zoom) > .4) viewport++
+                            abs(drawnZoom - ready.cameraPosition.zoom) > .4 ||
+                            Geo.difference(drawnBearing,ready.cameraPosition.bearing)>10) viewport++
                     }
                     if (pin != null) ready.cameraPosition.target?.let { pin = GeoPoint(it.latitude, it.longitude) }
                 }
                 ready.setOnMarkerClickListener { selected ->
-                    if (!moving && markers[selected.id] != null) {
+                    if (!currentMoving && markers[selected.id] != null) {
                         camera = markers[selected.id]; editingPosition = null; road = null; pin = null
-                    } else if (!moving && roadMarkers[selected.id] != null) {
+                    } else if (!currentMoving && roadMarkers[selected.id] != null) {
                         road = roadMarkers[selected.id]; camera = null; editingPosition = null; pin = null
                     }
                     true
                 }
                 ready.addOnMapClickListener { clicked ->
-                    if (moving) return@addOnMapClickListener false
+                    if (currentMoving) return@addOnMapClickListener false
                     val point = GeoPoint(clicked.latitude, clicked.longitude)
                     if (pin != null) { pin = point; return@addOnMapClickListener true }
                     if (camera != null) { editingPosition = point; following = false; return@addOnMapClickListener true }
@@ -136,7 +149,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                     road != null
                 }
                 ready.addOnMapLongClickListener { selected ->
-                    if (moving) false else {
+                    if (currentMoving) false else {
                         pin = GeoPoint(selected.latitude, selected.longitude)
                         camera = null; road = null; following = false
                         true
@@ -194,27 +207,12 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
         val center = ready.cameraPosition.target ?: return@LaunchedEffect
         val point = GeoPoint(center.latitude, center.longitude)
         val zoom = ready.cameraPosition.zoom
-        if (zoom < 9) { ready.clear(); markers.clear(); roadMarkers.clear(); status = "Zoom in to see camera coverage"; return@LaunchedEffect }
+        if (zoom < 9) { ready.clear(); locationMarker=null;markers.clear(); roadMarkers.clear(); status = "Zoom in to see camera coverage"; return@LaunchedEffect }
         val span = (0.045 * Math.pow(2.0, 14.0 - zoom)).coerceIn(0.002, 1.0)
         val draw = withContext(Dispatchers.IO) {
-            val raw = db.importedInBounds(point.lat - span, point.lon - span * 1.7,
-                point.lat + span, point.lon + span * 1.7)
-            val personal = db.userCameras().filter { abs(it.point.lat - point.lat) <= span && abs(it.point.lon - point.lon) <= span * 1.7 }
-            val public = snapshot?.cameras.orEmpty().filter { abs(it.point.lat - point.lat) <= span && abs(it.point.lon - point.lon) <= span * 1.7 }
-            val overrides = db.cameraCorrections().filter { abs(it.point.lat - point.lat) <= span && abs(it.point.lon - point.lon) <= span * 1.7 }
-            val candidates = (raw + public).associateBy { it.id }.toMutableMap()
-            overrides.forEach { correction -> if (correction.id !in candidates) {
-                val sourcePoint = when (correction.source) {
-                    CameraSource.LUFOP -> db.importedPoint(correction.id)
-                    CameraSource.OSM -> snapshot?.cameras?.firstOrNull { it.id == correction.id }?.point
-                    CameraSource.USER -> null
-                }
-                if (sourcePoint != null) candidates[correction.id] = Camera(correction.id, sourcePoint,
-                    correction.type, correction.source)
-            } }
-            val effective = db.effectiveCameras(candidates.values.toList(), personal).filter {
-                abs(it.point.lat - point.lat) <= span && abs(it.point.lon - point.lon) <= span * 1.7
-            }
+            val public = snapshot?.cameras.orEmpty()
+            val effective = db.effectiveInBounds(point.lat-span,point.lon-span*1.7,
+                point.lat+span,point.lon+span*1.7,public)
             val limits = db.roadCorrections().associateBy { it.id }
             val nearbyRoads = snapshot?.roads.orEmpty().filter { item -> item.points.any {
                 abs(it.lat - point.lat) <= span && abs(it.lon - point.lon) <= span * 1.7
@@ -231,7 +229,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                 .title("Current location")
                 .icon(IconFactory.getInstance(context).fromBitmap(mapPin(android.graphics.Color.rgb(45, 157, 230), "•"))))
         }
-        drawnCenter = point; drawnZoom = zoom
+        drawnCenter = point; drawnZoom = zoom; drawnBearing=ready.cameraPosition.bearing
         val icons = IconFactory.getInstance(context)
         val iconCache = mutableMapOf<String, org.maplibre.android.annotations.Icon>()
         draw.groups.take(600).forEach { group ->
@@ -307,10 +305,10 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                         val fix = drive.fix
                         if (fix != null) map?.cameraPosition = CameraPosition.Builder()
                             .target(LatLng(fix.point.lat, fix.point.lon)).zoom(15.0).build()
-                    }, enabled = drive.fix != null) { Text("◎", modifier = Modifier.sizeIn(minWidth = 48.dp),
+                    }, enabled = drive.fix != null) { Text("◎", modifier = Modifier.sizeIn(minWidth = 48.dp).semantics { contentDescription="Recenter on current location" },
                         color = MapInk) }
                     TextButton(onClick = { headingUp = !headingUp }, enabled = drive.active) {
-                        Text(if (headingUp) "Heading" else "N ↑")
+                        Text(if (headingUp) "Heading" else "N ↑",Modifier.semantics { contentDescription=if(headingUp) "Switch to north-up map" else "Follow travel direction" })
                     }
                 }
             }
@@ -397,7 +395,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
             text = { Text(if (item.source == CameraSource.USER) "This pin will be removed from this phone."
                 else "The imported record remains available; Speed Buddy will hide it from the map and alerts.") },
             confirmButton = { TextButton(onClick = {
-                if (item.source == CameraSource.USER) db.delete(item.id) else db.suppressCamera(item.id, item.source)
+                if (item.source == CameraSource.USER) db.delete(item.id) else db.hideEffectiveCamera(item)
                 revision++; camera = null; editingPosition = null; pendingRemoval = null
             }) { Text(if (item.source == CameraSource.USER) "Delete" else "Hide") } },
             dismissButton = { TextButton(onClick = { pendingRemoval = null }) { Text("Cancel") } }) }
@@ -446,19 +444,24 @@ private fun mapSpeedSign(label: String): Bitmap {
 @Composable private fun CameraMapEditor(existing: Camera?, initial: GeoPoint, close: () -> Unit,
     save: (GeoPoint, CameraType, Double?, Int?, String?, Boolean) -> Unit,
     onDelete: ((Camera) -> Unit)? = null, sourcePoint: GeoPoint? = null) {
-    var advanced by remember(existing?.id) { mutableStateOf(false) }
-    var type by remember(existing?.id) { mutableStateOf(existing?.type ?: CameraType.SPEED) }
-    var direction by remember(existing?.id) { mutableStateOf(existing?.direction?.toInt()?.toString() ?: "") }
-    var both by remember(existing?.id) { mutableStateOf(existing?.bidirectional ?: false) }
-    var note by remember(existing?.id) { mutableStateOf(existing?.note ?: "") }
-    var mph by remember(existing?.id) { mutableStateOf(existing?.enforcedMph?.toString() ?: "") }
-    var lat by remember(existing?.id, initial) { mutableStateOf(initial.lat.toString()) }
-    var lon by remember(existing?.id, initial) { mutableStateOf(initial.lon.toString()) }
+    var editMode by rememberSaveable(existing?.id) { mutableStateOf(existing==null) }
+    if (!editMode && existing!=null) {
+        CameraDetailSheet(existing,sourcePoint,close,{ editMode=true },onDelete)
+        return
+    }
+    var advanced by rememberSaveable(existing?.id) { mutableStateOf(false) }
+    var type by rememberSaveable(existing?.id) { mutableStateOf(existing?.type ?: CameraType.SPEED) }
+    var direction by rememberSaveable(existing?.id) { mutableStateOf(existing?.direction?.toInt()?.toString() ?: "") }
+    var both by rememberSaveable(existing?.id) { mutableStateOf(existing?.bidirectional ?: false) }
+    var note by rememberSaveable(existing?.id) { mutableStateOf(existing?.note ?: "") }
+    var mph by rememberSaveable(existing?.id) { mutableStateOf(existing?.enforcedMph?.toString() ?: "") }
+    var lat by rememberSaveable(existing?.id, initial) { mutableStateOf(initial.lat.toString()) }
+    var lon by rememberSaveable(existing?.id, initial) { mutableStateOf(initial.lon.toString()) }
     val point = lat.toDoubleOrNull()?.let { y -> lon.toDoubleOrNull()?.let { x ->
         if (y in -90.0..90.0 && x in -180.0..180.0) GeoPoint(y, x) else null
     } }
     Surface(Modifier.fillMaxWidth().padding(12.dp), color = MapPanel, shape = RoundedCornerShape(18.dp)) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Column(Modifier.heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.72f).verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text(if (existing == null) "Drop camera pin" else "Edit ${existing.source.name.lowercase()} camera",
                 color = MapInk, fontWeight = FontWeight.Bold)
             if (existing != null) Text(when (existing.source) {
@@ -476,7 +479,7 @@ private fun mapSpeedSign(label: String): Bitmap {
                 FilterChip(type == CameraType.COMBINED, { type = CameraType.COMBINED }, label = { Text("Both") })
                 FilterChip(type == CameraType.AVERAGE, { type = CameraType.AVERAGE }, label = { Text("Average") })
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if(advanced) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(lat, { lat = it.take(14) }, Modifier.weight(1f), label = { Text("Latitude") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                 OutlinedTextField(lon, { lon = it.take(14) }, Modifier.weight(1f), label = { Text("Longitude") }, singleLine = true,
@@ -485,9 +488,10 @@ private fun mapSpeedSign(label: String): Bitmap {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(mph, { mph = it.filter(Char::isDigit).take(3) }, Modifier.weight(.38f),
                     label = { Text("Limit mph") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                OutlinedTextField(direction, { direction = it.filter(Char::isDigit).take(3) }, Modifier.weight(.38f),
+                if(advanced) OutlinedTextField(direction, { direction = it.filter(Char::isDigit).take(3) }, Modifier.weight(.38f),
                     label = { Text("Direction °") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             }
+            DirectionDial(direction.toDoubleOrNull()) { direction=it.toInt().toString() }
             OutlinedTextField(note, { note = it.take(100) }, Modifier.fillMaxWidth(), label = { Text("Note") }, singleLine = true)
             TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "Hide coordinates" else "More details") }
             if (advanced) Text("Effective: ${initial.lat}, ${initial.lon}" +
@@ -523,8 +527,9 @@ private fun mapSpeedSign(label: String): Bitmap {
     var kind by remember(road.id) { mutableStateOf(correction?.kind ?: RoadLimitKind.NUMERIC) }
     var mph by remember(road.id) { mutableStateOf((correction?.mph ?: SpeedLimits.mph(road.tags))?.toString() ?: "") }
     Surface(Modifier.fillMaxWidth().padding(12.dp), color = MapPanel, shape = RoundedCornerShape(18.dp)) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.72f).verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(road.name ?: "Unnamed road", color = MapInk, fontWeight = FontWeight.Bold)
+            Text("Selected road section · ${road.points.size} mapped points",color=MapMuted)
             Text("Source: ${road.tags["maxspeed"] ?: road.tags["maxspeed:type"] ?: "unknown"} · ${road.id}", color = MapMuted)
             Text("Local correction affects Speed Buddy only. Check the posted sign first; variable limits stay unknown.",
                 color = MapMuted, style = MaterialTheme.typography.bodySmall)

@@ -4,19 +4,20 @@ import kotlin.math.*
 
 internal const val MPS_TO_MPH = 2.2369362921
 
-data class GeoPoint(val lat: Double, val lon: Double)
+data class GeoPoint(val lat: Double, val lon: Double) : java.io.Serializable
 data class Fix(
     val point: GeoPoint, val accuracyM: Double, val speedMps: Double?,
     val speedAccuracyMps: Double?, val bearing: Double?, val elapsedMs: Long,
 )
-data class Road(val id: String, val name: String?, val points: List<GeoPoint>, val tags: Map<String, String>)
+data class Road(val id: String, val name: String?, val points: List<GeoPoint>, val tags: Map<String, String>) : java.io.Serializable
 enum class CameraType { SPEED, RED_LIGHT, COMBINED, AVERAGE }
 enum class CameraSource { OSM, USER, LUFOP }
 data class Camera(
     val id: String, val point: GeoPoint, val type: CameraType, val source: CameraSource,
     val direction: Double? = null, val enforcedMph: Int? = null, val note: String? = null,
     val updatedAtMs: Long = 0L, val bidirectional: Boolean = false,
-)
+    val aliasIds: Set<String> = emptySet(),
+) : java.io.Serializable
 data class RoadMatch(val road: Road, val distanceM: Double, val headingDifference: Double?, val confidence: Double)
 data class CameraDecision(val camera: Camera?, val distanceM: Double?, val accepted: Boolean, val reason: String, val bearingDifference: Double? = null)
 data class Alert(val camera: Camera, val distanceM: Double)
@@ -266,9 +267,22 @@ class CameraApproachDetector {
     private val passed = mutableSetOf<String>()
     private val previousDistance = mutableMapOf<String, Double>()
     private var activeCameraId: String? = null
+    private val lastSeen = mutableMapOf<String, Long>()
+    private val encounterPoints = mutableMapOf<String, GeoPoint>()
     fun evaluate(fix: Fix, road: RoadMatch?, cameras: List<Camera>, speedMph: Double?): Pair<Alert?, CameraDecision> {
-        if (fix.accuracyM > 35)
-            return null to CameraDecision(null, null, false, "GPS, heading or movement insufficient")
+        // Leaving the encounter area rearms a camera. Merely stopping or GPS jitter cannot rearm it.
+        encounterPoints.filter { Geo.distance(fix.point,it.value)>850 && fix.accuracyM<=35 }.keys.toList().forEach {
+            notified.remove(it);passed.remove(it);previousDistance.remove(it);encounterPoints.remove(it)
+        }
+        cameras.forEach { camera -> lastSeen[camera.id] = fix.elapsedMs }
+        lastSeen.filterValues { fix.elapsedMs - it > 600_000 }.keys.toList().forEach {
+            lastSeen.remove(it); notified.remove(it); passed.remove(it); previousDistance.remove(it); encounterPoints.remove(it)
+        }
+        if (fix.accuracyM > 35) {
+            val active = cameras.firstOrNull { it.id == activeCameraId && it.id !in passed }
+            return active?.let { Alert(it, previousDistance[it.id] ?: Geo.distance(fix.point, it.point)) } to
+                CameraDecision(active, null, active != null, "Last known approach · GPS weak")
+        }
         if (speedMph == null || speedMph < 5 || fix.bearing == null) {
             val active = cameras.firstOrNull { it.id == activeCameraId && it.id !in passed }
             val distance = active?.let { Geo.distance(fix.point, it.point) }
@@ -300,7 +314,7 @@ class CameraApproachDetector {
                 return Alert(camera, distance) to CameraDecision(camera, distance, true, "Approach active", bearingDiff)
             }
             if (distance <= CAMERA_ALERT_METERS) {
-                notified += camera.id; activeCameraId = camera.id
+                notified += camera.id; activeCameraId = camera.id;encounterPoints[camera.id]=camera.point
                 return Alert(camera, distance) to CameraDecision(camera, distance, true, "New approach", bearingDiff)
             }
             diagnostic = CameraDecision(camera, distance, false, "Beyond alert range", bearingDiff)
@@ -308,7 +322,7 @@ class CameraApproachDetector {
         activeCameraId = null
         return null to diagnostic
     }
-    fun reset() { notified.clear(); passed.clear(); previousDistance.clear(); activeCameraId = null }
+    fun reset() { notified.clear(); passed.clear(); previousDistance.clear(); activeCameraId = null; lastSeen.clear();encounterPoints.clear() }
 }
 
 class OverspeedGate {

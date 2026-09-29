@@ -21,6 +21,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalConfiguration
+import android.os.Build
+import android.view.WindowManager
+import kotlinx.coroutines.Job
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,15 +48,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
-private val Ink = Color(0xFFF4F8FB)
-private val Muted = Color(0xFFAFC4D2)
-private val Background = Color(0xFF071019)
-private val Panel = Color(0xFF142331)
-private val Line = Color(0xFF304454)
-private val Accent = Color(0xFF77D5F0)
+private val Ink: Color @Composable get() = MaterialTheme.colorScheme.onSurface
+private val Muted: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+private val Background: Color @Composable get() = MaterialTheme.colorScheme.background
+private val Panel: Color @Composable get() = MaterialTheme.colorScheme.surface
+private val Line: Color @Composable get() = MaterialTheme.colorScheme.outline
+private val Accent: Color @Composable get() = MaterialTheme.colorScheme.primary
 private val Warning = Color(0xFFFFCA75)
 
 class MainActivity : ComponentActivity() {
+    private var activityDb: CameraDb? = null
+    private val notificationPermission=registerForActivityResult(ActivityResultContracts.RequestPermission()) { startDrivingService() }
+    override fun onDestroy() {
+        val database=activityDb
+        lifecycleScope.coroutineContext[Job]?.invokeOnCompletion { database?.close() }
+        super.onDestroy()
+    }
     private val permission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result[Manifest.permission.ACCESS_FINE_LOCATION] == true) startDriving()
     }
@@ -60,22 +72,41 @@ class MainActivity : ComponentActivity() {
             permission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
             return
         }
+        val settings=getSharedPreferences("settings",Context.MODE_PRIVATE)
+        if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED && !settings.getBoolean("notificationsAsked",false)) {
+            settings.edit().putBoolean("notificationsAsked",true).apply()
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);return
+        }
+        startDrivingService()
+    }
+    private fun startDrivingService() {
         try { startForegroundService(Intent(this, DrivingService::class.java)) }
         catch (_: Exception) { DriveBus.set(DriveState(status = "Could not start location service")) }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val db = CameraDb(this)
+        val db = CameraDb(this).also { activityDb=it }
         val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         setContent {
-            var page by remember { mutableStateOf("drive") }
+            var page by rememberSaveable { mutableStateOf("drive") }
             BackHandler(enabled = page != "drive") { page = when (page) {
                 "edit" -> "cameras"; "cameras", "mapData", "updates" -> "settings"; else -> "drive"
             } }
             val state by DriveBus.state.collectAsState()
+            var settingsRevision by remember { mutableIntStateOf(0) }
+            DisposableEffect(prefs) {
+                val listener=android.content.SharedPreferences.OnSharedPreferenceChangeListener { _,_->settingsRevision++ }
+                prefs.registerOnSharedPreferenceChangeListener(listener)
+                onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+            }
+            DisposableEffect(state.active,settingsRevision) {
+                if(state.active && prefs.getBoolean("keepAwake",true)) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                onDispose { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            }
             var records by remember { mutableStateOf(db.userCameras()) }
-            var editing by remember { mutableStateOf<Camera?>(null) }
-            var roadEdit by remember { mutableStateOf<Road?>(null) }
+            var editing by rememberSaveable { mutableStateOf<Camera?>(null) }
+            var roadEdit by rememberSaveable { mutableStateOf<Road?>(null) }
             var message by remember { mutableStateOf("") }
             var importedInfo by remember { mutableStateOf(db.importedInfo()) }
             LaunchedEffect(Unit) {
@@ -103,14 +134,10 @@ class MainActivity : ComponentActivity() {
             }
             val importBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 if (uri != null) runCatching {
-                    val content = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    val content = contentResolver.openInputStream(uri)?.use { BoundedIo.text(it,2_000_000) }
                         ?: error("Could not read backup file")
                     val backup = OwnerBackupCodec.parse(content)
-                    db.merge(backup.cameras)
-                    db.mergeCorrections(backup.corrections, backup.roadLimits)
-                    db.mergeSuppressed(backup.suppressedCameraIds)
-                    db.mergeRoadCorrections(backup.roadCorrections)
-                    OwnerBackupCodec.applySettings(backup.settings, prefs)
+                    db.restoreOwnerData(backup,prefs)
                     records = db.userCameras()
                     backup.cameras.size
                 }.onSuccess { message = "Restored $it cameras and settings. Existing cameras were kept." }
@@ -140,11 +167,7 @@ class MainActivity : ComponentActivity() {
             }
             val speed = state.speedMph
             val moving = state.active && (speed == null || speed >= 5.0)
-            MaterialTheme(colorScheme = darkColorScheme(
-                background = Background, surface = Panel, primary = Accent,
-                onBackground = Ink, onSurface = Ink, onPrimary = Background,
-                surfaceVariant = Color(0xFF203443), onSurfaceVariant = Muted,
-                outline = Line)) {
+            SpeedBuddyTheme(prefs) {
                 Surface(Modifier.fillMaxSize(), color = Background, contentColor = Ink) {
                   Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                     when (page) {
@@ -330,7 +353,9 @@ class MainActivity : ComponentActivity() {
     val national = state.limitMph != null && (
         tags?.get("maxspeed:type")?.startsWith("GB:nsl") == true ||
         tags?.get("maxspeed")?.startsWith("GB:nsl") == true || tags?.get("maxspeed") == "GB:motorway")
-    Column(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    val compact=LocalConfiguration.current.screenHeightDp<650
+    Column(Modifier.fillMaxSize().then(if(compact) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+        .padding(horizontal = 22.dp, vertical = if(compact) 6.dp else 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text("SPEED BUDDY", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
@@ -344,14 +369,13 @@ class MainActivity : ComponentActivity() {
         Spacer(Modifier.height(24.dp))
         Text("CURRENT SPEED", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)
         Text(speed?.roundToInt()?.toString() ?: "--", color = if (state.overspeed) Warning else Ink,
-            fontSize = 124.sp, lineHeight = 132.sp, fontWeight = FontWeight.Black, maxLines = 1)
+            fontSize = if(compact) 80.sp else 124.sp, lineHeight = if(compact) 88.sp else 132.sp, fontWeight = FontWeight.Black, maxLines = 1)
         Text("MPH", color = Muted, fontSize = 19.sp, fontWeight = FontWeight.Bold, letterSpacing = 5.sp)
         Spacer(Modifier.height(28.dp))
         Text("CURRENT ROAD LIMIT", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)
         Spacer(Modifier.height(12.dp))
         BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-            val mainSize = if (state.turns.isEmpty()) 158.dp else
-                minOf(158.dp, (maxWidth - 152.dp).coerceAtLeast(96.dp))
+            val mainSize = minOf(if(compact) 110.dp else 158.dp,(maxWidth-152.dp).coerceAtLeast(96.dp))
             Box(Modifier.fillMaxWidth().height(mainSize + if (state.limitMph == null) 32.dp else 0.dp),
                 contentAlignment = Alignment.TopCenter) {
                 Box(Modifier.fillMaxWidth().height(mainSize), contentAlignment = Alignment.Center) {
@@ -389,10 +413,10 @@ class MainActivity : ComponentActivity() {
             national -> "National speed limit · ${state.limitMph} mph"
             else -> "${state.limitMph} mph"
         }, color = Muted, fontSize = 15.sp)
-        Spacer(Modifier.weight(1f))
+        if(compact) Spacer(Modifier.height(12.dp)) else Spacer(Modifier.weight(1f))
         val alert = state.alert
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp),
-            color = if (alert != null) Color(0xFF3B2B1A) else Panel, contentColor = Ink) {
+            color = if (alert != null) MaterialTheme.colorScheme.secondaryContainer else Panel, contentColor = Ink) {
             Row(Modifier.fillMaxWidth().heightIn(min = 82.dp).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (alert != null) {
                     val symbol = when (alert.camera.type) {
@@ -415,7 +439,7 @@ class MainActivity : ComponentActivity() {
                     },
                         color = if (alert == null) Muted else Warning, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     Spacer(Modifier.height(4.dp))
-                    Text(if (alert == null) state.status.ifBlank { "No active camera alert" } else "Approaching",
+                    Text(if (alert == null) state.status.ifBlank { "No active camera alert" } else if(state.alertPositionFresh) "Approaching" else "Last known approach · GPS unavailable",
                         color = Ink, fontSize = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 if (alert != null) Text("${(alert.distanceM * 1.093613).roundToInt()} yd", color = Ink,
@@ -458,6 +482,8 @@ class MainActivity : ComponentActivity() {
             Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
                 Column {
                     val enabled = prefs.getBoolean("overspeed", false).also { version }
+                    SettingsToggle("Keep screen awake while driving",prefs.getBoolean("keepAwake",true).also { version }) { prefs.edit().putBoolean("keepAwake",it).apply();version++ }
+                    SettingsToggle("Speak speed-limit changes",prefs.getBoolean("limitVoice",true).also { version }) { prefs.edit().putBoolean("limitVoice",it).apply();version++ }
                     SettingsToggle("Overspeed warning", enabled) { prefs.edit().putBoolean("overspeed", it).apply(); version++ }
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     Column(Modifier.padding(16.dp)) {
@@ -500,6 +526,12 @@ class MainActivity : ComponentActivity() {
                     MenuRow("Restore backup", "Merge saved cameras and restore settings", importBackup)
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     MenuRow("Diagnostics", "GPS, road match and camera decisions", diagnostics)
+                }
+            }
+            Spacer(Modifier.height(22.dp)); SectionLabel("APPEARANCE")
+            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                listOf("system" to "System","light" to "Day","dark" to "Night").forEach { (value,label)->
+                    FilterChip(prefs.getString("theme","system")==value,{prefs.edit().putString("theme",value).apply();version++},label={Text(label)})
                 }
             }
             Spacer(Modifier.height(22.dp)); SectionLabel("APP")

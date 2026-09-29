@@ -5,10 +5,14 @@ import androidx.test.platform.app.InstrumentationRegistry
 import android.database.sqlite.SQLiteDatabase
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CameraDbTest {
+    @Before fun createIsolatedTestDatabase() { InstrumentationRegistry.getInstrumentation().targetContext.deleteDatabase("speedbuddy-tests.db") }
+    @After fun removeIsolatedTestDatabase() { InstrumentationRegistry.getInstrumentation().targetContext.deleteDatabase("speedbuddy-tests.db") }
     @Test fun bundledUkCameraLayerIsCompleteAndDoesNotInventBearings() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val batch = context.assets.open("lufop-uk-2026-09.zip").use(LufopAscImporter::inspect)
@@ -22,7 +26,7 @@ class CameraDbTest {
         SQLiteDatabase.create(null).use { database ->
             database.execSQL("CREATE TABLE cameras(id TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, mph INTEGER, note TEXT, updated INTEGER NOT NULL)")
             database.execSQL("INSERT INTO cameras VALUES('owner-old',53.0,-2.0,'SPEED',NULL,30,'saved',123)")
-            CameraDb(context).use { helper -> helper.onUpgrade(database, 2, 7) }
+            CameraDb(context,"speedbuddy-tests.db").use { helper -> helper.onUpgrade(database, 2, 8) }
             database.rawQuery("SELECT note FROM cameras WHERE id='owner-old'", null).use { c ->
                 assertTrue(c.moveToFirst()); assertEquals("saved", c.getString(0))
             }
@@ -44,7 +48,7 @@ class CameraDbTest {
             database.execSQL("CREATE TABLE road_limits(id TEXT PRIMARY KEY, mph INTEGER NOT NULL)")
             database.execSQL("INSERT INTO camera_corrections VALUES('lufop:old','LUFOP',53.0,-2.0,'SPEED',90.0,'kept')")
             database.execSQL("INSERT INTO road_limits VALUES('way/old',20)")
-            CameraDb(context).use { helper -> helper.onUpgrade(database, 3, 7) }
+            CameraDb(context,"speedbuddy-tests.db").use { helper -> helper.onUpgrade(database, 3, 8) }
             database.rawQuery("SELECT note,mph FROM camera_corrections WHERE id='lufop:old'", null).use { c ->
                 assertTrue(c.moveToFirst()); assertEquals("kept", c.getString(0)); assertTrue(c.isNull(1))
             }
@@ -66,7 +70,7 @@ class CameraDbTest {
             database.execSQL("CREATE TABLE camera_corrections(id TEXT PRIMARY KEY, source TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, note TEXT, mph INTEGER, source_lat REAL, source_lon REAL, updated INTEGER NOT NULL DEFAULT 0)")
             database.execSQL("INSERT INTO cameras VALUES('owner',53,-2,'SPEED',90,30,NULL,123)")
             database.execSQL("INSERT INTO camera_corrections VALUES('lufop:old','LUFOP',53,-2,'SPEED',180,NULL,NULL,53,-2,124)")
-            CameraDb(context).use { it.onUpgrade(database, 6, 7) }
+            CameraDb(context,"speedbuddy-tests.db").use { it.onUpgrade(database, 6, 8) }
             database.rawQuery("SELECT direction,bidirectional FROM cameras WHERE id='owner'", null).use { c ->
                 assertTrue(c.moveToFirst()); assertEquals(90.0, c.getDouble(0), 0.0); assertEquals(0, c.getInt(1))
             }
@@ -79,14 +83,14 @@ class CameraDbTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val id = "lufop:persistence-test"
         val original = Camera(id, GeoPoint(53.0, -2.0), CameraType.SPEED, CameraSource.LUFOP)
-        CameraDb(context).use { db ->
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
             db.saveCameraCorrection(CameraCorrection(id, CameraSource.LUFOP, GeoPoint(53.001, -2.0),
                 CameraType.RED_LIGHT, 90.0, null, 20, original.point))
             assertEquals(20, db.effectiveCameras(listOf(original), emptyList()).single().enforcedMph)
             db.suppressCamera(id, CameraSource.LUFOP)
             assertTrue(db.effectiveCameras(listOf(original), emptyList()).isEmpty())
         }
-        CameraDb(context).use { db ->
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
             try {
                 assertTrue(db.effectiveCameras(listOf(original.copy(point = GeoPoint(53.0001, -2.0))), emptyList()).isEmpty())
                 assertEquals(original.point, db.cameraCorrections().first { it.id == id }.sourcePoint)
@@ -97,7 +101,7 @@ class CameraDbTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val original = Camera("lufop:move-old", GeoPoint(53.04, -2.0), CameraType.SPEED, CameraSource.LUFOP)
         val replacement = original.copy(id = "lufop:move-new", point = GeoPoint(53.04004, -2.0))
-        CameraDb(context).use { db ->
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
             try {
                 db.replaceImported(listOf(original), "first")
                 db.saveCameraCorrection(CameraCorrection(original.id, CameraSource.LUFOP,
@@ -116,7 +120,7 @@ class CameraDbTest {
     }
     @Test fun resettingOverridesKeepsOwnerCamerasAndImportedSource() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        CameraDb(context).use { db ->
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
             val owner = db.create(GeoPoint(53.02, -2.0), CameraType.SPEED)
             val source = Camera("lufop:reset-test", GeoPoint(53.02, -2.0), CameraType.SPEED, CameraSource.LUFOP)
             try {
@@ -138,7 +142,7 @@ class CameraDbTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val original = Camera("lufop:correction-test", GeoPoint(53.0, -2.0), CameraType.SPEED, CameraSource.LUFOP)
         val correction = CameraCorrection(original.id, CameraSource.LUFOP, GeoPoint(53.0001, -2.0), CameraType.RED_LIGHT, 90.0, "Eastbound")
-        CameraDb(context).use { db ->
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
             try {
                 db.saveCameraCorrection(correction)
                 db.saveRoadLimit("way/correction-test", 20)
@@ -152,14 +156,14 @@ class CameraDbTest {
                 db.deleteRoadLimit("way/correction-test")
             }
         }
-        CameraDb(context).use { db ->
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
             assertEquals(original, db.applyCameraCorrections(listOf(original)).single())
             assertNull(db.roadLimit("way/correction-test"))
         }
     }
     @Test fun importedLayerReplacesAtomicallyAndPreservesPersonalCameras() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        CameraDb(context).use { db ->
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
             val owner = db.create(GeoPoint(53.0, -2.0), CameraType.SPEED)
             try {
                 val first = Camera("lufop:one", GeoPoint(53.005, -2.0), CameraType.RED_LIGHT, CameraSource.LUFOP)
@@ -184,8 +188,8 @@ class CameraDbTest {
     }
     @Test fun userCameraPersistsAndIsDetectedAfterReopen() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val id = CameraDb(context).use { db -> db.create(GeoPoint(53.005, -2.0), CameraType.RED_LIGHT).id }
-        CameraDb(context).use { db ->
+        val id = CameraDb(context,"speedbuddy-tests.db").use { db -> db.create(GeoPoint(53.005, -2.0), CameraType.RED_LIGHT).id }
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
             val camera = db.userCameras().first { it.id == id }
             val fix = Fix(GeoPoint(53.003, -2.0), 5.0, 12.5, 1.0, 0.0, 1000)
             val (alert, _) = CameraApproachDetector().evaluate(fix, null, listOf(camera), 28.0)
@@ -202,7 +206,7 @@ class CameraDbTest {
         val json = OwnerBackupCodec.export(listOf(camera), prefs)
         val parsed = OwnerBackupCodec.parse(json)
         assertEquals(camera, parsed.cameras.single())
-        CameraDb(context).use { db ->
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
             try {
                 db.merge(parsed.cameras)
                 assertEquals(camera, db.userCameras().first { it.id == camera.id })
@@ -247,7 +251,7 @@ class CameraDbTest {
             CameraSource.USER, 90.0, bidirectional = true)
         val override = CameraCorrection("lufop:both-test", CameraSource.LUFOP,
             GeoPoint(53.01, -2.0), CameraType.SPEED, 0.0, null, bidirectional = true)
-        CameraDb(context).use { db ->
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
             try {
                 db.upsert(owner); db.saveCameraCorrection(override)
                 assertTrue(db.userCameras().single { it.id == owner.id }.bidirectional)

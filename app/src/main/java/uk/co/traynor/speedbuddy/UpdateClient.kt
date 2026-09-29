@@ -18,9 +18,7 @@ class UpdateClient(private val context: Context) {
         try {
             if (connection.responseCode == 404) throw IllegalStateException("No signed release has been published yet")
             require(connection.responseCode == 200) { "GitHub is unavailable (${connection.responseCode})" }
-            val json = connection.inputStream.bufferedReader().use { it.readText().take(512_001).also { text ->
-                require(text.length <= 512_000) { "Unexpected release response" }
-            } }
+            val json = connection.inputStream.use { BoundedIo.text(it,512_000) }
             val installed = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.0.0"
             ReleaseCatalog.parse(json, installed)
         } finally { connection.disconnect() }

@@ -21,8 +21,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.File
 
-private val updateAccent = Color(0xFF77D5F0)
-private val updateMuted = Color(0xFFAFC4D2)
+private val updateAccent: Color @Composable get() = MaterialTheme.colorScheme.primary
+private val updateMuted: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
 
 @Composable fun UpdateCenterScreen(context: Context, moving: Boolean, back: () -> Unit) {
     val client = remember(context) { UpdateClient(context) }

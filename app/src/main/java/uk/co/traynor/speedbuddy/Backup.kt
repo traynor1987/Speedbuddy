@@ -12,7 +12,7 @@ data class OwnerBackup(val cameras: List<Camera>, val settings: Map<String, Any>
 /** A portable, versioned owner export. No route history or public OSM database is included. */
 object OwnerBackupCodec {
     private val booleans = mapOf("overspeed" to false, "speedCamera" to true, "redCamera" to true,
-        "cameraSound" to true, "vibrate" to true)
+        "cameraSound" to true, "vibrate" to true, "limitVoice" to true, "keepAwake" to true)
     fun export(cameras: List<Camera>, prefs: SharedPreferences,
         corrections: List<CameraCorrection> = emptyList(), roadLimits: Map<String, Int> = emptyMap(),
         suppressedCameraIds: Set<String> = emptySet(),
