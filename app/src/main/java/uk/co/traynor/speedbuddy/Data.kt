@@ -45,6 +45,23 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
         writableDatabase.insertWithOnConflict("cameras", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
     override fun delete(id: String) { writableDatabase.delete("cameras", "id=?", arrayOf(id)) }
+    fun merge(cameras: List<Camera>) {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            cameras.forEach { camera ->
+                require(camera.source == CameraSource.USER)
+                val values = ContentValues().apply {
+                    put("id", camera.id); put("lat", camera.point.lat); put("lon", camera.point.lon)
+                    put("type", camera.type.name); put("direction", camera.direction)
+                    put("mph", camera.enforcedMph); put("note", camera.note); put("updated", camera.updatedAtMs)
+                }
+                if (database.insertWithOnConflict("cameras", null, values, SQLiteDatabase.CONFLICT_REPLACE) < 0)
+                    error("Could not restore camera")
+            }
+            database.setTransactionSuccessful()
+        } finally { database.endTransaction() }
+    }
     fun create(point: GeoPoint, type: CameraType, direction: Double? = null, mph: Int? = null, note: String? = null): Camera {
         val camera = Camera(UUID.randomUUID().toString(), point, type, CameraSource.USER, direction, mph, note)
         upsert(camera); return camera

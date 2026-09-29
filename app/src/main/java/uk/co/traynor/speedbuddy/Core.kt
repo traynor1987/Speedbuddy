@@ -103,7 +103,7 @@ class RoadLimitStabilizer {
             return limit
         }
         val previous = lastMatch ?: return null
-        if (nowMs - lastSeenMs !in 0..3000 || fix.accuracyM > 25) { reset(); return null }
+        if (nowMs - lastSeenMs !in 0..30_000 || fix.accuracyM > 25) { reset(); return null }
         val (distance, heading, _) = Geo.projection(fix.point, previous.road.points)
         val direction = fix.bearing?.let { b -> heading?.let { h ->
             min(Geo.difference(b, h), Geo.difference(b, (h + 180) % 360))
@@ -114,6 +114,43 @@ class RoadLimitStabilizer {
         return lastLimit
     }
     fun reset() { lastMatch = null; lastLimit = null; lastSeenMs = 0 }
+}
+
+data class UpcomingLimit(val mph: Int, val distanceM: Double, val national: Boolean)
+
+/** Preview only a connected continuation of the current named road, never a nearby side road. */
+class UpcomingLimitDetector {
+    fun detect(fix: Fix, current: RoadMatch?, currentMph: Int?, roads: List<Road>): UpcomingLimit? {
+        val road = current?.road ?: return null
+        val heading = fix.bearing ?: return null
+        if (currentMph == null || fix.accuracyM > 25 || road.points.size < 2) return null
+        val end = road.points.last()
+        val start = road.points.first()
+        val forward = Geo.difference(heading, Geo.bearing(road.points[road.points.lastIndex - 1], end)) < 40
+        val backward = Geo.difference(heading, Geo.bearing(road.points[1], start)) < 40
+        val junction = when {
+            forward -> end
+            backward && road.tags["oneway"] != "yes" -> start
+            else -> return null
+        }
+        val distance = Geo.distance(fix.point, junction)
+        if (distance !in 25.0..450.0 || Geo.difference(heading, Geo.bearing(fix.point, junction)) > 35) return null
+        val identity = road.tags["ref"] ?: road.name ?: return null
+        val candidates = roads.asSequence().filter { it.id != road.id && it.points.size > 1 &&
+            (it.tags["ref"] ?: it.name) == identity }
+            .mapNotNull { next ->
+                val nextHeading = when {
+                    Geo.distance(next.points.first(), junction) < 12.0 -> Geo.bearing(next.points[0], next.points[1])
+                    next.tags["oneway"] != "yes" && Geo.distance(next.points.last(), junction) < 12.0 ->
+                        Geo.bearing(next.points.last(), next.points[next.points.lastIndex - 1])
+                    else -> return@mapNotNull null
+                }
+                val mph = SpeedLimits.mph(next.tags)
+                if (mph == null || mph == currentMph || Geo.difference(heading, nextHeading) > 35) null
+                else UpcomingLimit(mph, distance, next.tags["maxspeed:type"]?.startsWith("GB:nsl") == true)
+            }.toList()
+        return candidates.singleOrNull()
+    }
 }
 
 class RoadMatcher {
@@ -154,12 +191,13 @@ class CameraApproachDetector {
         var diagnostic = CameraDecision(null, null, false, "No nearby camera")
         for ((camera, distance) in candidates) {
             val bearingDiff = Geo.difference(fix.bearing, Geo.bearing(fix.point, camera.point))
-            val (roadDistance, _, _) = road?.let { Geo.projection(camera.point, it.road.points) } ?: Triple(0.0, null, 0.0)
+            val (roadDistance, _, roadFraction) = road?.let { Geo.projection(camera.point, it.road.points) } ?: Triple(0.0, null, 0.0)
             val reason = when {
                 camera.id in passed -> "Already passed"
                 bearingDiff > 65 -> "Camera behind or off heading"
                 camera.direction != null && Geo.difference(fix.bearing, camera.direction) > 50 -> "Opposite enforced direction"
-                road != null && roadDistance > 30 -> "Different road"
+                // A camera beyond the mapped way's endpoint can be on the next segment of this road.
+                road != null && roadDistance > 30 && roadFraction in 0.02..0.98 -> "Different road"
                 previousDistance[camera.id]?.let { distance > it + 25 } == true -> "Travelling away"
                 else -> "Approaching"
             }

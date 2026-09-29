@@ -19,4 +19,26 @@ class CameraDbTest {
             db.delete(id)
         }
     }
+    @Test fun backupRoundTripMergesUserCamerasAndSettings() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val prefs = context.getSharedPreferences("backup-test", 0)
+        prefs.edit().putBoolean("cameraSound", false).putInt("tolerance", 5).commit()
+        val camera = Camera("backup-fixture", GeoPoint(53.005, -2.0), CameraType.SPEED, CameraSource.USER,
+            0.0, 30, "Test camera", 1234L)
+        val json = OwnerBackupCodec.export(listOf(camera), prefs)
+        val parsed = OwnerBackupCodec.parse(json)
+        assertEquals(camera, parsed.cameras.single())
+        CameraDb(context).use { db ->
+            try {
+                db.merge(parsed.cameras)
+                assertEquals(camera, db.userCameras().first { it.id == camera.id })
+                OwnerBackupCodec.applySettings(parsed.settings, prefs)
+                assertFalse(prefs.getBoolean("cameraSound", true))
+                assertEquals(5, prefs.getInt("tolerance", 2))
+            } finally { db.delete(camera.id); prefs.edit().clear().commit() }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            OwnerBackupCodec.parse(json.replace("\"lat\": 53.005", "\"lat\": 999"))
+        }
+    }
 }

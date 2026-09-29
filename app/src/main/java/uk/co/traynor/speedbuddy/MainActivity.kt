@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -62,6 +63,26 @@ class MainActivity : ComponentActivity() {
             var records by remember { mutableStateOf(db.userCameras()) }
             var editing by remember { mutableStateOf<Camera?>(null) }
             var message by remember { mutableStateOf("") }
+            val exportBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+                if (uri != null) runCatching {
+                    val content = OwnerBackupCodec.export(db.userCameras(), prefs)
+                    contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(content) }
+                        ?: error("Could not open backup file")
+                }.onSuccess { message = "Camera and settings backup saved." }
+                    .onFailure { message = "Backup failed: ${it.message ?: "Unknown error"}" }
+            }
+            val importBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) runCatching {
+                    val content = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                        ?: error("Could not read backup file")
+                    val backup = OwnerBackupCodec.parse(content)
+                    db.merge(backup.cameras)
+                    OwnerBackupCodec.applySettings(backup.settings, prefs)
+                    records = db.userCameras()
+                    backup.cameras.size
+                }.onSuccess { message = "Restored $it cameras and settings. Existing cameras were kept." }
+                    .onFailure { message = "Restore failed: ${it.message ?: "Invalid backup"}" }
+            }
             val speed = state.speedMph
             val moving = state.active && (speed == null || speed >= 5.0)
             MaterialTheme(colorScheme = darkColorScheme(
@@ -84,7 +105,9 @@ class MainActivity : ComponentActivity() {
                                 message = "Camera position saved. Edit the details while stopped."
                             } })
                         "settings" -> SettingsScreen(prefs, { page = "drive" },
-                            { records = db.userCameras(); page = "cameras" }, { page = "diagnostics" })
+                            { records = db.userCameras(); page = "cameras" }, { page = "diagnostics" },
+                            { exportBackup.launch("SpeedBuddy-backup.json") },
+                            { importBackup.launch(arrayOf("application/json", "text/plain")) })
                         "diagnostics" -> DiagnosticsScreen(state) { page = "drive" }
                         "cameras" -> CameraList(records, moving, { page = "settings" },
                             { editing = it; page = "edit" },
@@ -173,7 +196,17 @@ class MainActivity : ComponentActivity() {
         Spacer(Modifier.height(28.dp))
         Text("CURRENT ROAD LIMIT", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)
         Spacer(Modifier.height(12.dp))
-        LimitSign(state.limitMph, national, Modifier.size(158.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            LimitSign(state.limitMph, national, Modifier.size(158.dp))
+            state.upcoming?.let { next ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("UPCOMING", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(5.dp))
+                    LimitSign(next.mph, next.national, Modifier.size(64.dp))
+                    Text("${(next.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
+                }
+            }
+        }
         Spacer(Modifier.height(9.dp))
         Text(when {
             state.limitMph == null -> "Limit unknown"
@@ -222,7 +255,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 @Composable private fun SettingsScreen(prefs: android.content.SharedPreferences, back: () -> Unit,
-    cameras: () -> Unit, diagnostics: () -> Unit) {
+    cameras: () -> Unit, diagnostics: () -> Unit, exportBackup: () -> Unit, importBackup: () -> Unit) {
     var version by remember { mutableIntStateOf(0) }
     Page("Settings", back) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
@@ -262,6 +295,10 @@ class MainActivity : ComponentActivity() {
             Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
                 Column {
                     MenuRow("Manage my cameras", "View, edit or delete saved cameras", cameras)
+                    HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
+                    MenuRow("Back up cameras and settings", "Save a JSON file to your chosen location", exportBackup)
+                    HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
+                    MenuRow("Restore backup", "Merge saved cameras and restore settings", importBackup)
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     MenuRow("Diagnostics", "GPS, road match and camera decisions", diagnostics)
                 }
@@ -328,6 +365,8 @@ class MainActivity : ComponentActivity() {
             "Map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
             "Map request" to state.mapStatus))
         DiagnosticCard("CAMERA", listOf(
+            "Public records nearby" to state.publicCameraCount.toString(),
+            "My saved cameras" to state.userCameraCount.toString(),
             "Nearest candidate" to state.decision.camera?.id,
             "Distance" to state.decision.distanceM?.let { "${it.roundToInt()} m" },
             "Bearing difference" to state.decision.bearingDifference?.let { "${it.roundToInt()}°" },

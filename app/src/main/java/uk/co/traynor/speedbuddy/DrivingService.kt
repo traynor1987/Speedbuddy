@@ -24,6 +24,7 @@ data class DriveState(
     val decision: CameraDecision = CameraDecision(null, null, false, "Waiting for GPS"),
     val dataAgeMs: Long? = null, val status: String = "Start driving mode", val overspeed: Boolean = false,
     val mapStatus: String = "No map request yet",
+    val upcoming: UpcomingLimit? = null, val publicCameraCount: Int = 0, val userCameraCount: Int = 0,
 )
 object DriveBus { private val mutable = MutableStateFlow(DriveState()); val state = mutable.asStateFlow(); fun set(state: DriveState) { mutable.value = state } }
 
@@ -34,6 +35,7 @@ class DrivingService : Service(), LocationListener {
     private lateinit var osm: OsmDataSource
     private val speedFilter = SpeedFilter(); private val matcher = RoadMatcher()
     private val limitStabilizer = RoadLimitStabilizer()
+    private val upcomingDetector = UpcomingLimitDetector()
     private val detector = CameraApproachDetector(); private val overspeed = OverspeedGate()
     private val limits: SpeedLimitProvider = OsmSpeedLimitProvider()
     private var snapshot: OsmSnapshot? = null
@@ -90,8 +92,12 @@ class DrivingService : Service(), LocationListener {
         val road = if (cached != null && fix.accuracyM <= 35) matcher.match(fix, cached.roads) else null
         val limit = if (cached != null) limitStabilizer.resolve(fix, road, limits.limit(road), now)
             else { limitStabilizer.reset(); null }
+        val upcoming = cached?.let { upcomingDetector.detect(fix, road, limit, it.roads) }
         val settings = getSharedPreferences("settings", Context.MODE_PRIVATE)
-        val cameras = (cached?.cameras ?: emptyList()) + db.userCameras()
+        val publicCameras = listOfNotNull(snapshot, previousSnapshot).filter { it.usable(fix.point, wallNow) }
+            .flatMap { it.cameras }.distinctBy { it.id }
+        val userCameras = db.userCameras()
+        val cameras = publicCameras + userCameras
         val enabled = cameras.filter { (it.type == CameraType.SPEED && settings.getBoolean("speedCamera", true)) ||
             (it.type == CameraType.RED_LIGHT && settings.getBoolean("redCamera", true)) }
         val (alert, decision) = detector.evaluate(fix, road, enabled, speed)
@@ -103,7 +109,8 @@ class DrivingService : Service(), LocationListener {
         DriveBus.set(DriveState(true, speed, limit, fix, road, alert, decision,
             cached?.let { wallNow - it.fetchedAt },
             when { speed == null -> "GPS speed unavailable"; cached == null -> "Road and public camera data unavailable"; limit == null -> "Road limit unknown"; else -> "" },
-            settings.getBoolean("overspeed", false) && overspeed.isOver(speed, limit, tolerance), mapStatus))
+            settings.getBoolean("overspeed", false) && overspeed.isOver(speed, limit, tolerance), mapStatus,
+            upcoming, publicCameras.size, userCameras.size))
         val target = OsmCoverage.refreshTarget(snapshot, fix, wallNow, lastAttempt)
         if (target != null && !fetching) {
             fetching = true; lastAttempt = wallNow; mapStatus = "Fetching road data"

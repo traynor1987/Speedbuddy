@@ -66,6 +66,22 @@ class CoreTest {
         assertEquals("Different road", detector.evaluate(fix(53.002), match, listOf(parallel), 28.0).second.reason)
         assertEquals("Camera behind or off heading", detector.evaluate(fix(53.006), match, listOf(camera.copy(direction = null)), 28.0).second.reason)
     }
+    @Test fun cameraOnFollowingRoadSegmentIsNotDiscarded() {
+        val shortRoad = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.002, -2.0)))
+        val camera = Camera("next-segment", GeoPoint(53.005, -2.0), CameraType.SPEED, CameraSource.OSM)
+        val match = RoadMatch(shortRoad, 0.0, 0.0, .9)
+        assertEquals(camera.id, CameraApproachDetector().evaluate(fix(53.001), match, listOf(camera), 28.0).first?.camera?.id)
+    }
+    @Test fun upcomingLimitRequiresConnectedSameRoadAndKnownDifferentLimit() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val next = road.copy(id = "way/2", points = listOf(GeoPoint(53.003, -2.0), GeoPoint(53.008, -2.0)), tags = mapOf("maxspeed" to "40 mph"))
+        val match = RoadMatch(current, 0.0, 0.0, .9)
+        val result = UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next))
+        assertEquals(40, result?.mph)
+        assertTrue(result!!.distanceM in 180.0..260.0)
+        assertNull(UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next.copy(tags = emptyMap()))))
+        assertNull(UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next.copy(name = "Side street"))))
+    }
     @Test fun redLightAndDuplicateAlerts() {
         val camera = Camera("red", GeoPoint(53.005, -2.0), CameraType.RED_LIGHT, CameraSource.USER)
         val detector = CameraApproachDetector(); val match = RoadMatch(road, 0.0, 0.0, .9)
@@ -103,11 +119,12 @@ class CoreTest {
         val match = RoadMatch(road, 2.0, 0.0, .9)
         assertEquals(30, stable.resolve(start, match, 30, 1000))
         assertEquals(30, stable.resolve(start.copy(elapsedMs = 2000), null, null, 2000))
-        assertNull(stable.resolve(start.copy(point = GeoPoint(53.005, -1.999)), null, null, 3000))
-        assertEquals(30, stable.resolve(start, match, 30, 4000))
-        assertNull(stable.resolve(start.copy(elapsedMs = 8000), null, null, 8000))
-        assertEquals(30, stable.resolve(start, match, 30, 9000))
+        assertEquals(30, stable.resolve(start.copy(elapsedMs = 10_000), null, null, 10_000))
+        assertNull(stable.resolve(start.copy(point = GeoPoint(53.005, -1.999)), null, null, 11_000))
+        assertEquals(30, stable.resolve(start, match, 30, 12_000))
+        assertNull(stable.resolve(start.copy(elapsedMs = 45_000), null, null, 45_000))
+        assertEquals(30, stable.resolve(start, match, 30, 46_000))
         val sideRoad = road.copy(id = "way/2", tags = emptyMap())
-        assertNull(stable.resolve(start, RoadMatch(sideRoad, 2.0, 0.0, .9), null, 10000))
+        assertNull(stable.resolve(start, RoadMatch(sideRoad, 2.0, 0.0, .9), null, 47_000))
     }
 }
