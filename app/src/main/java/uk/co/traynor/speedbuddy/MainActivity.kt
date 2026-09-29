@@ -159,12 +159,13 @@ class MainActivity : ComponentActivity() {
                                 records = db.userCameras()
                                 message = "Camera position saved. Edit the details while stopped."
                             } }, onUnknownLimit = {
+                                val currentFix = state.fix
                                 when {
                                     moving -> message = "Stop before correcting a road limit."
-                                    state.fix == null || SystemClock.elapsedRealtime() - state.fix.elapsedMs > 5000 ->
+                                    currentFix == null || SystemClock.elapsedRealtime() - currentFix.elapsedMs > 5000 ->
                                         message = "Wait for a current GPS fix, then select the road on the map."
                                     else -> {
-                                        val target = DriveRoadEditTarget.select(state.fix, state.road)
+                                        val target = DriveRoadEditTarget.select(currentFix, state.road)
                                         if (target != null) roadEdit = target
                                         else { page = "map"; message = "Tap your road on the map to set its limit." }
                                     }
