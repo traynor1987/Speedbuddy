@@ -23,6 +23,7 @@ data class DriveState(
     val fix: Fix? = null, val road: RoadMatch? = null, val alert: Alert? = null,
     val decision: CameraDecision = CameraDecision(null, null, false, "Waiting for GPS"),
     val dataAgeMs: Long? = null, val status: String = "Start driving mode", val overspeed: Boolean = false,
+    val mapStatus: String = "No map request yet",
 )
 object DriveBus { private val mutable = MutableStateFlow(DriveState()); val state = mutable.asStateFlow(); fun set(state: DriveState) { mutable.value = state } }
 
@@ -32,10 +33,13 @@ class DrivingService : Service(), LocationListener {
     private lateinit var db: CameraDb
     private lateinit var osm: OsmDataSource
     private val speedFilter = SpeedFilter(); private val matcher = RoadMatcher()
+    private val limitStabilizer = RoadLimitStabilizer()
     private val detector = CameraApproachDetector(); private val overspeed = OverspeedGate()
     private val limits: SpeedLimitProvider = OsmSpeedLimitProvider()
     private var snapshot: OsmSnapshot? = null
+    private var previousSnapshot: OsmSnapshot? = null
     private var fetching = false; private var lastAttempt = 0L
+    private var mapStatus = "Cached map data"
     private var lastAlertId: String? = null
     private var tick: Job? = null
     override fun onBind(intent: Intent?) = null
@@ -63,7 +67,7 @@ class DrivingService : Service(), LocationListener {
             catch (_: Exception) { DriveBus.set(DriveState(status = "GPS unavailable")); stopSelf(); return START_NOT_STICKY }
             tick = scope.launch { while (isActive) { delay(1000); val state = DriveBus.state.value
                 if (state.fix != null && SystemClock.elapsedRealtime() - state.fix.elapsedMs > 5000) {
-                    speedFilter.current(SystemClock.elapsedRealtime()); matcher.reset()
+                    speedFilter.current(SystemClock.elapsedRealtime()); matcher.reset(); limitStabilizer.reset()
                     DriveBus.set(state.copy(speedMph = null, limitMph = null, road = null, alert = null, status = "GPS signal lost"))
                 }
             } }
@@ -79,9 +83,13 @@ class DrivingService : Service(), LocationListener {
             if (location.hasBearing()) location.bearing.toDouble() else null, location.elapsedRealtimeNanos / 1_000_000)
         if (now - fix.elapsedMs !in 0..5000) return
         val speed = speedFilter.update(fix, now)
-        val cached = snapshot?.takeIf { it.usable(fix.point, System.currentTimeMillis()) }
+        val wallNow = System.currentTimeMillis()
+        val cached = listOfNotNull(snapshot, previousSnapshot)
+            .filter { it.usable(fix.point, wallNow) }
+            .minByOrNull { Geo.distance(it.center, fix.point) }
         val road = if (cached != null && fix.accuracyM <= 35) matcher.match(fix, cached.roads) else null
-        val limit = limits.limit(road)
+        val limit = if (cached != null) limitStabilizer.resolve(fix, road, limits.limit(road), now)
+            else { limitStabilizer.reset(); null }
         val settings = getSharedPreferences("settings", Context.MODE_PRIVATE)
         val cameras = (cached?.cameras ?: emptyList()) + db.userCameras()
         val enabled = cameras.filter { (it.type == CameraType.SPEED && settings.getBoolean("speedCamera", true)) ||
@@ -93,14 +101,21 @@ class DrivingService : Service(), LocationListener {
         val tolerance = settings.getInt("tolerance", 2)
         if (settings.getBoolean("overspeed", false) && overspeed.update(speed, limit, tolerance)) signal(false, settings.getBoolean("vibrate", true))
         DriveBus.set(DriveState(true, speed, limit, fix, road, alert, decision,
-            cached?.let { System.currentTimeMillis() - it.fetchedAt },
+            cached?.let { wallNow - it.fetchedAt },
             when { speed == null -> "GPS speed unavailable"; cached == null -> "Road and public camera data unavailable"; limit == null -> "Road limit unknown"; else -> "" },
-            settings.getBoolean("overspeed", false) && overspeed.isOver(speed, limit, tolerance)))
-        if (cached == null && !fetching && System.currentTimeMillis() - lastAttempt > 90_000) {
-            fetching = true; lastAttempt = System.currentTimeMillis()
+            settings.getBoolean("overspeed", false) && overspeed.isOver(speed, limit, tolerance), mapStatus))
+        val target = OsmCoverage.refreshTarget(snapshot, fix, wallNow, lastAttempt)
+        if (target != null && !fetching) {
+            fetching = true; lastAttempt = wallNow; mapStatus = "Fetching road data"
             scope.launch {
-                try { snapshot = withContext(Dispatchers.IO) { osm.fetch(fix.point) } }
-                catch (_: Exception) { DriveBus.set(DriveBus.state.value.copy(status = "Map data unavailable; user cameras still active")) }
+                try {
+                    val fresh = withContext(Dispatchers.IO) { osm.fetch(target) }
+                    previousSnapshot = snapshot
+                    snapshot = fresh
+                    mapStatus = "Map data ready"
+                } catch (error: Exception) {
+                    mapStatus = "Map request failed: ${error.message?.take(70) ?: error.javaClass.simpleName}"
+                }
                 finally { fetching = false }
             }
         }

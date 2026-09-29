@@ -28,6 +28,10 @@ class CoreTest {
         assertEquals(30, SpeedLimits.mph(mapOf("maxspeed" to "30 mph")))
         assertEquals(50, SpeedLimits.mph(mapOf("maxspeed" to "80")))
         assertEquals(60, SpeedLimits.mph(mapOf("maxspeed" to "GB:nsl_single")))
+        assertEquals(70, SpeedLimits.mph(mapOf("maxspeed:type" to "GB:motorway")))
+        assertEquals(30, SpeedLimits.mph(mapOf("source:maxspeed" to "GB:nsl_restricted")))
+        assertNull(SpeedLimits.mph(mapOf("highway" to "motorway")))
+        assertNull(SpeedLimits.mph(mapOf("maxspeed:type" to "GB:motorway", "maxspeed:variable" to "yes")))
         assertNull(SpeedLimits.mph(mapOf("maxspeed" to "signals")))
         assertNull(SpeedLimits.mph(mapOf("maxspeed" to "30 mph", "maxspeed:conditional" to "20 @ school")))
         assertNull(OsmSpeedLimitProvider().limit(null))
@@ -80,5 +84,30 @@ class CoreTest {
         assertEquals(500.0, Geo.distance(GeoPoint(53.0, -2.0), GeoPoint(53.0045, -2.0)), 5.0)
         assertEquals(0.0, Geo.bearing(GeoPoint(53.0, -2.0), GeoPoint(53.0045, -2.0)), .01)
         assertEquals(180.0, Geo.difference(0.0, 180.0), .01)
+    }
+    @Test fun coveragePrefetchesAheadBeforeLeavingKnownGeometry() {
+        val center = GeoPoint(53.0, -2.0)
+        val snapshot = OsmSnapshot(center, 1000, listOf(road), emptyList())
+        val position = GeoPoint(53.003, -2.0)
+        assertTrue(snapshot.usable(position, 2000))
+        val target = OsmCoverage.refreshTarget(snapshot, fix(53.003).copy(bearing = 0.0), 2000, 0)
+        assertNotNull(target)
+        assertTrue(target!!.lat > position.lat)
+        assertNull(OsmCoverage.refreshTarget(snapshot, fix(53.0002), 2000, 0))
+        assertNull(OsmCoverage.refreshTarget(snapshot, fix(53.003), 2000, 1500))
+        assertFalse(snapshot.usable(GeoPoint(53.012, -2.0), 2000))
+    }
+    @Test fun knownLimitSurvivesBriefMatchingJitterButNotRoadChange() {
+        val stable = RoadLimitStabilizer()
+        val start = fix(53.005)
+        val match = RoadMatch(road, 2.0, 0.0, .9)
+        assertEquals(30, stable.resolve(start, match, 30, 1000))
+        assertEquals(30, stable.resolve(start.copy(elapsedMs = 2000), null, null, 2000))
+        assertNull(stable.resolve(start.copy(point = GeoPoint(53.005, -1.999)), null, null, 3000))
+        assertEquals(30, stable.resolve(start, match, 30, 4000))
+        assertNull(stable.resolve(start.copy(elapsedMs = 8000), null, null, 8000))
+        assertEquals(30, stable.resolve(start, match, 30, 9000))
+        val sideRoad = road.copy(id = "way/2", tags = emptyMap())
+        assertNull(stable.resolve(start, RoadMatch(sideRoad, 2.0, 0.0, .9), null, 10000))
     }
 }

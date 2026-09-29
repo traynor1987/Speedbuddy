@@ -325,7 +325,8 @@ class MainActivity : ComponentActivity() {
             "Matched road" to state.road?.road?.let { "${it.name ?: "Unnamed"} · ${it.id}" },
             "Confidence" to state.road?.let { String.format(Locale.UK, "%.2f", it.confidence) },
             "Known limit" to state.limitMph?.let { "$it mph · OSM" },
-            "Map data age" to state.dataAgeMs?.let { "${it / 60_000} min" }))
+            "Map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
+            "Map request" to state.mapStatus))
         DiagnosticCard("CAMERA", listOf(
             "Nearest candidate" to state.decision.camera?.id,
             "Distance" to state.decision.distanceM?.let { "${it.roundToInt()} m" },

@@ -34,6 +34,11 @@ object Geo {
         return (Math.toDegrees(atan2(sin(d) * cos(q), cos(p) * sin(q) - sin(p) * cos(q) * cos(d))) + 360) % 360
     }
     fun difference(a: Double, b: Double): Double = abs((a - b + 540) % 360 - 180)
+    fun ahead(point: GeoPoint, bearing: Double, meters: Double): GeoPoint {
+        val radians = Math.toRadians(bearing)
+        return GeoPoint(point.lat + meters * cos(radians) / 111195.0,
+            point.lon + meters * sin(radians) / (111320.0 * cos(Math.toRadians(point.lat))))
+    }
     // Local tangent plane, sufficient for the small (<= 2 km) fetched region.
     fun projection(p: GeoPoint, points: List<GeoPoint>): Triple<Double, Double?, Double> {
         if (points.size < 2) return Triple(Double.POSITIVE_INFINITY, null, 0.0)
@@ -75,13 +80,40 @@ object SpeedLimits {
     fun mph(tags: Map<String, String>): Int? {
         if (tags["maxspeed:conditional"] != null || tags["maxspeed:variable"] != null ||
             tags["maxspeed:lanes"] != null || tags["maxspeed:forward"] != null || tags["maxspeed:backward"] != null) return null
-        val raw = tags["maxspeed"]?.trim()?.lowercase() ?: return null
+        val raw = (tags["maxspeed"] ?: tags["maxspeed:type"] ?: tags["source:maxspeed"])
+            ?.trim()?.lowercase() ?: return null
         if (raw == "gb:nsl_single") return 60
         if (raw == "gb:nsl_dual" || raw == "gb:motorway") return 70
+        if (raw == "gb:nsl_restricted") return 30
         val match = Regex("^(\\d{1,3})(?:\\s*(mph|km/h|kmh|kph))?$").matchEntire(raw) ?: return null
         val value = match.groupValues[1].toInt(); if (value !in 5..130) return null
         return if (match.groupValues[2] == "mph") value else (value * .621371).roundToInt()
     }
+}
+
+/** Hold only a recently observed limit on the same geometry through a short ambiguous GPS fix. */
+class RoadLimitStabilizer {
+    private var lastMatch: RoadMatch? = null
+    private var lastLimit: Int? = null
+    private var lastSeenMs: Long = 0
+    fun resolve(fix: Fix, match: RoadMatch?, limit: Int?, nowMs: Long): Int? {
+        if (match != null) {
+            if (limit != null) { lastMatch = match; lastLimit = limit; lastSeenMs = nowMs }
+            else reset()
+            return limit
+        }
+        val previous = lastMatch ?: return null
+        if (nowMs - lastSeenMs !in 0..3000 || fix.accuracyM > 25) { reset(); return null }
+        val (distance, heading, _) = Geo.projection(fix.point, previous.road.points)
+        val direction = fix.bearing?.let { b -> heading?.let { h ->
+            min(Geo.difference(b, h), Geo.difference(b, (h + 180) % 360))
+        } }
+        if (distance > max(16.0, fix.accuracyM * 1.5) || direction != null && direction > 45) {
+            reset(); return null
+        }
+        return lastLimit
+    }
+    fun reset() { lastMatch = null; lastLimit = null; lastSeenMs = 0 }
 }
 
 class RoadMatcher {

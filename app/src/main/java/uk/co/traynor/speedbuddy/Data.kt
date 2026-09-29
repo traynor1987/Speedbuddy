@@ -52,7 +52,21 @@ class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null,
 }
 
 data class OsmSnapshot(val center: GeoPoint, val fetchedAt: Long, val roads: List<Road>, val cameras: List<Camera>) {
-    fun usable(point: GeoPoint, now: Long): Boolean = now - fetchedAt in 0..86_400_000 && Geo.distance(center, point) < 650
+    // Query covers a 1.5 km latitude/longitude box around the centre. Leave a safety margin.
+    fun usable(point: GeoPoint, now: Long): Boolean = now - fetchedAt in 0..86_400_000 &&
+        kotlin.math.abs(point.lat - center.lat) < 1150.0 / 111195.0 &&
+        kotlin.math.abs(point.lon - center.lon) < 1150.0 / (111320.0 * cos(Math.toRadians(center.lat)))
+}
+
+object OsmCoverage {
+    fun refreshTarget(snapshot: OsmSnapshot?, fix: Fix, nowMs: Long, lastAttemptMs: Long): GeoPoint? {
+        if (lastAttemptMs > 0 && nowMs - lastAttemptMs < 15_000) return null
+        if (snapshot == null || !snapshot.usable(fix.point, nowMs)) return fix.point
+        val distance = Geo.distance(snapshot.center, fix.point)
+        val movingAway = fix.bearing?.let { Geo.difference(it, Geo.bearing(snapshot.center, fix.point)) < 70 } ?: false
+        if (distance < 250 || !movingAway) return null
+        return fix.bearing?.let { Geo.ahead(fix.point, it, 900.0) } ?: fix.point
+    }
 }
 
 class OsmDataSource(private val context: Context) {
