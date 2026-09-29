@@ -18,7 +18,7 @@ class RoadCorrectionsTest {
     @Test fun correctedNextRoadPreviewsOnlyAfterTheCurrentLimit() {
         val next = road.copy(id = "way/8", points = listOf(road.points.last(), GeoPoint(53.006, -2.0)))
         val correction = RoadLimitCorrection(next.id, RoadLimitKind.NUMERIC, 20, "30 mph", 1000)
-        val fix = Fix(GeoPoint(53.001, -2.0), 5.0, 12.5, 1.0, 0.0, 1000)
+        val fix = Fix(GeoPoint(53.0015, -2.0), 5.0, 12.5, 1.0, 0.0, 1000)
         val current = RoadMatch(road, 0.0, 0.0, .9)
         assertEquals(30, SpeedLimits.mph(current.road.tags))
         assertEquals(20, UpcomingLimitDetector().detect(fix, current, 30,
