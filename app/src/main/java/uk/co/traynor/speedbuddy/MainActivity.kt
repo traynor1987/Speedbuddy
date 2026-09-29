@@ -318,10 +318,12 @@ class MainActivity : ComponentActivity() {
     AlertDialog(onDismissRequest = close,
         title = { Text("Set road speed limit") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.65f).verticalScroll(rememberScrollState()),verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(road.name ?: "This road", fontWeight = FontWeight.Bold)
                 Text("Choose the posted limit for this road. This correction is saved on your phone.",
                     color = Muted, style = MaterialTheme.typography.bodySmall)
+                if(road.tags.keys.any { it in setOf("maxspeed:conditional","maxspeed:variable","maxspeed:lanes","maxspeed:forward","maxspeed:backward") })
+                    Text("This road has variable or directional limits. A simple correction is saved, but its driving limit stays unknown until that context can be resolved.",color=Muted,style=MaterialTheme.typography.bodySmall)
                 listOf(listOf(20, 30, 40), listOf(50, 60, 70)).forEach { values ->
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         values.forEach { mph ->

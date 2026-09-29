@@ -536,7 +536,7 @@ private fun mapSpeedSign(label: String): Bitmap {
                     FilterChip(direction == angle.toString(), { direction = angle.toString() },
                         label = { Text(label) }, modifier = Modifier.weight(1f))
                 }
-                FilterChip(direction.isBlank(), { direction = ""; both = false }, label = { Text("?") })
+                FilterChip(direction.isBlank(), { direction = ""; both = false }, label = { Text("?") },modifier=Modifier.semantics { contentDescription="Enforcement direction unknown" })
             }
             FilterChip(both, { both = !both }, enabled = direction.isNotBlank(),
                 label = { Text("Enforces both directions") })
@@ -557,8 +557,8 @@ private fun mapSpeedSign(label: String): Bitmap {
 
 @Composable private fun RoadMapEditor(road: Road, correction: RoadLimitCorrection?, close: () -> Unit,
     save: (RoadLimitCorrection?) -> Unit) {
-    var kind by remember(road.id) { mutableStateOf(correction?.kind ?: RoadLimitKind.NUMERIC) }
-    var mph by remember(road.id) { mutableStateOf((correction?.mph ?: SpeedLimits.mph(road.tags))?.toString() ?: "") }
+    var kind by rememberSaveable(road.id) { mutableStateOf(correction?.kind ?: RoadLimitKind.NUMERIC) }
+    var mph by rememberSaveable(road.id) { mutableStateOf((correction?.mph ?: SpeedLimits.mph(road.tags))?.toString() ?: "") }
     Surface(Modifier.fillMaxWidth().padding(12.dp), color = MapPanel, shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.72f).verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(road.name ?: "Unnamed road", color = MapInk, fontWeight = FontWeight.Bold)
