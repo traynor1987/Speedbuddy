@@ -211,8 +211,10 @@ class MainActivity : ComponentActivity() {
 @Composable private fun LimitSign(limit: Int?, national: Boolean, modifier: Modifier = Modifier) {
     val circle = modifier.clip(CircleShape)
     when {
-        limit == null -> Box(circle.border(2.dp, Line, CircleShape).background(Panel), contentAlignment = Alignment.Center) {
-            Text("--", fontSize = 58.sp, fontWeight = FontWeight.Bold, color = Muted)
+        limit == null -> BoxWithConstraints(circle.border(2.dp, Line, CircleShape).background(Panel),
+            contentAlignment = Alignment.Center) {
+            val diameter = minOf(maxWidth, maxHeight).value
+            Text("--", fontSize = (diameter * .44f).sp, fontWeight = FontWeight.Bold, color = Muted)
         }
         national -> Box(circle.background(Color.White), contentAlignment = Alignment.Center) {
             Canvas(Modifier.fillMaxSize()) {
@@ -220,9 +222,14 @@ class MainActivity : ComponentActivity() {
                     Offset(size.width * .82f, size.height * .18f), strokeWidth = size.width * .14f)
             }
         }
-        else -> Box(circle.background(Color.White).border(14.dp, Color(0xFFDC282B), CircleShape), contentAlignment = Alignment.Center) {
-            Text(limit.toString(), color = Color(0xFF111111), fontSize = if (limit >= 100) 53.sp else 69.sp,
-                fontWeight = FontWeight.Black, letterSpacing = (-3).sp, maxLines = 1)
+        else -> BoxWithConstraints(circle.background(Color.White), contentAlignment = Alignment.Center) {
+            val diameter = minOf(maxWidth, maxHeight).value
+            Box(Modifier.fillMaxSize().border((diameter * .09f).dp, Color(0xFFDC282B), CircleShape),
+                contentAlignment = Alignment.Center) {
+                Text(limit.toString(), color = Color(0xFF111111),
+                    fontSize = (diameter * (if (limit >= 100) .37f else .45f)).sp,
+                    fontWeight = FontWeight.Black, letterSpacing = (-diameter * .02f).sp, maxLines = 1)
+            }
         }
     }
 }
