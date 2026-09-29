@@ -22,11 +22,50 @@ interface CameraRepository {
     fun delete(id: String)
 }
 
-class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null, 1), CameraRepository {
+class CameraDb(context: Context) : SQLiteOpenHelper(context, "cameras.db", null, 2), CameraRepository {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE cameras(id TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, mph INTEGER, note TEXT, updated INTEGER NOT NULL)")
+        createImported(db)
     }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { if (oldVersion < 2) createImported(db) }
+    private fun createImported(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE imported_cameras(id TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX imported_location ON imported_cameras(lat,lon)")
+        db.execSQL("CREATE TABLE imported_info(imported_at INTEGER NOT NULL, source_date TEXT NOT NULL, count INTEGER NOT NULL)")
+    }
+    data class ImportedInfo(val importedAtMs: Long, val sourceDate: String, val count: Int)
+    fun importedInfo(): ImportedInfo? = readableDatabase.rawQuery("SELECT imported_at,source_date,count FROM imported_info LIMIT 1", null).use {
+        if (it.moveToFirst()) ImportedInfo(it.getLong(0), it.getString(1), it.getInt(2)) else null
+    }
+    fun importedNearby(point: GeoPoint): List<Camera> = readableDatabase.rawQuery(
+        "SELECT id,lat,lon,type FROM imported_cameras WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?",
+        arrayOf((point.lat - .015).toString(), (point.lat + .015).toString(),
+            (point.lon - .025).toString(), (point.lon + .025).toString())).use { cursor ->
+        buildList { while (cursor.moveToNext()) add(Camera(cursor.getString(0), GeoPoint(cursor.getDouble(1), cursor.getDouble(2)),
+            CameraType.valueOf(cursor.getString(3)), CameraSource.LUFOP)) }
+    }
+    /** Replaces only the downloaded layer. Owner cameras and OSM cache remain untouched. */
+    fun replaceImported(cameras: List<Camera>, sourceDate: String): Int {
+        require(cameras.isNotEmpty() && cameras.all { it.source == CameraSource.LUFOP })
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            database.delete("imported_cameras", null, null)
+            val statement = database.compileStatement("INSERT INTO imported_cameras(id,lat,lon,type) VALUES(?,?,?,?)")
+            cameras.forEach { camera ->
+                statement.clearBindings(); statement.bindString(1, camera.id)
+                statement.bindDouble(2, camera.point.lat); statement.bindDouble(3, camera.point.lon)
+                statement.bindString(4, camera.type.name); statement.executeInsert()
+            }
+            statement.close()
+            database.delete("imported_info", null, null)
+            database.insertOrThrow("imported_info", null, ContentValues().apply {
+                put("imported_at", System.currentTimeMillis()); put("source_date", sourceDate); put("count", cameras.size)
+            })
+            database.setTransactionSuccessful()
+        } finally { database.endTransaction() }
+        return cameras.size
+    }
     override fun userCameras(): List<Camera> = readableDatabase.rawQuery("SELECT id,lat,lon,type,direction,mph,note,updated FROM cameras", null).use { cursor ->
         buildList {
             while (cursor.moveToNext()) add(Camera(cursor.getString(0), GeoPoint(cursor.getDouble(1), cursor.getDouble(2)),

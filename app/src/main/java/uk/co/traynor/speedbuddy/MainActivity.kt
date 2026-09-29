@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,6 +32,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
+import java.text.SimpleDateFormat
+import java.util.Date
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 private val Ink = Color(0xFFF4F8FB)
@@ -63,6 +69,7 @@ class MainActivity : ComponentActivity() {
             var records by remember { mutableStateOf(db.userCameras()) }
             var editing by remember { mutableStateOf<Camera?>(null) }
             var message by remember { mutableStateOf("") }
+            var importedInfo by remember { mutableStateOf(db.importedInfo()) }
             val exportBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
                 if (uri != null) runCatching {
                     val content = OwnerBackupCodec.export(db.userCameras(), prefs)
@@ -82,6 +89,25 @@ class MainActivity : ComponentActivity() {
                     backup.cameras.size
                 }.onSuccess { message = "Restored $it cameras and settings. Existing cameras were kept." }
                     .onFailure { message = "Restore failed: ${it.message ?: "Invalid backup"}" }
+            }
+            val importLufop = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) {
+                    val live = DriveBus.state.value
+                    if (live.active && (live.speedMph == null || live.speedMph >= 5)) message = "Import cameras while parked."
+                    else lifecycleScope.launch {
+                        runCatching { withContext(Dispatchers.IO) {
+                            val batch = contentResolver.openInputStream(uri)?.use(LufopAscImporter::inspect)
+                                ?: error("Could not read ZIP")
+                            val date = batch.archiveDateMs?.let {
+                                SimpleDateFormat("yyyy-MM-dd", Locale.UK).format(Date(it))
+                            } ?: "Archive date unknown"
+                            db.replaceImported(batch.cameras, date)
+                        } }.onSuccess {
+                            importedInfo = db.importedInfo()
+                            message = "Imported $it UK cameras. Existing personal cameras were kept."
+                        }.onFailure { message = "Camera import failed: ${it.message ?: "Invalid ZIP"}. Previous data was kept." }
+                    }
+                }
             }
             val speed = state.speedMph
             val moving = state.active && (speed == null || speed >= 5.0)
@@ -107,7 +133,9 @@ class MainActivity : ComponentActivity() {
                         "settings" -> SettingsScreen(prefs, { page = "drive" },
                             { records = db.userCameras(); page = "cameras" }, { page = "diagnostics" },
                             { exportBackup.launch("SpeedBuddy-backup.json") },
-                            { importBackup.launch(arrayOf("application/json", "text/plain")) })
+                            { importBackup.launch(arrayOf("application/json", "text/plain")) }, importedInfo,
+                            { if (moving) message = "Import cameras while parked."
+                              else importLufop.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) })
                         "diagnostics" -> DiagnosticsScreen(state) { page = "drive" }
                         "cameras" -> CameraList(records, moving, { page = "settings" },
                             { editing = it; page = "edit" },
@@ -255,7 +283,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 @Composable private fun SettingsScreen(prefs: android.content.SharedPreferences, back: () -> Unit,
-    cameras: () -> Unit, diagnostics: () -> Unit, exportBackup: () -> Unit, importBackup: () -> Unit) {
+    cameras: () -> Unit, diagnostics: () -> Unit, exportBackup: () -> Unit, importBackup: () -> Unit,
+    imported: CameraDb.ImportedInfo?, importLufop: () -> Unit) {
     var version by remember { mutableIntStateOf(0) }
     Page("Settings", back) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
@@ -303,11 +332,24 @@ class MainActivity : ComponentActivity() {
                     MenuRow("Diagnostics", "GPS, road match and camera decisions", diagnostics)
                 }
             }
+            Spacer(Modifier.height(22.dp)); SectionLabel("PUBLIC CAMERA FILE")
+            Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
+                Column {
+                    MenuRow("Import Lufop UK cameras", "Choose the free Europe ASC ZIP while parked", importLufop)
+                    HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
+                    Text(if (imported == null) "No Lufop file imported yet"
+                        else "${imported.count} UK cameras · archive ${imported.sourceDate} · imported ${SimpleDateFormat("d MMM yyyy", Locale.UK).format(Date(imported.importedAtMs))}",
+                        color = Muted, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
+                }
+            }
             Spacer(Modifier.height(22.dp)); SectionLabel("SOURCES & PRIVACY")
             Text("Roads and public cameras © OpenStreetMap contributors (ODbL). Nearby coordinates are sent to the public Overpass API. Data may be incomplete; follow road signs.",
                 color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
             Spacer(Modifier.height(8.dp))
             Text("Speed-limit sign designs based on The Highway Code. © Crown copyright, Open Government Licence v3.0. No account or journey history is stored.",
+                color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
+            Spacer(Modifier.height(8.dp))
+            Text("Imported camera data: Lufop.net and OpenStreetMap contributors (ODbL 1.0). Import the free file again each month; Speed Buddy does not access your Lufop account. Camera positions and types may be incomplete or wrong, and the file does not provide reliable UK mph or direction metadata.",
                 color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
         }
     }
@@ -366,6 +408,8 @@ class MainActivity : ComponentActivity() {
             "Map request" to state.mapStatus))
         DiagnosticCard("CAMERA", listOf(
             "Public records nearby" to state.publicCameraCount.toString(),
+            "Lufop UK records" to state.importedCameraCount.toString(),
+            "Lufop candidates nearby" to state.importedNearbyCount.toString(),
             "My saved cameras" to state.userCameraCount.toString(),
             "Nearest candidate" to state.decision.camera?.id,
             "Distance" to state.decision.distanceM?.let { "${it.roundToInt()} m" },

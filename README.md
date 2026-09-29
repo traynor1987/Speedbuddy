@@ -15,7 +15,8 @@ Open in Android Studio with Android SDK 36 and JDK 17, or run `gradle testDebugU
 - Overpass retrieves nearby OSM road geometries, `maxspeed` tags, camera nodes and enforcement relations in a roughly 3 km square. A single response is cached on device for 24 hours and reused while within 650 m of its centre. Failed refreshes are spaced at least 90 seconds. Public camera coverage is partial.
 - Matching scores distance, course (including one-way direction), and previous road. Close competing candidates produce an unknown limit. The limit provider parses explicit OSM `maxspeed`, mph units, numeric km/h values, and UK national tags; conditional, variable and lane-specific limits show `--`.
 - Camera candidates are filtered by heading, travel direction if tagged, current matched road when known, recent distance trend, and passed status. A new approach at 750 m triggers one optional tone/vibration; the display counts down and dismisses after passing. User cameras go through the same detector and work without a public-data cache. No route prediction is claimed.
-- SQLite stores only personally added cameras. The OSM response cache stores nearby map data. It records no permanent trip or location history.
+- Settings can import the free Lufop Europe ASC ZIP while parked. Only UK `GBFixe*.asc` and `GBFeuRouge*.asc` are used. The September 2026 file supplied for testing contained 4,220 fixed and 1,013 red-light positions. The app stores them in a separate SQLite table and replaces that layer on each import; existing personal cameras are retained. The ZIP does not include a trustworthy enforced mph or camera direction, so those fields remain unknown. Import date and ZIP entry date appear in Settings. Failed/empty imports keep the old data.
+- SQLite stores personally added and imported cameras separately. The OSM response cache stores nearby map data. It records no permanent trip or location history.
 
 ## Data and licences
 
@@ -23,12 +24,14 @@ Road and public camera data: © OpenStreetMap contributors, Open Database Licens
 
 OSM `maxspeed`, `highway=speed_camera`, and `type=enforcement`/`enforcement=maxspeed|traffic_signals` tagging are incomplete and may be wrong. The parser does not infer unsigned UK defaults or live variable limits. Nearby public cameras can be absent. User-added cameras remain private local records and are not uploaded to OSM.
 
+Imported camera data: Lufop.net and OpenStreetMap contributors, ODbL 1.0. The [free Europe ASC download](https://lufop.net/en/asc-and-csv-speed-camera-files/) requires the owner to register and download it in a browser; Speed Buddy does not sign in or fetch it automatically. The free file is updated monthly, so reimport monthly while parked. Its UK presence and category counts were verified against the owner-provided September 2026 ZIP, but field accuracy and coverage have not been validated on the road. Import is local and sends no location to Lufop. The JSON personal backup excludes this re-downloadable public layer.
+
 ## Physical acceptance
 
 1. While parked, grant precise location, start mode, then verify `0` or `--` while acquiring GPS, Stop notification, and no editor while moving.
 2. As a passenger or with the phone mounted, compare displayed speed against the car on several steady roads. Inspect `--` under GPS loss and recovery.
 3. Compare posted limits across a junction and parallel roads; inspect diagnostics when `--` or a wrong match appears. Never treat a displayed limit as authoritative.
-4. On a safe planned pass of a known fixed camera and a red-light camera, verify type, countdown, direction-away rejection and automatic dismissal. Do not handle the phone while moving.
+4. While parked, import the free ASC ZIP in Settings and confirm count/date. On a safe planned pass of a known fixed camera and a red-light camera, verify type, countdown, direction-away rejection and automatic dismissal. The file has no direction metadata, so assess nearby parallel/opposite-carriageway cases carefully. Do not handle the phone while moving.
 5. While parked, add a missing camera, then approach it on a later journey and verify the same countdown; edit/delete while parked.
 6. Repeat with connectivity disabled in a recently cached area; expect cached data for up to 24 hours and `--` outside it. User cameras should still alert.
 

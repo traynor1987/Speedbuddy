@@ -26,6 +26,7 @@ data class DriveState(
     val dataAgeMs: Long? = null, val status: String = "Start driving mode", val overspeed: Boolean = false,
     val mapStatus: String = "No map request yet",
     val upcoming: UpcomingLimit? = null, val publicCameraCount: Int = 0, val userCameraCount: Int = 0,
+    val importedCameraCount: Int = 0, val importedNearbyCount: Int = 0,
 )
 object DriveBus { private val mutable = MutableStateFlow(DriveState()); val state = mutable.asStateFlow(); fun set(state: DriveState) { mutable.value = state } }
 
@@ -98,7 +99,10 @@ class DrivingService : Service(), LocationListener {
         val publicCameras = listOfNotNull(snapshot, previousSnapshot).filter { it.usable(fix.point, wallNow) }
             .flatMap { it.cameras }.distinctBy { it.id }
         val userCameras = db.userCameras()
-        val cameras = publicCameras + userCameras
+        val imported = db.importedNearby(fix.point).filterNot { candidate ->
+            publicCameras.any { it.type == candidate.type && Geo.distance(it.point, candidate.point) < 25 }
+        }
+        val cameras = publicCameras + userCameras + imported
         val enabled = cameras.filter { (it.type == CameraType.SPEED && settings.getBoolean("speedCamera", true)) ||
             (it.type == CameraType.RED_LIGHT && settings.getBoolean("redCamera", true)) }
         val (alert, decision) = detector.evaluate(fix, road, enabled, speed)
@@ -111,7 +115,7 @@ class DrivingService : Service(), LocationListener {
             cached?.let { wallNow - it.fetchedAt },
             when { speed == null -> "GPS speed unavailable"; cached == null -> "Road and public camera data unavailable"; limit == null -> "Road limit unknown"; else -> "" },
             settings.getBoolean("overspeed", false) && overspeed.isOver(speed, limit, tolerance), mapStatus,
-            upcoming, publicCameras.size, userCameras.size))
+            upcoming, publicCameras.size, userCameras.size, db.importedInfo()?.count ?: 0, imported.size))
         val target = OsmCoverage.refreshTarget(snapshot, fix, wallNow, lastAttempt)
         if (target != null && !fetching) {
             fetching = true; lastAttempt = wallNow; mapStatus = "Fetching road data"

@@ -8,6 +8,28 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CameraDbTest {
+    @Test fun importedLayerReplacesAtomicallyAndPreservesPersonalCameras() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        CameraDb(context).use { db ->
+            val owner = db.create(GeoPoint(53.0, -2.0), CameraType.SPEED)
+            try {
+                val first = Camera("lufop:one", GeoPoint(53.005, -2.0), CameraType.RED_LIGHT, CameraSource.LUFOP)
+                assertEquals(1, db.replaceImported(listOf(first), "2026-09-01"))
+                assertEquals(first, db.importedNearby(first.point).single())
+                assertEquals(1, db.importedInfo()?.count)
+                assertThrows(IllegalArgumentException::class.java) { db.replaceImported(emptyList(), "bad") }
+                assertEquals(first, db.importedNearby(first.point).single())
+                val second = first.copy(id = "lufop:two", point = GeoPoint(53.01, -2.0))
+                db.replaceImported(listOf(second), "2026-10-01")
+                assertEquals(listOf(second), db.importedNearby(first.point))
+                assertTrue(db.userCameras().any { it.id == owner.id })
+            } finally {
+                db.delete(owner.id)
+                db.writableDatabase.delete("imported_cameras", null, null)
+                db.writableDatabase.delete("imported_info", null, null)
+            }
+        }
+    }
     @Test fun userCameraPersistsAndIsDetectedAfterReopen() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val id = CameraDb(context).use { db -> db.create(GeoPoint(53.005, -2.0), CameraType.RED_LIGHT).id }

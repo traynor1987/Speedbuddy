@@ -11,7 +11,7 @@ data class Fix(
 )
 data class Road(val id: String, val name: String?, val points: List<GeoPoint>, val tags: Map<String, String>)
 enum class CameraType { SPEED, RED_LIGHT }
-enum class CameraSource { OSM, USER }
+enum class CameraSource { OSM, USER, LUFOP }
 data class Camera(
     val id: String, val point: GeoPoint, val type: CameraType, val source: CameraSource,
     val direction: Double? = null, val enforcedMph: Int? = null, val note: String? = null,
