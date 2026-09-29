@@ -42,12 +42,14 @@ import kotlin.math.abs
 private val MapInk = Color(0xFFF4F8FB)
 private val MapMuted = Color(0xFFB5C9D7)
 private val MapPanel = Color(0xFF142331)
-private data class MapDrawData(val groups: List<CameraMapGroup>, val roads: List<Pair<Road, Int?>>,
+private data class RoadMapData(val road: Road, val mph: Int?, val national: Boolean)
+private data class MapDrawData(val groups: List<CameraMapGroup>, val roads: List<RoadMapData>,
     val cameraCount: Int)
 
 /** Basemap tiles provide context; only the OSM extract supplies limit values. */
 @Composable
-fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () -> Unit) {
+fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
+    sourceRevision: Long, sourceCameraCount: Int, back: () -> Unit) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -61,7 +63,8 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
     var revision by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(false) }
     var mapAvailable by remember { mutableStateOf(true) }
-    var status by remember { mutableStateOf("Tap Load road limits to inspect this area") }
+    var status by remember { mutableStateOf("Loading nearby road limits…") }
+    var lastRoadFetchMs by remember { mutableLongStateOf(0L) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var editingPosition by remember { mutableStateOf<GeoPoint?>(null) }
     var pendingRemoval by remember { mutableStateOf<Camera?>(null) }
@@ -71,6 +74,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
     var headingUp by remember { mutableStateOf(false) }
     val drive by DriveBus.state.collectAsState()
     val markers = remember { mutableMapOf<Long, Camera>() }
+    val roadMarkers = remember { mutableMapOf<Long, Road>() }
     var locationMarker by remember { mutableStateOf<org.maplibre.android.annotations.Marker?>(null) }
     BackHandler(enabled = pendingRemoval != null || pin != null || camera != null || road != null) {
         pendingRemoval = null; pin = null; camera = null; editingPosition = null; road = null
@@ -117,6 +121,8 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
                 ready.setOnMarkerClickListener { selected ->
                     if (!moving && markers[selected.id] != null) {
                         camera = markers[selected.id]; editingPosition = null; road = null; pin = null
+                    } else if (!moving && roadMarkers[selected.id] != null) {
+                        road = roadMarkers[selected.id]; camera = null; editingPosition = null; pin = null
                     }
                     true
                 }
@@ -161,10 +167,16 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
             else locationMarker?.position = position
         }
     }
-    LaunchedEffect(map) {
+    LaunchedEffect(map, viewport) {
         val center = map?.cameraPosition?.target ?: return@LaunchedEffect
         val point = GeoPoint(center.latitude, center.longitude)
-        if (snapshot?.usable(point, System.currentTimeMillis()) == true) return@LaunchedEffect
+        val now = System.currentTimeMillis()
+        if (snapshot?.usable(point, now) == true) {
+            status = "Road limits ready"
+            return@LaunchedEffect
+        }
+        if ((map?.cameraPosition?.zoom ?: 0.0) < 12.0 || now - lastRoadFetchMs < 30_000) return@LaunchedEffect
+        lastRoadFetchMs = now
         loading = true; status = "Loading nearby tagged road limits…"
         runCatching { withContext(Dispatchers.IO) { source.fetch(point) } }
             .onSuccess { snapshot = it; status = "Tap a road to inspect its tagged limit" }
@@ -177,12 +189,12 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
         ready.cameraPosition = CameraPosition.Builder().target(LatLng(target.lat, target.lon))
             .zoom(ready.cameraPosition.zoom).bearing(ready.cameraPosition.bearing).build()
     }
-    LaunchedEffect(map, snapshot, viewport, revision, road?.id, editingPosition) {
+    LaunchedEffect(map, snapshot, viewport, revision, road?.id, editingPosition, sourceRevision) {
         val ready = map ?: return@LaunchedEffect
         val center = ready.cameraPosition.target ?: return@LaunchedEffect
         val point = GeoPoint(center.latitude, center.longitude)
         val zoom = ready.cameraPosition.zoom
-        if (zoom < 9) { ready.clear(); markers.clear(); status = "Zoom in to see camera coverage"; return@LaunchedEffect }
+        if (zoom < 9) { ready.clear(); markers.clear(); roadMarkers.clear(); status = "Zoom in to see camera coverage"; return@LaunchedEffect }
         val span = (0.045 * Math.pow(2.0, 14.0 - zoom)).coerceIn(0.002, 1.0)
         val draw = withContext(Dispatchers.IO) {
             val raw = db.importedInBounds(point.lat - span, point.lon - span * 1.7,
@@ -206,10 +218,14 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
             val limits = db.roadCorrections().associateBy { it.id }
             val nearbyRoads = snapshot?.roads.orEmpty().filter { item -> item.points.any {
                 abs(it.lat - point.lat) <= span && abs(it.lon - point.lon) <= span * 1.7
-            } }.map { it to SpeedLimits.mph((limits[it.id]?.apply(it) ?: it).tags) }
+            } }.map { item ->
+                val effective = limits[item.id]?.apply(item) ?: item
+                val raw = effective.tags["maxspeed"] ?: effective.tags["maxspeed:type"] ?: ""
+                RoadMapData(item, SpeedLimits.mph(effective.tags), raw.startsWith("GB:nsl") || raw == "GB:motorway")
+            }
             MapDrawData(CameraClustering.group(effective, zoom), nearbyRoads, effective.size)
         }
-        ready.clear(); markers.clear(); locationMarker = null
+        ready.clear(); markers.clear(); roadMarkers.clear(); locationMarker = null
         drive.fix?.takeIf { SystemClock.elapsedRealtime() - it.elapsedMs <= 5_000 }?.let { fix ->
             locationMarker = ready.addMarker(MarkerOptions().position(LatLng(fix.point.lat, fix.point.lon))
                 .title("Current location")
@@ -251,6 +267,24 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
                     mph <= 30 -> android.graphics.Color.YELLOW
                     else -> android.graphics.Color.GREEN }).width(if (item.id == road?.id) 9f else 4f))
         }
+        if (zoom >= 15.0) {
+            val positions = mutableListOf<GeoPoint>()
+            draw.roads.asSequence().filter { it.mph != null && it.road.id != road?.id }
+                .take(120).forEach { item ->
+                    val position = item.road.points[item.road.points.size / 2]
+                    if (positions.size < 24 && positions.none { Geo.distance(it, position) < 85 }) {
+                        positions += position
+                        val label = if (item.national) "NSL" else item.mph.toString()
+                        val icon = iconCache.getOrPut("limit:$label") {
+                            icons.fromBitmap(mapSpeedSign(label))
+                        }
+                        val marker = ready.addMarker(MarkerOptions().position(LatLng(position.lat, position.lon))
+                            .title("${item.road.name ?: "Road"} · ${if (item.national) "national speed limit" else "${item.mph} mph"}")
+                            .icon(icon))
+                        roadMarkers[marker.id] = item.road
+                    }
+                }
+        }
         editingPosition?.let { selected -> ready.addMarker(MarkerOptions()
             .position(LatLng(selected.lat, selected.lon)).title("Proposed camera position")
             .icon(icons.fromBitmap(mapPin(android.graphics.Color.rgb(50, 168, 215), "+")))) }
@@ -281,22 +315,30 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
                 }
             }
             Surface(color = MapPanel, shape = RoundedCornerShape(12.dp)) {
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    Text("S speed · R red light · coloured roads = tagged limits", color = MapInk, style = MaterialTheme.typography.labelMedium)
-                    Text(status, color = MapMuted, style = MaterialTheme.typography.labelSmall)
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(if (sourceCameraCount == 0) "Preparing UK camera data…" else
+                                "$sourceCameraCount source cameras · road limits",
+                                color = MapInk, style = MaterialTheme.typography.labelMedium)
+                            Text(status, color = MapMuted, style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1)
+                        }
+                        if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        TextButton(enabled = !loading && !moving, onClick = {
+                            val center = map?.cameraPosition?.target ?: return@TextButton
+                            loading = true; status = "Refreshing road data…"
+                            scope.launch {
+                                runCatching { withContext(Dispatchers.IO) {
+                                    source.fetch(GeoPoint(center.latitude, center.longitude))
+                                } }.onSuccess { snapshot = it; status = "Road limits ready" }
+                                    .onFailure { status = "Road data unavailable: ${it.message?.take(70) ?: "Unknown error"}" }
+                                loading = false
+                            }
+                        }) { Text("Refresh") }
+                    }
                     if (!mapAvailable) Text("Base map unavailable. Saved camera alerts and road data still work.",
                         color = Color(0xFFFFCA75), style = MaterialTheme.typography.labelSmall)
-                    TextButton(enabled = !loading && !moving, onClick = {
-                        val center = map?.cameraPosition?.target ?: return@TextButton
-                        loading = true; status = "Loading road tags for this area…"
-                        scope.launch {
-                            runCatching { withContext(Dispatchers.IO) {
-                                source.fetch(GeoPoint(center.latitude, center.longitude))
-                            } }.onSuccess { snapshot = it; status = "Tap a coloured road to view its tagged limit" }
-                                .onFailure { status = "Road data unavailable: ${it.message?.take(70) ?: "Unknown error"}" }
-                            loading = false
-                        }
-                    }) { Text(if (loading) "Loading…" else "Load road limits here") }
                 }
             }
         }
@@ -338,8 +380,10 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean, back: () 
             }) }
             else -> Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
                 color = MapPanel, shape = RoundedCornerShape(12.dp)) {
-                Text("Tap a camera or road to inspect. Use + Pin to place a missing camera.",
-                    Modifier.padding(12.dp), color = MapInk, style = MaterialTheme.typography.bodySmall)
+                Text(if (moving) "Following your drive · tap recenter to resume after panning" else
+                    "Tap a camera or limit sign · long-press to add a camera",
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = MapInk,
+                    style = MaterialTheme.typography.bodySmall)
             }
         }
         Text("© OpenStreetMap contributors · OpenMapTiles · OpenFreeMap",
@@ -380,6 +424,22 @@ private fun mapPin(color: Int, letter: String, direction: Double? = null, both: 
         if (both) { canvas.rotate(180f, 36f, 36f); canvas.drawPath(arrow, paint) }
         canvas.restore()
     }
+    return bitmap
+}
+
+private fun mapSpeedSign(label: String): Bitmap {
+    val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    paint.color = android.graphics.Color.WHITE
+    canvas.drawCircle(32f, 32f, 27f, paint)
+    paint.color = android.graphics.Color.rgb(205, 54, 53)
+    paint.style = Paint.Style.STROKE; paint.strokeWidth = 6f
+    canvas.drawCircle(32f, 32f, 27f, paint)
+    paint.style = Paint.Style.FILL; paint.color = android.graphics.Color.BLACK
+    paint.isFakeBoldText = true; paint.textAlign = Paint.Align.CENTER
+    paint.textSize = if (label == "NSL") 19f else 29f
+    canvas.drawText(label, 32f, 42f, paint)
     return bitmap
 }
 

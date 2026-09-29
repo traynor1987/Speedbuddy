@@ -9,6 +9,14 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CameraDbTest {
+    @Test fun bundledUkCameraLayerIsCompleteAndDoesNotInventBearings() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val batch = context.assets.open("lufop-uk-2026-09.zip").use(LufopAscImporter::inspect)
+        assertEquals(5_233, batch.cameras.size)
+        assertEquals(4_220, batch.cameras.count { it.type == CameraType.SPEED })
+        assertEquals(1_013, batch.cameras.count { it.type == CameraType.RED_LIGHT })
+        assertTrue(batch.cameras.all { it.direction == null && it.enforcedMph == null })
+    }
     @Test fun schemaTwoMigrationCreatesCorrectionsWithoutDuplicateColumns() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         SQLiteDatabase.create(null).use { database ->
@@ -179,7 +187,7 @@ class CameraDbTest {
         val id = CameraDb(context).use { db -> db.create(GeoPoint(53.005, -2.0), CameraType.RED_LIGHT).id }
         CameraDb(context).use { db ->
             val camera = db.userCameras().first { it.id == id }
-            val fix = Fix(GeoPoint(53.002, -2.0), 5.0, 12.5, 1.0, 0.0, 1000)
+            val fix = Fix(GeoPoint(53.003, -2.0), 5.0, 12.5, 1.0, 0.0, 1000)
             val (alert, _) = CameraApproachDetector().evaluate(fix, null, listOf(camera), 28.0)
             assertEquals(id, alert?.camera?.id)
             db.delete(id)

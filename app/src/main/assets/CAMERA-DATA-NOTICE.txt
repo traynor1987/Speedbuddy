@@ -1,0 +1,6 @@
+UK fixed and red-light camera subset from the September 2026 Lufop Europe ASC archive supplied by the owner.
+Source: Lufop.net, https://lufop.net/en/asc-and-csv-speed-camera-files/
+Data attribution: Lufop.net and OpenStreetMap contributors.
+Licence: Open Database License (ODbL) 1.0, https://opendatacommons.org/licenses/odbl/1-0/
+This app includes the UK ASC entries without invented direction or speed-limit values.
+The owner-data backup excludes this third-party source layer.

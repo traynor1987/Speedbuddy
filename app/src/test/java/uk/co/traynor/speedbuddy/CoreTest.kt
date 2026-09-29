@@ -48,13 +48,14 @@ class CoreTest {
         val camera = Camera("user-1", GeoPoint(53.005, -2.0), CameraType.SPEED, CameraSource.USER)
         val detector = CameraApproachDetector()
         val match = RoadMatch(road, 0.0, 0.0, .9)
-        val distances = listOf(53.0005, 53.0023, 53.0041).map { latitude ->
+        assertNull(detector.evaluate(fix(53.0005), match, listOf(camera), 28.0).first)
+        val distances = listOf(53.0028, 53.0035, 53.0041).map { latitude ->
             val (alert, decision) = detector.evaluate(fix(latitude), match, listOf(camera), 28.0)
             assertTrue(decision.accepted); assertEquals(CameraType.SPEED, alert?.camera?.type)
             alert!!.distanceM
         }
         assertTrue(distances[0] > distances[1]); assertTrue(distances[1] > distances[2])
-        assertTrue(distances[0] in 450.0..550.0)
+        assertTrue(distances[0] in 230.0..260.0)
         assertNull(detector.evaluate(fix(53.0051), match, listOf(camera), 28.0).first)
         assertNull(detector.evaluate(fix(53.0060), match, listOf(camera), 28.0).first)
     }
@@ -65,14 +66,15 @@ class CoreTest {
         val parallel = camera.copy(id = "parallel", direction = null, point = camera.point.copy(lon = -1.9994))
         assertEquals("Different road", detector.evaluate(fix(53.002), match, listOf(parallel), 28.0).second.reason)
         assertEquals("Camera behind or off heading", detector.evaluate(fix(53.006), match, listOf(camera.copy(direction = null)), 28.0).second.reason)
-        assertEquals(camera.id, CameraApproachDetector().evaluate(fix(53.002), match,
+        assertEquals(camera.id, CameraApproachDetector().evaluate(fix(53.003), match,
             listOf(camera.copy(bidirectional = true)), 28.0).first?.camera?.id)
     }
     @Test fun cameraOnFollowingRoadSegmentIsNotDiscarded() {
         val shortRoad = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.002, -2.0)))
         val camera = Camera("next-segment", GeoPoint(53.005, -2.0), CameraType.SPEED, CameraSource.OSM)
         val match = RoadMatch(shortRoad, 0.0, 0.0, .9)
-        assertEquals(camera.id, CameraApproachDetector().evaluate(fix(53.001), match, listOf(camera), 28.0).first?.camera?.id)
+        assertNull(CameraApproachDetector().evaluate(fix(53.001), match, listOf(camera), 28.0).first)
+        assertEquals(camera.id, CameraApproachDetector().evaluate(fix(53.003), match, listOf(camera), 28.0).first?.camera?.id)
     }
     @Test fun upcomingLimitRequiresConnectedSameRoadAndKnownDifferentLimit() {
         val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
@@ -84,11 +86,31 @@ class CoreTest {
         assertNull(UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next.copy(tags = emptyMap()))))
         assertNull(UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next.copy(name = "Side street"))))
     }
+    @Test fun junctionPreviewsKnownLeftAndRightChangesWithoutChoosingAPath() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val junction = current.points.last()
+        val left = Road("way/left", "Side Lane", listOf(junction, GeoPoint(53.003, -2.003)),
+            mapOf("maxspeed" to "20 mph"))
+        val right = Road("way/right", "East Road", listOf(junction, GeoPoint(53.003, -1.997)),
+            mapOf("maxspeed" to "40 mph"))
+        val match = RoadMatch(current, 0.0, 0.0, .9)
+        val previews = TurnLimitDetector().detect(fix(53.0015), match, 30, listOf(current, left, right))
+        assertEquals(listOf(TurnDirection.LEFT, TurnDirection.RIGHT), previews.map { it.direction })
+        assertEquals(listOf(20, 40), previews.map { it.mph })
+        assertTrue(previews.all { it.distanceM in 150.0..180.0 })
+        assertEquals(30, SpeedLimits.mph(current.tags))
+        assertTrue(TurnLimitDetector().detect(fix(53.0015).copy(accuracyM = 40.0), match, 30,
+            listOf(current, left, right)).isEmpty())
+        assertEquals(listOf(TurnDirection.LEFT), TurnLimitDetector().detect(fix(53.0015), match, 30,
+            listOf(current, left, right.copy(tags = emptyMap()))).map { it.direction })
+        assertTrue(TurnLimitDetector().detect(fix(53.0015), match, 30,
+            listOf(current, left, left.copy(id = "way/ambiguous"), right)).none { it.direction == TurnDirection.LEFT })
+    }
     @Test fun redLightAndDuplicateAlerts() {
         val camera = Camera("red", GeoPoint(53.005, -2.0), CameraType.RED_LIGHT, CameraSource.USER)
         val detector = CameraApproachDetector(); val match = RoadMatch(road, 0.0, 0.0, .9)
-        assertEquals(CameraType.RED_LIGHT, detector.evaluate(fix(53.002), match, listOf(camera), 28.0).first?.camera?.type)
-        assertEquals("Approach active", detector.evaluate(fix(53.003), match, listOf(camera), 28.0).second.reason)
+        assertEquals(CameraType.RED_LIGHT, detector.evaluate(fix(53.003), match, listOf(camera), 28.0).first?.camera?.type)
+        assertEquals("Approach active", detector.evaluate(fix(53.0035), match, listOf(camera), 28.0).second.reason)
         detector.evaluate(fix(53.0051), match, listOf(camera), 28.0)
         assertEquals("Already passed", detector.evaluate(fix(53.0049), match, listOf(camera), 28.0).second.reason)
     }

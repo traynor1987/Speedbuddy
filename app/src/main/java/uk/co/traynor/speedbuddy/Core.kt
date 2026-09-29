@@ -117,6 +117,53 @@ class RoadLimitStabilizer {
 }
 
 data class UpcomingLimit(val mph: Int, val distanceM: Double, val national: Boolean)
+enum class TurnDirection { LEFT, RIGHT }
+data class TurnLimit(val mph: Int, val distanceM: Double, val direction: TurnDirection,
+    val national: Boolean)
+
+/** Shows conditional side-road limits, never an assumed route or a new current limit. */
+class TurnLimitDetector {
+    fun detect(fix: Fix, current: RoadMatch?, currentMph: Int?, roads: List<Road>): List<TurnLimit> {
+        val road = current?.road ?: return emptyList()
+        val heading = fix.bearing ?: return emptyList()
+        if (currentMph == null || fix.accuracyM > 25 || current.confidence < .35) return emptyList()
+        val junctions = road.points.filter { point ->
+            val distance = Geo.distance(fix.point, point)
+            distance in 25.0..CAMERA_ALERT_METERS &&
+                Geo.difference(heading, Geo.bearing(fix.point, point)) <= 35.0
+        }
+        val candidates = junctions.flatMap { junction ->
+            val distance = Geo.distance(fix.point, junction)
+            roads.asSequence().filter { it.id != road.id && it.points.size > 1 }
+                .mapNotNull { next ->
+                    val outgoing = when {
+                        Geo.distance(next.points.first(), junction) < 12.0 ->
+                            Geo.bearing(next.points[0], next.points[1])
+                        next.tags["oneway"] != "yes" && Geo.distance(next.points.last(), junction) < 12.0 ->
+                            Geo.bearing(next.points.last(), next.points[next.points.lastIndex - 1])
+                        else -> return@mapNotNull null
+                    }
+                    val turn = (outgoing - heading + 540.0) % 360.0 - 180.0
+                    val direction = when {
+                        turn in -140.0..-40.0 -> TurnDirection.LEFT
+                        turn in 40.0..140.0 -> TurnDirection.RIGHT
+                        else -> return@mapNotNull null
+                    }
+                    val mph = SpeedLimits.mph(next.tags) ?: return@mapNotNull null
+                    if (mph == currentMph) return@mapNotNull null
+                    TurnLimit(mph, distance, direction,
+                        next.tags["maxspeed"]?.startsWith("GB:nsl") == true ||
+                            next.tags["maxspeed:type"]?.startsWith("GB:nsl") == true)
+                }.toList()
+        }
+        return listOf(TurnDirection.LEFT, TurnDirection.RIGHT).mapNotNull { direction ->
+            candidates.filter { it.direction == direction }.singleOrNull()
+        }
+    }
+}
+
+/** 300 imperial yards, shared by alert onset and the junction preview window. */
+const val CAMERA_ALERT_METERS = 274.32
 
 /** Preview only a connected continuation of the current named road, never a nearby side road. */
 class UpcomingLimitDetector {
@@ -205,7 +252,7 @@ class CameraApproachDetector {
             if (reason == "Camera behind or off heading" && distance < 120 && camera.id in notified) passed += camera.id
             if (reason != "Approaching") { diagnostic = CameraDecision(camera, distance, false, reason, bearingDiff); continue }
             if (camera.id in notified) return Alert(camera, distance) to CameraDecision(camera, distance, true, "Approach active", bearingDiff)
-            if (distance <= 750) { notified += camera.id; return Alert(camera, distance) to CameraDecision(camera, distance, true, "New approach", bearingDiff) }
+            if (distance <= CAMERA_ALERT_METERS) { notified += camera.id; return Alert(camera, distance) to CameraDecision(camera, distance, true, "New approach", bearingDiff) }
             diagnostic = CameraDecision(camera, distance, false, "Beyond alert range", bearingDiff)
         }
         return null to diagnostic

@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,6 +75,20 @@ class MainActivity : ComponentActivity() {
             var editing by remember { mutableStateOf<Camera?>(null) }
             var message by remember { mutableStateOf("") }
             var importedInfo by remember { mutableStateOf(db.importedInfo()) }
+            LaunchedEffect(Unit) {
+                if (importedInfo == null) {
+                    runCatching { withContext(Dispatchers.IO) {
+                        val batch = assets.open("lufop-uk-2026-09.zip").use(LufopAscImporter::inspect)
+                        require(batch.cameras.size == 5_233) { "Bundled camera data incomplete" }
+                        synchronized(db) {
+                            if (db.importedInfo() == null) db.replaceImported(batch.cameras, "2026-09-01 · Lufop UK")
+                        }
+                    } }.onSuccess { importedInfo = db.importedInfo() }
+                        .onFailure { runCatching {
+                            db.recordImportFailure("Bundled camera setup failed: ${it.message ?: "Unknown error"}")
+                        } }
+                }
+            }
             val exportBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
                 if (uri != null) runCatching {
                     val content = OwnerBackupCodec.export(db.userCameras(), prefs, db.cameraCorrections(),
@@ -109,7 +124,7 @@ class MainActivity : ComponentActivity() {
                             val date = batch.archiveDateMs?.let {
                                 SimpleDateFormat("yyyy-MM-dd", Locale.UK).format(Date(it))
                             } ?: "Archive date unknown"
-                            db.replaceImported(batch.cameras, date)
+                            synchronized(db) { db.replaceImported(batch.cameras, date) }
                         } }.onSuccess {
                             importedInfo = db.importedInfo()
                             message = "Imported $it UK cameras. Existing personal cameras were kept."
@@ -148,7 +163,8 @@ class MainActivity : ComponentActivity() {
                             { if (moving) message = "Import cameras while parked."
                               else importLufop.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
                             { page = "map" }, { page = "mapData" })
-                        "map" -> CameraMapScreen(db, state.fix?.point, moving) { page = "drive" }
+                        "map" -> CameraMapScreen(db, state.fix?.point, moving,
+                            importedInfo?.importedAtMs ?: 0L, importedInfo?.count ?: 0) { page = "drive" }
                         "mapData" -> MapDataScreen(db, importedInfo, { page = "settings" },
                             { importLufop.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
                             { exportBackup.launch("SpeedBuddy-backup.json") },
@@ -248,14 +264,25 @@ class MainActivity : ComponentActivity() {
         Spacer(Modifier.height(28.dp))
         Text("CURRENT ROAD LIMIT", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)
         Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            LimitSign(state.limitMph, national, Modifier.size(158.dp))
-            state.upcoming?.let { next ->
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("UPCOMING", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(5.dp))
-                    LimitSign(next.mph, next.national, Modifier.size(64.dp))
-                    Text("${(next.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            LimitSign(state.limitMph, national, Modifier.size(if (state.turns.isEmpty()) 158.dp else 142.dp))
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                state.upcoming?.let { next ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("AHEAD", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        LimitSign(next.mph, next.national, Modifier.size(58.dp))
+                        Text("${(next.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
+                    }
+                }
+                state.turns.forEach { turn ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (turn.direction == TurnDirection.LEFT) "↰ IF LEFT" else "IF RIGHT ↱",
+                            color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        LimitSign(turn.mph, turn.national, Modifier.size(58.dp))
+                        Text("${(turn.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
+                    }
                 }
             }
         }
@@ -270,6 +297,18 @@ class MainActivity : ComponentActivity() {
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp),
             color = if (alert != null) Color(0xFF3B2B1A) else Panel, contentColor = Ink) {
             Row(Modifier.fillMaxWidth().heightIn(min = 82.dp).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (alert != null) {
+                    val symbol = when (alert.camera.type) {
+                        CameraType.SPEED -> "S"; CameraType.RED_LIGHT -> "R"
+                        CameraType.COMBINED -> "R+"; CameraType.AVERAGE -> "A"
+                    }
+                    Surface(Modifier.size(42.dp), shape = CircleShape, color = Warning, contentColor = Background) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(symbol, fontSize = 17.sp, fontWeight = FontWeight.Black)
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                }
                 Column(Modifier.weight(1f)) {
                     Text(if (alert == null) "CAMERA STATUS" else when (alert.camera.type) {
                         CameraType.SPEED -> "SPEED CAMERA AHEAD"
@@ -400,6 +439,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun MapDataScreen(db: CameraDb, imported: CameraDb.ImportedInfo?, back: () -> Unit,
     update: () -> Unit, export: () -> Unit, clearCache: () -> Unit) {
+    val uriHandler = LocalUriHandler.current
     var revision by remember { mutableIntStateOf(0) }
     var confirm by remember { mutableStateOf<String?>(null) }
     Page("Map & road data", back) {
@@ -412,8 +452,11 @@ class MainActivity : ComponentActivity() {
                     Text(if (imported == null) "No source file imported"
                         else "${imported.count} cameras · archive ${imported.sourceDate}\nImported ${SimpleDateFormat("d MMM yyyy", Locale.UK).format(Date(imported.importedAtMs))}",
                         color = Muted)
-                    Text("The free source updates monthly. Download the ZIP from Lufop, then import it here while parked.",
+                    Text("A UK camera snapshot is included. For the latest monthly file, download the ZIP from Lufop and import it while parked.",
                         color = Muted, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { uriHandler.openUri("https://lufop.net/en/asc-and-csv-speed-camera-files/") }) {
+                        Text("Lufop source · ODbL 1.0")
+                    }
                     db.importStatus()?.let { attempt ->
                         Text("Last attempted ${SimpleDateFormat("d MMM yyyy HH:mm", Locale.UK).format(Date(attempt.attemptedAtMs))}" +
                             (attempt.failure?.let { " · $it" } ?: " · successful"), color = Muted,
