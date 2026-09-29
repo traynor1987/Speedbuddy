@@ -128,6 +128,15 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
     fun aliasLinks(): List<Pair<String, String>> = readableDatabase.rawQuery("SELECT a,b FROM camera_aliases", null).use { c ->
         buildList { while (c.moveToNext()) add(c.getString(0) to c.getString(1)) }
     }
+    fun restoreHiddenCamera(id: String) {
+        val parent=mutableMapOf<String,String>()
+        fun root(value: String): String { var result=value;while(parent[result]!=null && parent[result]!=result) result=parent.getValue(result);return result }
+        aliasLinks().forEach { (a,b)->val ra=root(a);val rb=root(b);if(ra!=rb) parent[ra]=rb }
+        val group=root(id)
+        writableDatabase.beginTransaction()
+        try { suppressedCameraIds().filter { root(it)==group }.forEach(::unsuppressCamera);writableDatabase.setTransactionSuccessful() }
+        finally { writableDatabase.endTransaction() }
+    }
     fun hideEffectiveCamera(camera: Camera) {
         val database = writableDatabase
         database.beginTransaction()
@@ -168,13 +177,16 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         try {
             merge(backup.cameras); mergeCorrections(backup.corrections, backup.roadLimits)
             mergeSuppressed(backup.suppressedCameraIds); mergeRoadCorrections(backup.roadCorrections)
+            backup.aliases.forEach { (a,b)->database.insertOrThrow("camera_aliases",null,ContentValues().apply { put("a",a);put("b",b) }.also {
+                database.delete("camera_aliases","a=? AND b=?",arrayOf(a,b))
+            }) }
             OwnerBackupCodec.applySettings(backup.settings, prefs)
             database.setTransactionSuccessful()
         } finally { database.endTransaction() }
     }
     fun saveCameraCorrection(value: CameraCorrection) {
         require(value.source != CameraSource.USER && value.point.lat in -90.0..90.0 && value.point.lon in -180.0..180.0 &&
-            (value.direction == null || value.direction.isFinite() && value.direction in 0.0..359.0) &&
+            (value.direction == null || value.direction.isFinite() && value.direction >= 0.0 && value.direction < 360.0) &&
             (!value.bidirectional || value.direction != null) &&
             (value.enforcedMph == null || value.enforcedMph in 5..130))
         check(writableDatabase.insertWithOnConflict("camera_corrections", null, ContentValues().apply {
@@ -294,6 +306,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
                         if (target != null && target !in ownerIds) {
                             database.execSQL("UPDATE OR IGNORE camera_corrections SET id=? WHERE id=?", arrayOf(target, oldId))
                             database.execSQL("UPDATE OR IGNORE suppressed_cameras SET id=? WHERE id=?", arrayOf(target, oldId))
+                            database.execSQL("UPDATE OR IGNORE camera_aliases SET b=? WHERE b=?",arrayOf(target,oldId))
                             ownerIds += target
                         }
                     }
@@ -329,7 +342,11 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         }
     }
     override fun upsert(camera: Camera) {
-        require(camera.source == CameraSource.USER && (!camera.bidirectional || camera.direction != null))
+        require(camera.source == CameraSource.USER && camera.id.isNotBlank() && camera.id.length<=100 &&
+            camera.point.lat.isFinite() && camera.point.lat in -90.0..90.0 && camera.point.lon.isFinite() && camera.point.lon in -180.0..180.0 &&
+            (camera.direction==null || camera.direction.isFinite() && camera.direction>=0 && camera.direction<360) &&
+            (camera.enforcedMph==null || camera.enforcedMph in 5..130) && (camera.note?.length ?: 0)<=100 &&
+            (!camera.bidirectional || camera.direction != null))
         val values = ContentValues().apply {
             put("id", camera.id); put("lat", camera.point.lat); put("lon", camera.point.lon)
             put("type", camera.type.name); put("direction", camera.direction); put("mph", camera.enforcedMph)
@@ -367,7 +384,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
     }
 }
 
-data class OsmSnapshot(val center: GeoPoint, val fetchedAt: Long, val roads: List<Road>, val cameras: List<Camera>) {
+data class OsmSnapshot(val center: GeoPoint, val fetchedAt: Long, val roads: List<Road>, val cameras: List<Camera>, val averageSections: List<AverageSpeedSection> = emptyList()) {
     // Query covers a 1.5 km latitude/longitude box around the centre. Leave a safety margin.
     fun usable(point: GeoPoint, now: Long): Boolean = now - fetchedAt in 0..2_592_000_000L &&
         kotlin.math.abs(point.lat - center.lat) < 1150.0 / 111195.0 &&
@@ -425,6 +442,7 @@ class OsmDataSource(private val context: Context, private val cacheName: String 
             GeoPoint(saved.getString("lat", "0")!!.toDouble(), saved.getString("lon", "0")!!.toDouble())
         }
         val roads = mutableListOf<Road>(); val cameras = linkedMapOf<String, Camera>()
+        val sections=mutableListOf<AverageSpeedSection>()
         val elements = json.getJSONArray("elements")
         for (i in 0 until elements.length()) {
             val element = elements.getJSONObject(i); val kind = element.getString("type")
@@ -438,6 +456,7 @@ class OsmDataSource(private val context: Context, private val cacheName: String 
                 val id = "node/${element.getLong("id")}"; cameras[id] = Camera(id, GeoPoint(element.getDouble("lat"), element.getDouble("lon")), type,
                     CameraSource.OSM, null, SpeedLimits.mph(tagMap(tags)), updatedAtMs = fetched)
             } else if (kind == "relation") {
+                AverageSpeedSections.parse(element)?.let(sections::add)
                 val type = CameraCategories.fromOsm(tags.optString("enforcement"), "") ?: continue
                 val members = element.optJSONArray("members") ?: continue
                 val relationBearing = OsmEnforcementDirection.travel(members)
@@ -452,7 +471,7 @@ class OsmDataSource(private val context: Context, private val cacheName: String 
                 }
             }
         }
-        return OsmSnapshot(center, fetched, roads, cameras.values.toList())
+        return OsmSnapshot(center, fetched, roads, cameras.values.toList(),sections)
     }
     private fun tagMap(tags: JSONObject): Map<String, String> = tags.keys().asSequence().associateWith { tags.getString(it) }
 }

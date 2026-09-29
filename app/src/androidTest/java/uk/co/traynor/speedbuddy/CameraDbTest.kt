@@ -272,4 +272,78 @@ class CameraDbTest {
         assertEquals(items, parsed.roadCorrections)
         prefs.edit().clear().commit()
     }
+    @Test fun versionSevenMigrationKeepsOwnerDataAndAddsAliases() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val owner=CameraDb(context,"speedbuddy-tests.db").use { db->
+            val camera=db.create(GeoPoint(53.0,-2.0),CameraType.COMBINED,359.9,30,"Owner",true)
+            db.writableDatabase.execSQL("DROP TABLE camera_aliases")
+            db.writableDatabase.execSQL("DROP INDEX owner_location")
+            db.writableDatabase.version=7
+            camera
+        }
+        CameraDb(context,"speedbuddy-tests.db").use { db->
+            assertEquals(owner.id,db.userCameras().single().id)
+            assertTrue(db.userCameras().single().bidirectional)
+            assertTrue(db.aliasLinks().isEmpty())
+            assertEquals(8,db.readableDatabase.version)
+        }
+    }
+    @Test fun ownerRestoreRollsBackAllDatabaseLayersOnFailure() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val prefs=context.getSharedPreferences("rollback-test",0)
+        prefs.edit().putBoolean("cameraSound",true).commit()
+        CameraDb(context,"speedbuddy-tests.db").use { db->
+            val camera=Camera("rollback-owner",GeoPoint(53.0,-2.0),CameraType.SPEED,CameraSource.USER)
+            val invalid=CameraCorrection("invalid",CameraSource.USER,camera.point,camera.type,null,null)
+            val backup=OwnerBackup(listOf(camera),mapOf("cameraSound" to false),listOf(invalid))
+            assertThrows(IllegalArgumentException::class.java) { db.restoreOwnerData(backup,prefs) }
+            assertTrue(db.userCameras().isEmpty());assertTrue(db.cameraCorrections().isEmpty())
+            assertTrue(prefs.getBoolean("cameraSound",false))
+        }
+        prefs.edit().clear().commit()
+    }
+    @Test fun boundedOwnerQueryHandlesThousandsWithoutReturningDistantRecords() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        CameraDb(context,"speedbuddy-tests.db").use { db->
+            db.writableDatabase.beginTransaction()
+            try {
+                repeat(3000) { i->db.upsert(Camera("distant-$i",GeoPoint(55.0+i*.000001,-3.0),CameraType.SPEED,CameraSource.USER)) }
+                db.create(GeoPoint(53.0,-2.0),CameraType.SPEED)
+                db.writableDatabase.setTransactionSuccessful()
+            } finally { db.writableDatabase.endTransaction() }
+            assertEquals(3001,db.ownerCameraCount())
+            assertEquals(1,db.effectiveInBounds(52.99,-2.01,53.01,-1.99,emptyList()).size)
+        }
+    }
+    @Test fun linkedCameraHideAndRestoreAffectBothSourcesAfterReopen() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val lufop=Camera("lufop:linked",GeoPoint(53.0,-2.0),CameraType.SPEED,CameraSource.LUFOP)
+        val osm=lufop.copy(id="node/42",source=CameraSource.OSM)
+        CameraDb(context,"speedbuddy-tests.db").use { db->
+            db.replaceImported(listOf(lufop),"fixture")
+            val effective=db.effectiveInBounds(52.99,-2.01,53.01,-1.99,listOf(osm)).single()
+            db.hideEffectiveCamera(effective)
+        }
+        CameraDb(context,"speedbuddy-tests.db").use { db->
+            assertTrue(db.effectiveInBounds(52.99,-2.01,53.01,-1.99,listOf(osm)).isEmpty())
+            db.restoreHiddenCamera(osm.id)
+            assertEquals(1,db.effectiveInBounds(52.99,-2.01,53.01,-1.99,listOf(osm)).size)
+        }
+    }
+    @Test fun cachedGeometryAndCenterRemainTogetherAcrossRegionsAndReopen() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val name="isolated-road-cache.db";context.deleteDatabase(name)
+        try {
+            val now=System.currentTimeMillis()
+            RoadCache(context,name).use { cache->
+                cache.save(CachedRoadRegion(GeoPoint(53.0,-2.0),now,"first"))
+                cache.save(CachedRoadRegion(GeoPoint(54.0,-3.0),now+1,"second"))
+            }
+            RoadCache(context,name).use { cache->
+                assertEquals("first",cache.latest(GeoPoint(53.0,-2.0))?.json)
+                assertEquals(2,cache.diagnostics().first)
+            }
+        } finally { context.deleteDatabase(name) }
+    }
+
 }

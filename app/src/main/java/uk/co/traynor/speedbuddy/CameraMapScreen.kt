@@ -85,6 +85,8 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
     var mapBearing by rememberSaveable { mutableDoubleStateOf(0.0) }
     var drawnBearing by remember { mutableDoubleStateOf(-1.0) }
     val markers = remember { mutableMapOf<Long, Camera>() }
+    val clusters=remember { mutableMapOf<Long,GeoPoint>() }
+    val markerIcons=remember { mutableMapOf<String,org.maplibre.android.annotations.Icon>() }
     val roadMarkers = remember { mutableMapOf<Long, Road>() }
     var locationMarker by remember { mutableStateOf<org.maplibre.android.annotations.Marker?>(null) }
     BackHandler(enabled = pendingRemoval != null || pin != null || camera != null || road != null) {
@@ -132,7 +134,10 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                     if (pin != null) ready.cameraPosition.target?.let { pin = GeoPoint(it.latitude, it.longitude) }
                 }
                 ready.setOnMarkerClickListener { selected ->
-                    if (!currentMoving && markers[selected.id] != null) {
+                    if(clusters[selected.id]!=null) {
+                        val target=clusters.getValue(selected.id);following=false
+                        ready.cameraPosition=CameraPosition.Builder().target(LatLng(target.lat,target.lon)).zoom((ready.cameraPosition.zoom+2).coerceAtMost(17.0)).build()
+                    } else if (!currentMoving && markers[selected.id] != null) {
                         camera = markers[selected.id]; editingPosition = null; road = null; pin = null
                     } else if (!currentMoving && roadMarkers[selected.id] != null) {
                         road = roadMarkers[selected.id]; camera = null; editingPosition = null; pin = null
@@ -178,6 +183,9 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                 .title("Current location")
                 .icon(IconFactory.getInstance(context).fromBitmap(mapPin(android.graphics.Color.rgb(45, 157, 230), "•"))))
             else locationMarker?.position = position
+            val angle=fix.bearing?.takeIf { fix.speedMps?.let { it>2 }==true }?.let { ((it-ready.cameraPosition.bearing+360)%360).toInt()/15*15 }
+            val icon=markerIcons.getOrPut("location:$angle") { IconFactory.getInstance(context).fromBitmap(mapPin(android.graphics.Color.rgb(45,157,230),"•",angle?.toDouble())) }
+            locationMarker?.icon=icon
         }
     }
     LaunchedEffect(map, viewport) {
@@ -223,7 +231,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
             }
             MapDrawData(CameraClustering.group(effective, zoom), nearbyRoads, effective.size)
         }
-        ready.clear(); markers.clear(); roadMarkers.clear(); locationMarker = null
+        ready.clear(); markers.clear();clusters.clear(); roadMarkers.clear(); locationMarker = null
         drive.fix?.takeIf { SystemClock.elapsedRealtime() - it.elapsedMs <= 5_000 }?.let { fix ->
             locationMarker = ready.addMarker(MarkerOptions().position(LatLng(fix.point.lat, fix.point.lon))
                 .title("Current location")
@@ -231,7 +239,8 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
         }
         drawnCenter = point; drawnZoom = zoom; drawnBearing=ready.cameraPosition.bearing
         val icons = IconFactory.getInstance(context)
-        val iconCache = mutableMapOf<String, org.maplibre.android.annotations.Icon>()
+        val iconCache = markerIcons
+        if(iconCache.size>512) iconCache.clear()
         draw.groups.take(600).forEach { group ->
             val item = group.camera
             val label = if (group.count > 1) group.count.coerceAtMost(99).toString() +
@@ -256,7 +265,11 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                     else -> "Camera"
                 })
                 .icon(icon))
-            if (item != null) markers[marker.id] = item
+            if (item != null) markers[marker.id] = item else clusters[marker.id]=group.point
+        }
+        snapshot?.averageSections.orEmpty().forEach { section->
+            ready.addPolyline(PolylineOptions().addAll(section.points.map { LatLng(it.lat,it.lon) })
+                .color(android.graphics.Color.rgb(152,100,210)).width(6f))
         }
         draw.roads.forEach { (item, mph) ->
             ready.addPolyline(PolylineOptions().addAll(item.points.map { LatLng(it.lat, it.lon) })
@@ -410,7 +423,22 @@ private fun mapPin(color: Int, letter: String, direction: Double? = null, both: 
     paint.color = android.graphics.Color.BLACK; paint.textSize = if (letter.length > 2) 21f else 34f
     paint.isFakeBoldText = true
     paint.textAlign = Paint.Align.CENTER
-    canvas.drawText(letter, 36f, 48f, paint)
+    when(letter) {
+        "S", "A" -> {
+            paint.style=Paint.Style.STROKE;paint.strokeWidth=3f
+            canvas.drawRoundRect(18f,24f,54f,48f,4f,4f,paint);canvas.drawCircle(39f,36f,7f,paint)
+            paint.style=Paint.Style.FILL;canvas.drawRect(22f,20f,31f,25f,paint)
+            if(letter=="A") { paint.textSize=12f;canvas.drawText("AVG",36f,60f,paint) }
+        }
+        "R", "R+" -> {
+            paint.style=Paint.Style.STROKE;paint.strokeWidth=3f
+            canvas.drawRoundRect(26f,16f,46f,56f,5f,5f,paint)
+            paint.style=Paint.Style.FILL
+            for(y in listOf(24f,36f,48f)) canvas.drawCircle(36f,y,4f,paint)
+            if(letter=="R+") { paint.textSize=18f;canvas.drawText("+",53f,50f,paint) }
+        }
+        else -> canvas.drawText(letter,36f,48f,paint)
+    }
     if (direction != null) {
         canvas.save()
         canvas.rotate(direction.toFloat(), 36f, 36f)

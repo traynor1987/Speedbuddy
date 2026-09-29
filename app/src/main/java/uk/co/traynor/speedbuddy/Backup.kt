@@ -7,7 +7,8 @@ import org.json.JSONObject
 data class OwnerBackup(val cameras: List<Camera>, val settings: Map<String, Any>,
     val corrections: List<CameraCorrection> = emptyList(), val roadLimits: Map<String, Int> = emptyMap(),
     val suppressedCameraIds: Set<String> = emptySet(),
-    val roadCorrections: List<RoadLimitCorrection> = emptyList())
+    val roadCorrections: List<RoadLimitCorrection> = emptyList(),
+    val aliases: List<Pair<String,String>> = emptyList())
 
 /** A portable, versioned owner export. No route history or public OSM database is included. */
 object OwnerBackupCodec {
@@ -16,7 +17,7 @@ object OwnerBackupCodec {
     fun export(cameras: List<Camera>, prefs: SharedPreferences,
         corrections: List<CameraCorrection> = emptyList(), roadLimits: Map<String, Int> = emptyMap(),
         suppressedCameraIds: Set<String> = emptySet(),
-        roadCorrections: List<RoadLimitCorrection> = emptyList()): String {
+        roadCorrections: List<RoadLimitCorrection> = emptyList(), aliases: List<Pair<String,String>> = emptyList()): String {
         val records = JSONArray()
         cameras.filter { it.source == CameraSource.USER }.forEach { camera ->
             records.put(JSONObject().put("id", camera.id).put("lat", camera.point.lat).put("lon", camera.point.lon)
@@ -27,6 +28,7 @@ object OwnerBackupCodec {
         val settings = JSONObject()
         booleans.forEach { (key, default) -> settings.put(key, prefs.getBoolean(key, default)) }
         settings.put("tolerance", prefs.getInt("tolerance", 2))
+        settings.put("theme",prefs.getString("theme","system"))
         val overrides = JSONArray()
         corrections.forEach { item -> overrides.put(JSONObject().put("id", item.id).put("source", item.source.name)
             .put("lat", item.point.lat).put("lon", item.point.lon).put("type", item.type.name)
@@ -41,17 +43,18 @@ object OwnerBackupCodec {
         roadCorrections.forEach { item -> roadRecords.put(JSONObject().put("id", item.id)
             .put("kind", item.kind.name).put("mph", item.mph ?: JSONObject.NULL)
             .put("sourceValue", item.sourceValue ?: JSONObject.NULL).put("updated", item.updatedAtMs)) }
-        return JSONObject().put("format", "speed-buddy-owner-backup").put("version", 5)
+        return JSONObject().put("format", "speed-buddy-owner-backup").put("version", 6)
             .put("cameras", records).put("settings", settings)
             .put("cameraCorrections", overrides).put("roadLimits", limits)
             .put("suppressedCameraIds", JSONArray(suppressedCameraIds.sorted()))
-            .put("roadCorrections", roadRecords).toString(2)
+            .put("roadCorrections", roadRecords)
+            .put("cameraAliases",JSONArray(aliases.map { JSONArray(listOf(it.first,it.second)) })).toString(2)
     }
 
     fun parse(text: String): OwnerBackup {
         require(text.length <= 2_000_000) { "Backup is too large" }
         val root = JSONObject(text)
-        require(root.getString("format") == "speed-buddy-owner-backup" && root.getInt("version") in 1..5) {
+        require(root.getString("format") == "speed-buddy-owner-backup" && root.getInt("version") in 1..6) {
             "Unsupported Speed Buddy backup"
         }
         val records = root.getJSONArray("cameras")
@@ -65,7 +68,7 @@ object OwnerBackupCodec {
             val note = if (item.isNull("note")) null else item.getString("note")
             val both = item.optBoolean("bidirectional", false)
             require(id.isNotBlank() && id.length <= 100 && lat.isFinite() && lat in -90.0..90.0 &&
-                lon.isFinite() && lon in -180.0..180.0 && (direction == null || direction.isFinite() && direction in 0.0..359.0) &&
+                lon.isFinite() && lon in -180.0..180.0 && (direction == null || direction.isFinite() && direction >= 0.0 && direction < 360.0) &&
                 (mph == null || mph in 5..130) && (note == null || note.length <= 100) &&
                 (!both || direction != null)) { "Invalid camera record" }
             Camera(id, GeoPoint(lat, lon), CameraType.valueOf(item.getString("type")), CameraSource.USER,
@@ -78,6 +81,9 @@ object OwnerBackupCodec {
                 require(source.get(key) is Boolean) { "Invalid setting: $key" }
                 put(key, source.getBoolean(key))
             } }
+            if(source.has("theme")) {
+                val theme=source.getString("theme");require(theme in listOf("system","light","dark")) { "Invalid appearance" };put("theme",theme)
+            }
             if (source.has("tolerance")) {
                 val value = source.getInt("tolerance")
                 require(value in listOf(0, 1, 2, 3, 5)) { "Invalid warning threshold" }
@@ -101,7 +107,7 @@ object OwnerBackupCodec {
                 val both = item.optBoolean("bidirectional", false)
                 require(id.isNotBlank() && id.length <= 100 && sourceType != CameraSource.USER &&
                     lat.isFinite() && lat in -90.0..90.0 && lon.isFinite() && lon in -180.0..180.0 &&
-                    (direction == null || direction.isFinite() && direction in 0.0..359.0) &&
+                    (direction == null || direction.isFinite() && direction >= 0.0 && direction < 360.0) &&
                     (mph == null || mph in 5..130) && (sourcePoint == null || sourcePoint.lat.isFinite() &&
                         sourcePoint.lat in -90.0..90.0 && sourcePoint.lon.isFinite() && sourcePoint.lon in -180.0..180.0) &&
                     (note == null || note.length <= 100) && (!both || direction != null)) { "Invalid camera correction" }
@@ -134,7 +140,16 @@ object OwnerBackupCodec {
                 value
             }.also { require(it.map(RoadLimitCorrection::id).distinct().size == it.size) { "Duplicate road corrections" } }
         }
-        return OwnerBackup(cameras, settings, corrections, roadLimits, hidden, roadCorrections)
+        val aliases=if(root.getInt("version")<6) emptyList() else root.getJSONArray("cameraAliases").let { a ->
+            require(a.length()<=20_000) { "Too many camera links" }
+            (0 until a.length()).map { index ->
+                val pair=a.getJSONArray(index);require(pair.length()==2)
+                val first=pair.getString(0);val second=pair.getString(1)
+                require(first.startsWith("node/") && second.startsWith("lufop:") && first.length<=100 && second.length<=100) { "Invalid camera link" }
+                first to second
+            }.distinct()
+        }
+        return OwnerBackup(cameras, settings, corrections, roadLimits, hidden, roadCorrections,aliases)
     }
 
     fun applySettings(settings: Map<String, Any>, prefs: SharedPreferences) {
@@ -142,6 +157,7 @@ object OwnerBackupCodec {
         settings.forEach { (key, value) -> when (value) {
             is Boolean -> editor.putBoolean(key, value)
             is Int -> editor.putInt(key, value)
+            is String -> editor.putString(key,value)
         } }
         check(editor.commit()) { "Could not save settings" }
     }

@@ -28,8 +28,11 @@ object CameraLayers {
         suppressedIds: Set<String>, savedAliases: List<Pair<String, String>> = emptyList()): List<Camera> {
         val parents = mutableMapOf<String, String>()
         fun root(id: String): String {
-            val parent = parents[id] ?: return id
-            return if (parent == id) id else root(parent).also { parents[id] = it }
+            var result=id
+            while(parents[result]!=null && parents[result]!=result) result=parents.getValue(result)
+            var current=id
+            while(parents[current]!=null && parents[current]!=result) { val next=parents.getValue(current);parents[current]=result;current=next }
+            return result
         }
         (savedAliases + aliases(source)).forEach { (a, b) ->
             val ra = root(a); val rb = root(b)

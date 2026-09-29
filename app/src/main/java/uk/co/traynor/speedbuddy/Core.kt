@@ -269,7 +269,7 @@ class CameraApproachDetector {
     private var activeCameraId: String? = null
     private val lastSeen = mutableMapOf<String, Long>()
     private val encounterPoints = mutableMapOf<String, GeoPoint>()
-    fun evaluate(fix: Fix, road: RoadMatch?, cameras: List<Camera>, speedMph: Double?): Pair<Alert?, CameraDecision> {
+    fun evaluate(fix: Fix, road: RoadMatch?, cameras: List<Camera>, speedMph: Double?, roads: List<Road> = emptyList()): Pair<Alert?, CameraDecision> {
         // Leaving the encounter area rearms a camera. Merely stopping or GPS jitter cannot rearm it.
         encounterPoints.filter { Geo.distance(fix.point,it.value)>850 && fix.accuracyM<=35 }.keys.toList().forEach {
             notified.remove(it);passed.remove(it);previousDistance.remove(it);encounterPoints.remove(it)
@@ -297,8 +297,19 @@ class CameraApproachDetector {
         for ((camera, distance) in candidates) {
             val bearingDiff = Geo.difference(fix.bearing, Geo.bearing(fix.point, camera.point))
             val (roadDistance, _, roadFraction) = road?.let { Geo.projection(camera.point, it.road.points) } ?: Triple(0.0, null, 0.0)
+            val otherCarriageway=road?.takeIf { it.confidence>=.55 && roadDistance>12 && roadFraction in .02.. .98 }?.let { current ->
+                val heading=Geo.projection(camera.point,current.road.points).second
+                roads.any { other->
+                    if(other.id==current.road.id) false else {
+                        val alternative=Geo.projection(camera.point,other.points)
+                        val parallel=heading!=null && alternative.second!=null && minOf(Geo.difference(heading,alternative.second!!),Geo.difference(heading,(alternative.second!!+180)%360))<20
+                        alternative.first<=6 && alternative.first+8<roadDistance && alternative.third in .02.. .98 && parallel
+                    }
+                }
+            }==true
             val reason = when {
                 camera.id in passed -> "Already passed"
+                otherCarriageway -> "Different carriageway"
                 bearingDiff > 65 -> "Camera behind or off heading"
                 !CameraDirections.applies(camera.direction, fix.bearing, camera.bidirectional) -> "Opposite enforced direction"
                 // A camera beyond the mapped way's endpoint can be on the next segment of this road.

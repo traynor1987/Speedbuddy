@@ -32,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -104,12 +105,15 @@ class MainActivity : ComponentActivity() {
                 else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 onDispose { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
             }
-            var records by remember { mutableStateOf(db.userCameras()) }
+            var records by remember { mutableStateOf(emptyList<Camera>()) }
             var editing by rememberSaveable { mutableStateOf<Camera?>(null) }
             var roadEdit by rememberSaveable { mutableStateOf<Road?>(null) }
             var message by remember { mutableStateOf("") }
-            var importedInfo by remember { mutableStateOf(db.importedInfo()) }
+            var deleting by rememberSaveable { mutableStateOf<Camera?>(null) }
+            var importedInfo by remember { mutableStateOf<CameraDb.ImportedInfo?>(null) }
             LaunchedEffect(Unit) {
+                records=withContext(Dispatchers.IO) { db.userCameras() }
+                importedInfo=withContext(Dispatchers.IO) { db.importedInfo() }
                 if (importedInfo == null) {
                     runCatching { withContext(Dispatchers.IO) {
                         val batch = assets.open("lufop-uk-2026-09.zip").use(LufopAscImporter::inspect)
@@ -124,24 +128,23 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val exportBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-                if (uri != null) runCatching {
+                if (uri != null) lifecycleScope.launch { runCatching { withContext(Dispatchers.IO) {
                     val content = OwnerBackupCodec.export(db.userCameras(), prefs, db.cameraCorrections(),
-                        db.roadLimits(), db.suppressedCameraIds(), db.roadCorrections())
+                        db.roadLimits(), db.suppressedCameraIds(), db.roadCorrections(),db.aliasLinks())
                     contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(content) }
                         ?: error("Could not open backup file")
-                }.onSuccess { message = "Camera and settings backup saved." }
-                    .onFailure { message = "Backup failed: ${it.message ?: "Unknown error"}" }
+                } }.onSuccess { message = "Camera and settings backup saved." }
+                    .onFailure { message = "Backup failed: ${it.message ?: "Unknown error"}" } }
             }
             val importBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                if (uri != null) runCatching {
+                if (uri != null) lifecycleScope.launch { runCatching { withContext(Dispatchers.IO) {
                     val content = contentResolver.openInputStream(uri)?.use { BoundedIo.text(it,2_000_000) }
                         ?: error("Could not read backup file")
                     val backup = OwnerBackupCodec.parse(content)
                     db.restoreOwnerData(backup,prefs)
-                    records = db.userCameras()
-                    backup.cameras.size
-                }.onSuccess { message = "Restored $it cameras and settings. Existing cameras were kept." }
-                    .onFailure { message = "Restore failed: ${it.message ?: "Invalid backup"}" }
+                    backup.cameras.size to db.userCameras()
+                } }.onSuccess { (count, restored) -> records=restored; message = "Restored $count cameras and settings. Existing cameras were kept." }
+                    .onFailure { message = "Restore failed: ${it.message ?: "Invalid backup"}" } }
             }
             val importLufop = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 if (uri != null) {
@@ -214,16 +217,19 @@ class MainActivity : ComponentActivity() {
                         "diagnostics" -> DiagnosticsScreen(state) { page = "drive" }
                         "cameras" -> CameraList(records, moving, { page = "settings" },
                             { editing = it; page = "edit" },
-                            { db.delete(it.id); records = db.userCameras() })
-                        "edit" -> CameraEditor(editing, state.fix?.point, moving, { page = "cameras" }) { point, type, direction, mph, note ->
+                            { deleting=it })
+                        "edit" -> CameraEditor(editing, state.fix?.point, moving, { page = "cameras" }) { point, type, direction, mph, note, both ->
                             if (!moving) {
                                 val old = editing
-                                if (old == null) db.create(point, type, direction, mph, note)
-                                else db.upsert(old.copy(point = point, type = type, direction = direction, enforcedMph = mph, note = note))
+                                if (old == null) db.create(point, type, direction, mph, note,both)
+                                else db.upsert(old.copy(point = point, type = type, direction = direction, enforcedMph = mph, note = note,bidirectional=both))
                                 records = db.userCameras(); page = "cameras"
                             }
                         }
                     }
+                    deleting?.let { selected->AlertDialog(onDismissRequest={deleting=null},title={Text("Delete added camera?")},text={Text("This removes your saved camera from Map and driving alerts.")},confirmButton={TextButton(onClick={
+                        lifecycleScope.launch { withContext(Dispatchers.IO) { db.delete(selected.id) };records=withContext(Dispatchers.IO) { db.userCameras() } };deleting=null
+                    },enabled=!moving) { Text("Delete") }},dismissButton={TextButton(onClick={deleting=null}) { Text("Cancel") }}) }
                     roadEdit?.let { selected -> DriveRoadLimitEditor(selected, db.roadCorrection(selected.id),
                         close = { roadEdit = null }, save = { kind, mph ->
                             val live = DriveBus.state.value
@@ -264,7 +270,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun LimitSign(limit: Int?, national: Boolean, modifier: Modifier = Modifier) {
-    val circle = modifier.clip(CircleShape)
+    val circle = modifier.semantics { contentDescription=when { limit==null->"Unknown speed limit";national->"National speed limit";else->"Speed limit $limit miles per hour" } }.clip(CircleShape)
     when {
         limit == null -> BoxWithConstraints(circle.border(2.dp, Line, CircleShape).background(Panel),
             contentAlignment = Alignment.Center) {
@@ -335,7 +341,7 @@ class MainActivity : ComponentActivity() {
         dismissButton = { TextButton(onClick = close) { Text("Cancel") } })
 }
 
-@Composable private fun DriveScreen(state: DriveState, onStart: () -> Unit, onStop: () -> Unit,
+@Composable internal fun DriveScreen(state: DriveState, onStart: () -> Unit, onStop: () -> Unit,
     onSettings: () -> Unit, onMap: () -> Unit, onDiagnostic: () -> Unit,
     onAdd: () -> Unit, onQuick: (CameraType) -> Unit, onUnknownLimit: () -> Unit) {
     val speed = state.speedMph
@@ -379,7 +385,7 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.fillMaxWidth().height(mainSize + if (state.limitMph == null) 32.dp else 0.dp),
                 contentAlignment = Alignment.TopCenter) {
                 Box(Modifier.fillMaxWidth().height(mainSize), contentAlignment = Alignment.Center) {
-                    LimitSign(state.limitMph, national, Modifier.size(mainSize))
+                    LimitSign(state.limitMph, national, Modifier.size(mainSize).testTag("current-road-limit"))
                     state.turns.firstOrNull { it.direction == TurnDirection.LEFT }?.let {
                         TurnLimitPreview(it, Modifier.align(Alignment.CenterStart).width(72.dp))
                     }
@@ -414,6 +420,11 @@ class MainActivity : ComponentActivity() {
             else -> "${state.limitMph} mph"
         }, color = Muted, fontSize = 15.sp)
         if(compact) Spacer(Modifier.height(12.dp)) else Spacer(Modifier.weight(1f))
+        state.averageSection?.let { section->
+            Text("Average-speed section" + (section.section.mph?.let { " · $it mph" } ?: "") +
+                if(section.remainingM.isFinite()) " · ${(section.remainingM*1.093613).roundToInt()} yd remaining" else " · last known position",
+                color=Accent,style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(bottom=8.dp))
+        }
         val alert = state.alert
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp),
             color = if (alert != null) MaterialTheme.colorScheme.secondaryContainer else Panel, contentColor = Ink) {
@@ -572,68 +583,111 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun MapDataScreen(db: CameraDb, imported: CameraDb.ImportedInfo?, back: () -> Unit,
     update: () -> Unit, export: () -> Unit, clearCache: () -> Unit) {
-    val uriHandler = LocalUriHandler.current
+    val context=androidx.compose.ui.platform.LocalContext.current
+    val uriHandler=LocalUriHandler.current
+    val scope=rememberCoroutineScope()
+    val live by DriveBus.state.collectAsState()
+    val parked=!live.active || live.speedMph?.let { it<5 }==true
+    val prefs=remember { context.getSharedPreferences("settings",0) }
     var revision by remember { mutableIntStateOf(0) }
-    var confirm by remember { mutableStateOf<String?>(null) }
+    var confirm by rememberSaveable { mutableStateOf<String?>(null) }
+    var feedEditor by rememberSaveable { mutableStateOf(false) }
+    var feed by rememberSaveable { mutableStateOf(prefs.getString("cameraFeed","").orEmpty()) }
+    var notice by remember { mutableStateOf("") }
+    var information by remember { mutableStateOf(imported) }
+    var attempt by remember { mutableStateOf<CameraDb.ImportStatus?>(null) }
+    var owners by remember { mutableIntStateOf(0) }
+    var corrections by remember { mutableStateOf(emptyList<CameraCorrection>()) }
+    var hidden by remember { mutableStateOf(emptySet<String>()) }
+    var roads by remember { mutableStateOf(emptyList<RoadLimitCorrection>()) }
+    var cache by remember { mutableStateOf(0 to 0L) }
+    var shown by rememberSaveable { mutableIntStateOf(30) }
+    LaunchedEffect(revision) {
+        while(true) {
+            withContext(Dispatchers.IO) {
+                val info=db.importedInfo();val status=db.importStatus();val ownerCount=db.ownerCameraCount()
+                val edits=db.cameraCorrections();val suppressed=db.suppressedCameraIds();val roadEdits=db.roadCorrections()
+                val usage=RoadCache(context).use { it.diagnostics() }
+                withContext(Dispatchers.Main) {
+                    information=info;attempt=status;owners=ownerCount;corrections=edits;hidden=suppressed;roads=roadEdits;cache=usage
+                }
+            }
+            kotlinx.coroutines.delay(5000)
+        }
+    }
+    fun change(action: ()->Unit) { scope.launch {
+        runCatching { withContext(Dispatchers.IO) { action() } }.onSuccess { revision++ }
+            .onFailure { notice="Could not change saved data: ${it.message ?: "Try again"}" }
+    } }
     Page("Map & road data", back) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom=24.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
             SectionLabel("CAMERA DATABASE")
-            Surface(shape = RoundedCornerShape(18.dp), color = Panel) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Lufop UK camera file", color = Ink, fontWeight = FontWeight.Bold)
-                    Text(if (imported == null) "No source file imported"
-                        else "${imported.count} cameras · archive ${imported.sourceDate}\nImported ${SimpleDateFormat("d MMM yyyy", Locale.UK).format(Date(imported.importedAtMs))}",
-                        color = Muted)
-                    Text("A UK camera snapshot is included. For the latest monthly file, download the ZIP from Lufop and import it while parked.",
-                        color = Muted, style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = { uriHandler.openUri("https://lufop.net/en/asc-and-csv-speed-camera-files/") }) {
-                        Text("Lufop source · ODbL 1.0")
-                    }
-                    db.importStatus()?.let { attempt ->
-                        Text("Last attempted ${SimpleDateFormat("d MMM yyyy HH:mm", Locale.UK).format(Date(attempt.attemptedAtMs))}" +
-                            (attempt.failure?.let { " · $it" } ?: " · successful"), color = Muted,
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                    OutlinedButton(onClick = update) { Text("Update from ZIP") }
+            Surface(shape=RoundedCornerShape(18.dp),color=Panel) {
+                Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Text("Lufop UK camera file",color=Ink,fontWeight=FontWeight.Bold)
+                    Text(information?.let { "${it.count} cameras · archive ${it.sourceDate}\nLast successful update ${SimpleDateFormat("d MMM yyyy HH:mm",Locale.UK).format(Date(it.importedAtMs))}" } ?: "Preparing included camera data…",color=Muted)
+                    Text("The included snapshot works offline. Lufop's free monthly ZIP is downloaded from your account and imported while parked.",color=Muted,style=MaterialTheme.typography.bodySmall)
+                    TextButton(onClick={uriHandler.openUri("https://lufop.net/en/asc-and-csv-speed-camera-files/")}) { Text("Lufop source · ODbL 1.0") }
+                    attempt?.let { a->Text("Last attempted ${SimpleDateFormat("d MMM yyyy HH:mm",Locale.UK).format(Date(a.attemptedAtMs))}"+(a.failure?.let { " · $it" } ?: " · successful"),color=Muted,style=MaterialTheme.typography.bodySmall) }
+                    OutlinedButton(onClick=update,enabled=parked) { Text("Update from ZIP") }
+                    Text(if(prefs.getString("cameraFeed","").isNullOrBlank()) "Automatic updates: no feed configured" else "Automatic updates: daily on Wi-Fi, while driving is stopped",color=Muted,style=MaterialTheme.typography.bodySmall)
+                    if(!prefs.getString("cameraFeed","").isNullOrBlank()) OutlinedButton(onClick={CameraDatabaseUpdates.now(context);notice="Camera update queued. The previous database stays active until validation succeeds."},enabled=parked) { Text("Update now") }
+                    TextButton(onClick={feedEditor=true},enabled=parked) { Text("Configure automatic updates") }
                 }
             }
             SectionLabel("LOCAL DATA")
-            Surface(shape = RoundedCornerShape(18.dp), color = Panel) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val owners = remember(revision) { db.userCameras().size }
-                    val corrections = remember(revision) { db.cameraCorrections().size }
-                    val hidden = remember(revision) { db.suppressedCameraIds().size }
-                    val roads = remember(revision) { db.roadCorrections().size }
-                    Text("$owners added cameras · $corrections camera corrections · $hidden hidden cameras · $roads road corrections",
-                        color = Ink)
-                    Text("MapLibre · OpenFreeMap Liberty · OpenStreetMap road tags", color = Muted,
-                        style = MaterialTheme.typography.bodySmall)
-                    Text("Road geometry: cached when available · map tiles: cached automatically",
-                        color = Muted, style = MaterialTheme.typography.bodySmall)
-                    OutlinedButton(onClick = export) { Text("Export owner data") }
-                    TextButton(onClick = { confirm = "camera" }) { Text("Reset camera corrections") }
-                    TextButton(onClick = { confirm = "road" }) { Text("Reset road-limit corrections") }
-                    TextButton(onClick = { confirm = "cache" }) { Text("Clear map tile cache") }
+            Surface(shape=RoundedCornerShape(18.dp),color=Panel) {
+                Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Text("$owners added cameras · ${corrections.size} camera corrections · ${hidden.size} hidden source records · ${roads.size} road corrections",color=Ink)
+                    Text("MapLibre · OpenFreeMap Liberty · OpenStreetMap road tags",color=Muted,style=MaterialTheme.typography.bodySmall)
+                    Text("Saved road coverage: ${cache.first} visited areas · ${"%.1f".format(Locale.UK,cache.second/1_000_000.0)} MB. Refresh after 24 hours when online; available offline for up to 30 days. Map tiles cache separately.",color=Muted,style=MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick=export) { Text("Export owner data") }
+                    TextButton(onClick={confirm="camera"},enabled=parked) { Text("Reset camera corrections") }
+                    TextButton(onClick={confirm="road"},enabled=parked) { Text("Reset road-limit corrections") }
+                    TextButton(onClick={confirm="cache"},enabled=parked) { Text("Clear map tile cache") }
                 }
             }
-            Text("Camera alerts and saved corrections do not require map tiles. Source camera positions and road tags may be incomplete; follow posted signs.",
-                color = Muted, style = MaterialTheme.typography.bodySmall)
+            if(hidden.isNotEmpty() || corrections.isNotEmpty() || roads.isNotEmpty()) {
+                SectionLabel("MANAGE CORRECTIONS")
+                hidden.sorted().take(shown).forEach { id->
+                    Surface(shape=RoundedCornerShape(12.dp),color=Panel) { Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text("Hidden camera",color=Ink);Text(id,color=Muted,style=MaterialTheme.typography.bodySmall)
+                        TextButton(onClick={change { db.restoreHiddenCamera(id) }},enabled=parked) { Text("Restore linked camera") }
+                    } }
+                }
+                corrections.take(shown).forEach { correction->
+                    Surface(shape=RoundedCornerShape(12.dp),color=Panel) { Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text(correction.note ?: "Local camera correction",color=Ink)
+                        Text("${correction.source.name} · ${correction.id}",color=Muted,style=MaterialTheme.typography.bodySmall)
+                        TextButton(onClick={confirm="edit:${correction.id}"},enabled=parked) { Text("Remove correction") }
+                    } }
+                }
+                roads.take(shown).forEach { correction->
+                    Surface(shape=RoundedCornerShape(12.dp),color=Panel) { Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text("${correction.mph?.let { "$it mph" } ?: "Unknown"} · ${correction.id}",color=Ink)
+                        TextButton(onClick={confirm="roadEdit:${correction.id}"},enabled=parked) { Text("Remove correction") }
+                    } }
+                }
+                if(maxOf(hidden.size,corrections.size,roads.size)>shown) TextButton(onClick={shown+=30}) { Text("Show more") }
+            }
+            if(notice.isNotBlank()) Text(notice,color=Ink)
+            Text("Camera alerts and saved corrections work without map tiles. Road limits require saved road coverage. Follow posted signs.",color=Muted,style=MaterialTheme.typography.bodySmall)
         }
     }
-    confirm?.let { action -> AlertDialog(onDismissRequest = { confirm = null },
-        title = { Text(when (action) { "camera" -> "Reset camera corrections?"
-            "road" -> "Reset road limits?"; else -> "Clear map tiles?" }) },
-        text = { Text(when (action) {
-            "camera" -> "Local camera changes and hidden-source choices will be removed. Your added cameras and imported file stay."
-            "road" -> "Your local road limits will be removed."
-            else -> "The map may need a connection to display tiles again. Camera alerts remain available."
-        }) },
-        confirmButton = { TextButton(onClick = {
-            when (action) { "camera" -> db.resetCameraOverrides(); "road" -> db.resetRoadLimits(); else -> clearCache() }
-            revision++; confirm = null
-        }) { Text("Confirm") } },
-        dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } }) }
+    if(feedEditor) AlertDialog(onDismissRequest={feedEditor=false},title={Text("Automatic camera updates")},text={
+        Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            Text("Use a permitted HTTPS address for a Lufop-format ZIP. No account passwords. Leave blank to turn off automatic updates.")
+            OutlinedTextField(feed,{feed=it.take(1000)},label={Text("HTTPS camera ZIP address")},singleLine=true)
+        }
+    },confirmButton={TextButton(onClick={CameraDatabaseUpdates.configure(context,feed);feedEditor=false;revision++},enabled=parked && (feed.isBlank() || CameraDatabaseUpdates.validFeed(feed))) { Text("Save") }},dismissButton={TextButton(onClick={feedEditor=false}) { Text("Cancel") }})
+    confirm?.let { action->AlertDialog(onDismissRequest={confirm=null},title={Text(if(action=="cache") "Clear map tiles?" else "Remove local corrections?")},text={Text(if(action=="cache") "The map may need a connection to display tiles again. Camera alerts remain available." else "The selected local changes will be removed. Added cameras and imported source data stay.")},confirmButton={TextButton(onClick={
+        if(action=="cache") clearCache() else change {
+            when { action=="camera"->db.resetCameraOverrides();action=="road"->db.resetRoadLimits()
+                action.startsWith("edit:")->db.deleteCameraCorrection(action.removePrefix("edit:"))
+                action.startsWith("roadEdit:")->db.deleteRoadLimit(action.removePrefix("roadEdit:")) }
+        }
+        confirm=null
+    },enabled=parked) { Text("Remove") }},dismissButton={TextButton(onClick={confirm=null}) { Text("Cancel") }}) }
 }
 @Composable private fun DiagnosticRow(label: String, value: String?) {
     Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween,
@@ -716,15 +770,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 private fun Double.format() = String.format(Locale.UK, "%.6f", this)
-@Composable private fun CameraEditor(existing: Camera?, current: GeoPoint?, moving: Boolean, back: () -> Unit,
-    save: (GeoPoint, CameraType, Double?, Int?, String?) -> Unit) {
+@Composable internal fun CameraEditor(existing: Camera?, current: GeoPoint?, moving: Boolean, back: () -> Unit,
+    save: (GeoPoint, CameraType, Double?, Int?, String?,Boolean) -> Unit) {
     val initial = existing?.point ?: current
-    var latitude by remember(existing) { mutableStateOf(initial?.lat?.format() ?: "") }
-    var longitude by remember(existing) { mutableStateOf(initial?.lon?.format() ?: "") }
-    var type by remember(existing) { mutableStateOf(existing?.type ?: CameraType.SPEED) }
-    var mph by remember(existing) { mutableStateOf(existing?.enforcedMph?.toString() ?: "") }
-    var direction by remember(existing) { mutableStateOf(existing?.direction?.roundToInt()?.toString() ?: "") }
-    var note by remember(existing) { mutableStateOf(existing?.note ?: "") }
+    var latitude by rememberSaveable(existing?.id) { mutableStateOf(initial?.lat?.format() ?: "") }
+    var longitude by rememberSaveable(existing?.id) { mutableStateOf(initial?.lon?.format() ?: "") }
+    var type by rememberSaveable(existing?.id) { mutableStateOf(existing?.type ?: CameraType.SPEED) }
+    var mph by rememberSaveable(existing?.id) { mutableStateOf(existing?.enforcedMph?.toString() ?: "") }
+    var direction by rememberSaveable(existing?.id) { mutableStateOf(existing?.direction?.roundToInt()?.toString() ?: "") }
+    var note by rememberSaveable(existing?.id) { mutableStateOf(existing?.note ?: "") }
+    var both by rememberSaveable(existing?.id) { mutableStateOf(existing?.bidirectional==true) }
+    var advanced by rememberSaveable { mutableStateOf(false) }
     Page(if (existing == null) "Add camera" else "Edit camera", back) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
             Text("Edit only while parked. Save your current GPS position or correct the coordinates below.",
@@ -733,9 +789,9 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
             Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
                 Column(Modifier.padding(16.dp)) {
                     Text("Camera type", color = Ink, fontWeight = FontWeight.SemiBold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(type == CameraType.SPEED, { type = CameraType.SPEED }, label = { Text("Speed") })
-                        FilterChip(type == CameraType.RED_LIGHT, { type = CameraType.RED_LIGHT }, label = { Text("Red light") })
+                    Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        CameraType.entries.forEach { value->FilterChip(type==value,{type=value},label={Text(when(value) {
+                            CameraType.SPEED->"Speed";CameraType.RED_LIGHT->"Red light";CameraType.COMBINED->"Combined";CameraType.AVERAGE->"Average speed" })}) }
                     }
                     OutlinedTextField(latitude, { latitude = it.take(14) }, label = { Text("Latitude") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -753,7 +809,13 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
                     OutlinedTextField(mph, { mph = it.filter(Char::isDigit).take(3) }, label = { Text("Enforced speed · mph") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(direction, { direction = it.filter(Char::isDigit).take(3) }, label = { Text("Travel direction · 0–359°") },
+                    DirectionDial(direction.toDoubleOrNull()) { direction=it.toInt().toString() }
+                    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                        Text("Both travel directions",Modifier.weight(1f));Switch(both,{both=it},enabled=direction.toDoubleOrNull()!=null)
+                    }
+                    TextButton(onClick={direction="";both=false}) { Text("Direction unknown") }
+                    TextButton(onClick={advanced=!advanced}) { Text(if(advanced) "Hide bearing entry" else "Advanced bearing entry") }
+                    if(advanced) OutlinedTextField(direction, { direction = it.filter(Char::isDigit).take(3) }, label = { Text("Travel direction · 0–359°") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(note, { note = it.take(100) }, label = { Text("Note") }, modifier = Modifier.fillMaxWidth())
@@ -763,7 +825,7 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
         val corrected = latitude.toDoubleOrNull()?.let { lat -> longitude.toDoubleOrNull()?.let { lon ->
             if (lat in -90.0..90.0 && lon in -180.0..180.0) GeoPoint(lat, lon) else null
         } }
-        Button(onClick = { corrected?.let { save(it, type, direction.toDoubleOrNull(), mph.toIntOrNull(), note.ifBlank { null }) } },
+        Button(onClick = { corrected?.let { save(it, type, direction.toDoubleOrNull(), mph.toIntOrNull(), note.ifBlank { null },both) } },
             enabled = !moving && corrected != null && (direction.isEmpty() || direction.toIntOrNull()?.let { it in 0..359 } == true) &&
                 (mph.isEmpty() || mph.toIntOrNull()?.let { it in 5..130 } == true),
             modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp)) { Text("Save camera") }

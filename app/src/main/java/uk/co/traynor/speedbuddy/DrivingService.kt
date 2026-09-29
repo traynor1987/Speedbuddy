@@ -30,6 +30,7 @@ data class DriveState(
     val importedCameraCount: Int = 0, val importedNearbyCount: Int = 0,
     val turns: List<TurnLimit> = emptyList(),
     val alertPositionFresh: Boolean = true,
+    val averageSection: ActiveAverageSection? = null,
 )
 object DriveBus { private val mutable = MutableStateFlow(DriveState()); val state = mutable.asStateFlow(); fun set(state: DriveState) { mutable.value = state } }
 
@@ -49,8 +50,7 @@ class DrivingService : Service(), LocationListener {
     private var previousSnapshot: OsmSnapshot? = null
     private var fetching = false; private var lastAttempt = 0L
     private var mapStatus = "Cached map data"
-    private var lastAlertId: String? = null
-    private lateinit var cameraVoice: CameraVoice
+        private lateinit var cameraVoice: CameraVoice
     private var roadRevision = -1L
     private var indexedRoadRevision = -1L
     private var roadOverrides: Map<String, RoadLimitCorrection> = emptyMap()
@@ -66,6 +66,7 @@ class DrivingService : Service(), LocationListener {
     private var roadIndex: RoadSpatialIndex? = null
     private var correctedRoadCache: List<Road> = emptyList()
     private val limitVoiceGate = LimitChangeGate()
+    private val sectionTracker=AverageSectionTracker()
     private var tick: Job? = null
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
@@ -112,7 +113,7 @@ class DrivingService : Service(), LocationListener {
                 if (state.fix != null && SystemClock.elapsedRealtime() - state.fix.elapsedMs > 5000) {
                     speedFilter.current(SystemClock.elapsedRealtime()); matcher.reset(); limitStabilizer.reset()
                     DriveBus.set(state.copy(speedMph = null, limitMph = null, road = null, alertPositionFresh = false,
-                        upcoming = null, turns = emptyList(), status = "GPS signal lost"))
+                        upcoming = null, turns = emptyList(),averageSection=state.averageSection?.copy(remainingM=Double.NaN), status = "GPS signal lost"))
                 }
             } }
         }
@@ -170,7 +171,8 @@ class DrivingService : Service(), LocationListener {
             CameraType.RED_LIGHT -> settings.getBoolean("redCamera", true)
             CameraType.COMBINED -> settings.getBoolean("speedCamera", true) || settings.getBoolean("redCamera", true)
         } }
-        val (alert, decision) = detector.evaluate(fix, road, enabled, speed)
+        val (alert, decision) = detector.evaluate(fix, road, enabled, speed,correctedRoads.orEmpty())
+        val section=if(settings.getBoolean("speedCamera",true)) sectionTracker.update(fix,road,cached?.averageSections.orEmpty()) else null
         val newCamera = alert != null && decision.reason == "New approach"
         val changedLimit=limitVoiceGate.update(limit)
         val tolerance = settings.getInt("tolerance",2)
@@ -192,7 +194,7 @@ class DrivingService : Service(), LocationListener {
             when { speed == null -> "GPS speed unavailable"; cached == null -> "Road and public camera data unavailable"; wallNow-cached.fetchedAt>86_400_000 -> "Using saved road data · offline coverage"; limit == null -> "Road limit unknown"; else -> "" },
             settings.getBoolean("overspeed", false) && overspeed.isOver(speed, limit, tolerance), mapStatus,
             upcoming, publicCameras.size, userCount, importedCount,
-            cameras.count { it.source == CameraSource.LUFOP }, turns, fix.accuracyM<=35))
+            cameras.count { it.source == CameraSource.LUFOP }, turns, fix.accuracyM<=35,section))
         val target = OsmCoverage.refreshTarget(snapshot, fix, wallNow, lastAttempt)
         if (target != null && !fetching) {
             fetching = true; lastAttempt = wallNow; mapStatus = "Fetching road data"
