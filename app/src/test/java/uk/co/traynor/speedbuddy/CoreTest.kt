@@ -117,6 +117,24 @@ class CoreTest {
         detector.evaluate(fix(53.0051), match, listOf(camera), 28.0)
         assertEquals("Already passed", detector.evaluate(fix(53.0049), match, listOf(camera), 28.0).second.reason)
     }
+    @Test fun announcedCameraRemainsVisibleAtAStopUntilPassing() {
+        val camera = Camera("stop", GeoPoint(53.005, -2.0), CameraType.SPEED, CameraSource.USER)
+        val detector = CameraApproachDetector()
+        val match = RoadMatch(road, 0.0, 0.0, .9)
+        assertNull(detector.evaluate(fix(53.003), match, listOf(camera), 0.0).first)
+        assertEquals(camera.id, detector.evaluate(fix(53.003), match, listOf(camera), 28.0).first?.camera?.id)
+        val stopped = fix(53.0034).copy(speedMps = 0.0, bearing = null)
+        assertEquals(camera.id, detector.evaluate(stopped, match, listOf(camera), 0.0).first?.camera?.id)
+        assertEquals("Approach active", detector.evaluate(stopped, match, listOf(camera), 0.0).second.reason)
+        assertEquals(camera.id, detector.evaluate(fix(53.0036), match, listOf(camera), 27.0).first?.camera?.id)
+        assertNull(detector.evaluate(fix(53.0051), match, listOf(camera), 28.0).first)
+    }
+    @Test fun hiddenCameraDoesNotStayVisibleWhileStopped() {
+        val camera = Camera("hidden", GeoPoint(53.005, -2.0), CameraType.SPEED, CameraSource.USER)
+        val detector = CameraApproachDetector()
+        detector.evaluate(fix(53.003), null, listOf(camera), 28.0)
+        assertNull(detector.evaluate(fix(53.003).copy(speedMps = 0.0), null, emptyList(), 0.0).first)
+    }
     @Test fun overspeedGateRearms() {
         val gate = OverspeedGate()
         assertFalse(gate.update(30.0, 30, 2)); assertFalse(gate.update(33.0, null, 2))
