@@ -135,7 +135,7 @@ class MainActivity : ComponentActivity() {
             val exportBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
                 if (uri != null) lifecycleScope.launch { runCatching { withContext(Dispatchers.IO) {
                     val content = OwnerBackupCodec.export(db.userCameras(), prefs, db.cameraCorrections(),
-                        db.roadLimits(), db.suppressedCameraIds(), db.roadCorrections(),db.aliasLinks())
+                        db.roadLimits(), db.suppressedCameraIds(), db.roadCorrections(),db.aliasLinks(),JunctionStore(db).all())
                     contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(content) }
                         ?: error("Could not open backup file")
                 } }.onSuccess { message = "Camera and settings backup saved." }
@@ -499,6 +499,10 @@ class MainActivity : ComponentActivity() {
                     },
                         color = if (alert == null) Muted else Warning, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     Spacer(Modifier.height(4.dp))
+                    alert?.camera?.junction?.let { group ->
+                        Text("${group.name} · ${group.ways}-way junction", color=Ink,
+                            style=MaterialTheme.typography.labelMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
+                    }
                     Text(if (alert == null) state.status.ifBlank { "No active camera alert" } else if(state.alertPositionFresh) "Approaching" else "Last known approach · GPS unavailable",
                         color = Ink, fontSize = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
@@ -829,6 +833,7 @@ class MainActivity : ComponentActivity() {
                         CameraType.AVERAGE -> "Average-speed camera";CameraType.MOBILE -> "Mobile camera report" },
                         color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(4.dp))
+                    camera.junction?.let { Text("${it.name} · ${it.ways}-way junction", color = Muted, fontSize = 13.sp) }
                     Text("${camera.point.lat.format()}, ${camera.point.lon.format()}", color = Muted, fontSize = 13.sp)
                     Row {
                         TextButton(onClick = { edit(camera) }, enabled = !moving) { Text("Edit") }
@@ -843,6 +848,7 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
 @Composable internal fun CameraEditor(existing: Camera?, current: GeoPoint?, moving: Boolean, back: () -> Unit,
     save: (GeoPoint, CameraType, Double?, Int?, String?,Boolean) -> Unit) {
     val initial = existing?.point ?: current
+    val junction = existing?.junction
     var latitude by rememberSaveable(existing?.id) { mutableStateOf(initial?.lat?.format() ?: "") }
     var longitude by rememberSaveable(existing?.id) { mutableStateOf(initial?.lon?.format() ?: "") }
     var type by rememberSaveable(existing?.id) { mutableStateOf(existing?.type ?: CameraType.SPEED) }
@@ -856,11 +862,13 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
             Text("Edit only while parked. Save your current GPS position or correct the coordinates below.",
                 color = Muted, fontSize = 14.sp, lineHeight = 20.sp)
             Spacer(Modifier.height(16.dp))
+            junction?.let { Text("${it.name} · ${it.ways}-way junction. Set the enforced travel direction and keep the camera within 300 m of its centre.",
+                color = Muted, fontSize = 14.sp) }
             Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
                 Column(Modifier.padding(16.dp)) {
                     Text("Camera type", color = Ink, fontWeight = FontWeight.SemiBold)
                     Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        CameraType.entries.filter { it != CameraType.MOBILE }.forEach { value->FilterChip(type==value,{type=value},label={Text(when(value) {
+                        CameraType.entries.filter { it != CameraType.MOBILE && (junction == null || it != CameraType.AVERAGE) }.forEach { value->FilterChip(type==value,{type=value},label={Text(when(value) {
                             CameraType.SPEED->"Speed";CameraType.RED_LIGHT->"Red light";CameraType.COMBINED->"Combined";CameraType.AVERAGE->"Average speed";CameraType.MOBILE->"Mobile report" })}) }
                     }
                     OutlinedTextField(latitude, { latitude = it.take(14) }, label = { Text("Latitude") },
@@ -883,7 +891,7 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
                     Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                         Text("Both travel directions",Modifier.weight(1f));Switch(both,{both=it},enabled=direction.toDoubleOrNull()!=null)
                     }
-                    TextButton(onClick={direction="";both=false}) { Text("Direction unknown") }
+                    if(junction == null) TextButton(onClick={direction="";both=false}) { Text("Direction unknown") }
                     TextButton(onClick={advanced=!advanced}) { Text(if(advanced) "Hide bearing entry" else "Advanced bearing entry") }
                     if(advanced) OutlinedTextField(direction, { direction = it.filter(Char::isDigit).take(3) }, label = { Text("Travel direction · 0–359°") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -897,7 +905,8 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
         } }
         Button(onClick = { corrected?.let { save(it, type, direction.toDoubleOrNull(), mph.toIntOrNull(), note.ifBlank { null },both) } },
             enabled = !moving && corrected != null && (direction.isEmpty() || direction.toIntOrNull()?.let { it in 0..359 } == true) &&
-                (mph.isEmpty() || mph.toIntOrNull()?.let { it in 5..130 } == true),
+                (mph.isEmpty() || mph.toIntOrNull()?.let { it in 5..130 } == true) &&
+                (junction == null || (direction.isNotEmpty() && corrected != null && Geo.distance(corrected,junction.point)<=300)),
             modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp)) { Text("Save camera") }
         Spacer(Modifier.height(12.dp))
     }

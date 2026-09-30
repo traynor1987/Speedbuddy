@@ -22,7 +22,7 @@ class CameraDbTest {
             db.writableDatabase.execSQL("DROP TABLE mobile_reports");db.writableDatabase.version=8;camera
         }
         CameraDb(context,"speedbuddy-tests.db").use { db ->
-            assertEquals(9,db.readableDatabase.version);assertEquals(owner.id,db.userCameras().single().id)
+            assertEquals(10,db.readableDatabase.version);assertEquals(owner.id,db.userCameras().single().id)
             assertEquals("Correction",db.cameraCorrections().single().note)
             assertTrue("node/keep" in db.suppressedCameraIds());assertEquals(20,db.roadLimit("way/keep"))
             assertTrue(MobileReportStore(db).activeInBounds(52.0,-3.0,54.0,-1.0).isEmpty())
@@ -344,7 +344,7 @@ class CameraDbTest {
             assertEquals(owner.id,db.userCameras().single().id)
             assertTrue(db.userCameras().single().bidirectional)
             assertTrue(db.aliasLinks().isEmpty())
-            assertEquals(9,db.readableDatabase.version)
+            assertEquals(10,db.readableDatabase.version)
         }
     }
     @Test fun ownerRestoreRollsBackAllDatabaseLayersOnFailure() {

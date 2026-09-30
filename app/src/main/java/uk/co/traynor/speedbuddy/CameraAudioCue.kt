@@ -20,7 +20,7 @@ object CameraCueValidity {
     fun relevant(alert: Alert?, speed: Double?, fresh: Boolean, enabled: Boolean,
         id: String, speeding: Boolean, limit: Int?, tolerance: Int, nowMs: Long,
         currentLimit: Int? = limit): Boolean =
-        fresh && enabled && alert != null && alert.camera.id == id &&
+        fresh && enabled && alert != null && CameraEncounters.key(alert.camera) == id &&
             alert.distanceM <= CAMERA_ALERT_METERS + 35 &&
             (alert.camera.type != CameraType.MOBILE || alert.camera.mobileReport?.activeAt(nowMs) == true) &&
             (!speeding || (limit != null && currentLimit == limit && speed != null && speed.isFinite() && speed > limit + tolerance.coerceAtLeast(0)))

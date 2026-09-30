@@ -208,10 +208,10 @@ class DrivingService : Service(), LocationListener {
             val warning = alert?.warning
             if (alert != null && warning != null) {
                 cameraVoice.play(CameraAudioCue.from(alert.camera, warning, settings.getBoolean("cameraSound", true)),
-                    relevant = { cameraCueRelevant(alert.camera.id, false, warning.limitMph) },
+                    relevant = { cameraCueRelevant(CameraEncounters.key(alert.camera), false, warning.limitMph) },
                     voiceAllowed = { settings.getBoolean("cameraSound", true) &&
                         currentCameraLimit() == warning.limitMph &&
-                        (!warning.speeding || cameraCueRelevant(alert.camera.id, true, warning.limitMph)) })
+                        (!warning.speeding || cameraCueRelevant(CameraEncounters.key(alert.camera), true, warning.limitMph)) })
                 signal(false,settings.getBoolean("vibrate",true))
             }
             announceLimitIfReady(settings)

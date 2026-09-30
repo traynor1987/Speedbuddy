@@ -19,6 +19,7 @@ data class Camera(
     val aliasIds: Set<String> = emptySet(),
     val locallyCorrected: Boolean = false,
     val mobileReport: MobileReport? = null,
+    val junction: CameraJunction? = null,
 ) : java.io.Serializable
 data class RoadMatch(val road: Road, val distanceM: Double, val headingDifference: Double?, val confidence: Double)
 data class CameraDecision(val camera: Camera?, val distanceM: Double?, val accepted: Boolean, val reason: String, val bearingDifference: Double? = null)
@@ -278,17 +279,20 @@ class CameraApproachDetector {
     private var activeCameraId: String? = null
     private val lastSeen = mutableMapOf<String, Long>()
     private val encounterPoints = mutableMapOf<String, GeoPoint>()
+    private val encounterMembers = mutableMapOf<String, MutableSet<String>>()
     fun evaluate(fix: Fix, road: RoadMatch?, cameras: List<Camera>, speedMph: Double?, roads: List<Road> = emptyList(), nowMs: Long = System.currentTimeMillis(), matchedRoadLimitMph: Int? = null, toleranceMph: Int = 2): Pair<Alert?, CameraDecision> {
         val activeCameras = cameras.filter { it.type != CameraType.MOBILE || it.mobileReport?.activeAt(nowMs) == true }
         // Leaving the encounter area rearms a camera. Merely stopping or GPS jitter cannot rearm it.
         encounterPoints.filter { Geo.distance(fix.point,it.value)>850 && fix.accuracyM<=35 }.keys.toList().forEach {
-            notified.remove(it);passed.remove(it);previousDistance.remove(it);encounterPoints.remove(it)
-            closeNotified.remove(it); speedingNotified.remove(it)
+            clearEncounter(it)
         }
-        activeCameras.forEach { camera -> lastSeen[camera.id] = fix.elapsedMs }
+        activeCameras.forEach { camera ->
+            val key = CameraEncounters.key(camera)
+            lastSeen[key] = fix.elapsedMs
+            encounterMembers.getOrPut(key) { mutableSetOf() }.add(camera.id)
+        }
         lastSeen.filterValues { fix.elapsedMs - it > 600_000 }.keys.toList().forEach {
-            lastSeen.remove(it); notified.remove(it); passed.remove(it); previousDistance.remove(it); encounterPoints.remove(it)
-            closeNotified.remove(it); speedingNotified.remove(it)
+            clearEncounter(it)
         }
         if (fix.accuracyM > 35) {
             val active = activeCameras.firstOrNull { it.id == activeCameraId && it.id !in passed }
@@ -307,6 +311,7 @@ class CameraApproachDetector {
         val candidates = activeCameras.map { it to Geo.distance(fix.point, it.point) }.filter { it.second < 900 }.sortedBy { it.second }
         var diagnostic = CameraDecision(null, null, false, "No nearby camera")
         for ((camera, distance) in candidates) {
+            val encounter = CameraEncounters.key(camera)
             val bearingDiff = Geo.difference(fix.bearing, Geo.bearing(fix.point, camera.point))
             val (roadDistance, _, roadFraction) = road?.let { Geo.projection(camera.point, it.road.points) } ?: Triple(0.0, null, 0.0)
             val otherCarriageway=road?.takeIf { it.confidence>=.55 && roadDistance>12 && roadFraction in .02.. .98 }?.let { current ->
@@ -331,15 +336,15 @@ class CameraApproachDetector {
                 else -> "Approaching"
             }
             previousDistance[camera.id] = distance
-            if (reason == "Camera behind or off heading" && distance < 120 && camera.id in notified) passed += camera.id
+            if (reason == "Camera behind or off heading" && distance < 120 && encounter in notified) passed += camera.id
             if (reason != "Approaching") { diagnostic = CameraDecision(camera, distance, false, reason, bearingDiff); continue }
-            if (camera.id in notified) {
+            if (encounter in notified) {
                 activeCameraId = camera.id
                 return Alert(camera, distance, warning(camera, distance, false, speedMph, road, matchedRoadLimitMph, toleranceMph)) to
                     CameraDecision(camera, distance, true, "Approach active", bearingDiff)
             }
             if (distance <= CAMERA_ALERT_METERS) {
-                notified += camera.id; activeCameraId = camera.id;encounterPoints[camera.id]=camera.point
+                notified += encounter; activeCameraId = camera.id;encounterPoints[encounter]=camera.junction?.point ?: camera.point
                 return Alert(camera, distance, warning(camera, distance, true, speedMph, road, matchedRoadLimitMph, toleranceMph)) to
                     CameraDecision(camera, distance, true, "New approach", bearingDiff)
             }
@@ -354,14 +359,22 @@ class CameraApproachDetector {
         road: RoadMatch?, roadLimit: Int?, tolerance: Int): CameraWarning? {
         if (distance > CAMERA_ALERT_METERS) return null
         val limit = CameraLimits.resolve(camera, road, roadLimit)
-        val close = distance <= CAMERA_CLOSE_METERS && closeNotified.add(camera.id)
+        val key = CameraEncounters.key(camera)
+        val close = distance <= CAMERA_CLOSE_METERS && closeNotified.add(key)
         val speeding = speed.isFinite() && limit != null && speed > limit + tolerance.coerceAtLeast(0) &&
-            speedingNotified.add(camera.id)
+            speedingNotified.add(key)
         return if (newApproach || close || speeding) CameraWarning(newApproach, close, speeding, limit) else null
+    }
+    private fun clearEncounter(key: String) {
+        notified.remove(key); closeNotified.remove(key); speedingNotified.remove(key)
+        lastSeen.remove(key); encounterPoints.remove(key)
+        val members = encounterMembers.remove(key).orEmpty()
+        members.forEach { passed.remove(it); previousDistance.remove(it) }
+        if (activeCameraId in members) activeCameraId = null
     }
     fun reset() {
         notified.clear(); closeNotified.clear(); speedingNotified.clear(); passed.clear()
-        previousDistance.clear(); activeCameraId = null; lastSeen.clear(); encounterPoints.clear()
+        previousDistance.clear(); activeCameraId = null; lastSeen.clear(); encounterPoints.clear(); encounterMembers.clear()
     }
 }
 

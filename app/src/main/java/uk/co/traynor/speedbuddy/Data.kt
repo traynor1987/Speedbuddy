@@ -33,7 +33,7 @@ data class CameraCorrection(val id: String, val source: CameraSource, val point:
             bidirectional = bidirectional,locallyCorrected=true) else camera
 }
 
-class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOpenHelper(context, databaseName, null, 9), CameraRepository {
+class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOpenHelper(context, databaseName, null, 10), CameraRepository {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE cameras(id TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, mph INTEGER, note TEXT, updated INTEGER NOT NULL, bidirectional INTEGER NOT NULL DEFAULT 0)")
         createImported(db)
@@ -42,6 +42,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         createImportStatus(db)
         createAliases(db)
         MobileReportStore.createTable(db)
+        JunctionStore.createTables(db)
         db.execSQL("CREATE INDEX owner_location ON cameras(lat,lon)")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -69,6 +70,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
             db.execSQL("CREATE INDEX IF NOT EXISTS owner_location ON cameras(lat,lon)")
         }
         if (oldVersion < 9 && newVersion >= 9) MobileReportStore.createTable(db)
+        if (oldVersion < 10 && newVersion >= 10) JunctionStore.createTables(db)
     }
     private fun createAliases(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE camera_aliases(a TEXT NOT NULL,b TEXT NOT NULL,PRIMARY KEY(a,b))")
@@ -170,7 +172,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
                 if(cursor.isNull(4)) null else cursor.getDouble(4),if(cursor.isNull(5)) null else cursor.getInt(5),
                 cursor.getString(6),cursor.getLong(7),cursor.getInt(8)!=0)) }
         }
-        return CameraLayers.merge(raw + moved, owner, corrections, suppressedCameraIds(), aliasLinks()).filter {
+        return CameraLayers.merge(raw + moved, JunctionStore(this).attach(owner), corrections, suppressedCameraIds(), aliasLinks()).filter {
             it.point.lat in south..north && it.point.lon in west..east
         } + MobileReportStore(this).activeInBounds(south,west,north,east).map(MobileReport::asCamera)
     }
@@ -178,6 +180,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         val database = writableDatabase
         database.beginTransaction()
         try {
+            backup.junctions.forEach { JunctionStore(this).save(it) }
             merge(backup.cameras); mergeCorrections(backup.corrections, backup.roadLimits)
             mergeSuppressed(backup.suppressedCameraIds); mergeRoadCorrections(backup.roadCorrections)
             backup.aliases.forEach { (a,b)->database.insertOrThrow("camera_aliases",null,ContentValues().apply { put("a",a);put("b",b) }.also {
@@ -348,7 +351,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
                 if (cursor.isNull(4)) null else cursor.getDouble(4), if (cursor.isNull(5)) null else cursor.getInt(5),
                 cursor.getString(6), cursor.getLong(7), cursor.getInt(8) != 0))
         }
-    }
+    }.let { JunctionStore(this).attach(it) }
     override fun upsert(camera: Camera) {
         require(camera.type != CameraType.MOBILE && camera.mobileReport == null && camera.source == CameraSource.USER && camera.id.isNotBlank() && camera.id.length<=100 &&
             camera.point.lat.isFinite() && camera.point.lat in -90.0..90.0 && camera.point.lon.isFinite() && camera.point.lon in -180.0..180.0 &&
@@ -361,10 +364,23 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
             put("note", camera.note); put("updated", System.currentTimeMillis())
             put("bidirectional", if (camera.bidirectional) 1 else 0)
         }
-        check(writableDatabase.insertWithOnConflict("cameras", null, values, SQLiteDatabase.CONFLICT_REPLACE) >= 0) { "Could not save camera" }
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            check(database.insertWithOnConflict("cameras", null, values, SQLiteDatabase.CONFLICT_REPLACE) >= 0) { "Could not save camera" }
+            JunctionStore(this).setMembership(camera)
+            database.setTransactionSuccessful()
+        } finally { database.endTransaction() }
         OwnerDataRevision.cameras++
     }
-    override fun delete(id: String) { writableDatabase.delete("cameras", "id=?", arrayOf(id)); OwnerDataRevision.cameras++ }
+    override fun delete(id: String) {
+        val database = writableDatabase; database.beginTransaction()
+        try {
+            database.delete("junction_members", "camera_id=?", arrayOf(id))
+            database.delete("cameras", "id=?", arrayOf(id)); database.setTransactionSuccessful()
+        } finally { database.endTransaction() }
+        OwnerDataRevision.cameras++
+    }
     fun merge(cameras: List<Camera>) {
         val database = writableDatabase
         database.beginTransaction()
@@ -379,15 +395,16 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
                 }
                 if (database.insertWithOnConflict("cameras", null, values, SQLiteDatabase.CONFLICT_REPLACE) < 0)
                     error("Could not restore camera")
+                JunctionStore(this).setMembership(camera)
             }
             database.setTransactionSuccessful()
         } finally { database.endTransaction() }
         OwnerDataRevision.cameras++
     }
     fun create(point: GeoPoint, type: CameraType, direction: Double? = null, mph: Int? = null,
-        note: String? = null, bidirectional: Boolean = false): Camera {
+        note: String? = null, bidirectional: Boolean = false, junction: CameraJunction? = null): Camera {
         val camera = Camera(UUID.randomUUID().toString(), point, type, CameraSource.USER,
-            direction, mph, note, bidirectional = bidirectional)
+            direction, mph, note, bidirectional = bidirectional, junction = junction)
         upsert(camera); return camera
     }
 }

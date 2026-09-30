@@ -13,7 +13,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
 
 @Composable fun CameraDetailSheet(camera: Camera, sourcePoint: GeoPoint?, close: ()->Unit,
-    edit: ()->Unit, remove: ((Camera)->Unit)?) {
+    edit: ()->Unit, remove: ((Camera)->Unit)?, openJunction: ((CameraJunction)->Unit)? = null) {
     var advanced by rememberSaveable(camera.id) { mutableStateOf(false) }
     Surface(Modifier.fillMaxWidth().padding(12.dp),shape=RoundedCornerShape(18.dp)) {
         Column(Modifier.heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.65f)
@@ -23,6 +23,10 @@ import androidx.compose.ui.text.font.FontWeight
             Text(if(camera.source==CameraSource.USER) "USER ADDED · unverified" else "${camera.source.name} · ${if(camera.locallyCorrected) "local correction · unverified" else "source record · not locally verified"}",
                 color=MaterialTheme.colorScheme.onSurfaceVariant)
             Text(camera.enforcedMph?.let { "Speed limit $it mph" } ?: "Camera speed limit unknown")
+            camera.junction?.let { group ->
+                Text("${group.name} · ${group.ways}-way junction",fontWeight=FontWeight.SemiBold)
+                if(openJunction!=null) TextButton(onClick={openJunction(group)}) { Text("View junction") }
+            }
             Text(camera.direction?.let { "Enforced travel direction ${it.toInt()}°${if(camera.bidirectional) " and opposite direction" else ""}" } ?: "Enforced direction unknown")
             camera.note?.let { Text(it) }
             if(camera.updatedAtMs>0) Text("Saved/refreshed ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(camera.updatedAtMs))}",style=MaterialTheme.typography.bodySmall)

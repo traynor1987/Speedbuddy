@@ -8,7 +8,8 @@ data class OwnerBackup(val cameras: List<Camera>, val settings: Map<String, Any>
     val corrections: List<CameraCorrection> = emptyList(), val roadLimits: Map<String, Int> = emptyMap(),
     val suppressedCameraIds: Set<String> = emptySet(),
     val roadCorrections: List<RoadLimitCorrection> = emptyList(),
-    val aliases: List<Pair<String,String>> = emptyList())
+    val aliases: List<Pair<String,String>> = emptyList(),
+    val junctions: List<CameraJunction> = emptyList())
 
 /** A portable, versioned owner export. No route history or public OSM database is included. */
 object OwnerBackupCodec {
@@ -17,13 +18,17 @@ object OwnerBackupCodec {
     fun export(cameras: List<Camera>, prefs: SharedPreferences,
         corrections: List<CameraCorrection> = emptyList(), roadLimits: Map<String, Int> = emptyMap(),
         suppressedCameraIds: Set<String> = emptySet(),
-        roadCorrections: List<RoadLimitCorrection> = emptyList(), aliases: List<Pair<String,String>> = emptyList()): String {
+        roadCorrections: List<RoadLimitCorrection> = emptyList(), aliases: List<Pair<String,String>> = emptyList(),
+        junctions: List<CameraJunction> = emptyList()): String {
+        val groups = (junctions + cameras.mapNotNull { it.junction }).distinctBy { it.id }
+        groups.forEach(JunctionRules::validate)
         val records = JSONArray()
         cameras.filter { it.source == CameraSource.USER && it.type != CameraType.MOBILE }.forEach { camera ->
             records.put(JSONObject().put("id", camera.id).put("lat", camera.point.lat).put("lon", camera.point.lon)
                 .put("type", camera.type.name).put("direction", camera.direction ?: JSONObject.NULL)
                 .put("mph", camera.enforcedMph ?: JSONObject.NULL).put("note", camera.note ?: JSONObject.NULL)
-                .put("updated", camera.updatedAtMs).put("bidirectional", camera.bidirectional))
+                .put("updated", camera.updatedAtMs).put("bidirectional", camera.bidirectional)
+                .put("junctionId", camera.junction?.id ?: JSONObject.NULL))
         }
         val settings = JSONObject()
         booleans.forEach { (key, default) -> settings.put(key, prefs.getBoolean(key, default)) }
@@ -44,20 +49,31 @@ object OwnerBackupCodec {
         roadCorrections.forEach { item -> roadRecords.put(JSONObject().put("id", item.id)
             .put("kind", item.kind.name).put("mph", item.mph ?: JSONObject.NULL)
             .put("sourceValue", item.sourceValue ?: JSONObject.NULL).put("updated", item.updatedAtMs)) }
-        return JSONObject().put("format", "speed-buddy-owner-backup").put("version", 7)
+        return JSONObject().put("format", "speed-buddy-owner-backup").put("version", 8)
             .put("cameras", records).put("settings", settings)
             .put("cameraCorrections", overrides).put("roadLimits", limits)
             .put("suppressedCameraIds", JSONArray(suppressedCameraIds.sorted()))
             .put("roadCorrections", roadRecords)
-            .put("cameraAliases",JSONArray(aliases.map { JSONArray(listOf(it.first,it.second)) })).toString(2)
+            .put("cameraAliases",JSONArray(aliases.map { JSONArray(listOf(it.first,it.second)) }))
+            .put("junctions", JSONArray(groups.map { group -> JSONObject().put("id", group.id).put("name", group.name)
+                .put("lat", group.point.lat).put("lon", group.point.lon).put("ways", group.ways) })).toString(2)
     }
 
     fun parse(text: String): OwnerBackup {
         require(text.length <= 2_000_000) { "Backup is too large" }
         val root = JSONObject(text)
-        require(root.getString("format") == "speed-buddy-owner-backup" && root.getInt("version") in 1..7) {
+        require(root.getString("format") == "speed-buddy-owner-backup" && root.getInt("version") in 1..8) {
             "Unsupported Speed Buddy backup"
         }
+        val junctions = if (root.getInt("version") < 8) emptyList() else root.getJSONArray("junctions").let { array ->
+            require(array.length() <= 500) { "Too many junctions" }
+            (0 until array.length()).map { index ->
+                val item = array.getJSONObject(index)
+                CameraJunction(item.getString("id"), item.getString("name"),
+                    GeoPoint(item.getDouble("lat"), item.getDouble("lon")), item.getInt("ways")).also(JunctionRules::validate)
+            }.also { require(it.map { group -> group.id }.distinct().size == it.size) { "Duplicate junction IDs" } }
+        }
+        val groups = junctions.associateBy { it.id }
         val records = root.getJSONArray("cameras")
         require(records.length() <= 10_000) { "Too many camera records" }
         val cameras = (0 until records.length()).map { index ->
@@ -72,8 +88,12 @@ object OwnerBackupCodec {
                 lon.isFinite() && lon in -180.0..180.0 && (direction == null || direction.isFinite() && direction >= 0.0 && direction < 360.0) &&
                 (mph == null || mph in 5..130) && (note == null || note.length <= 100) &&
                 (!both || direction != null)) { "Invalid camera record" }
+            val group = if (root.getInt("version") < 8 || item.isNull("junctionId")) null else
+                groups[item.getString("junctionId")] ?: error("Camera refers to an unknown junction")
             Camera(id, GeoPoint(lat, lon), CameraType.valueOf(item.getString("type")).also { require(it != CameraType.MOBILE) { "Temporary reports are not permanent cameras" } }, CameraSource.USER,
-                direction, mph, note, item.getLong("updated"), both)
+                direction, mph, note, item.getLong("updated"), both, junction = group).also {
+                    if (group != null) JunctionRules.validateMember(it, group)
+                }
         }
         require(cameras.map { it.id }.distinct().size == cameras.size) { "Duplicate camera IDs" }
         val source = root.getJSONObject("settings")
@@ -153,7 +173,7 @@ object OwnerBackupCodec {
                 first to second
             }.distinct()
         }
-        return OwnerBackup(cameras, settings, corrections, roadLimits, hidden, roadCorrections,aliases)
+        return OwnerBackup(cameras, settings, corrections, roadLimits, hidden, roadCorrections,aliases,junctions)
     }
 
     fun applySettings(settings: Map<String, Any>, prefs: SharedPreferences) {
