@@ -13,13 +13,13 @@ data class OwnerBackup(val cameras: List<Camera>, val settings: Map<String, Any>
 /** A portable, versioned owner export. No route history or public OSM database is included. */
 object OwnerBackupCodec {
     private val booleans = mapOf("overspeed" to false, "speedCamera" to true, "redCamera" to true,
-        "cameraSound" to true, "vibrate" to true, "limitVoice" to true, "keepAwake" to true)
+        "cameraSound" to true, "vibrate" to true, "limitVoice" to true, "keepAwake" to true, "fixedCamera" to true, "mobileCamera" to true)
     fun export(cameras: List<Camera>, prefs: SharedPreferences,
         corrections: List<CameraCorrection> = emptyList(), roadLimits: Map<String, Int> = emptyMap(),
         suppressedCameraIds: Set<String> = emptySet(),
         roadCorrections: List<RoadLimitCorrection> = emptyList(), aliases: List<Pair<String,String>> = emptyList()): String {
         val records = JSONArray()
-        cameras.filter { it.source == CameraSource.USER }.forEach { camera ->
+        cameras.filter { it.source == CameraSource.USER && it.type != CameraType.MOBILE }.forEach { camera ->
             records.put(JSONObject().put("id", camera.id).put("lat", camera.point.lat).put("lon", camera.point.lon)
                 .put("type", camera.type.name).put("direction", camera.direction ?: JSONObject.NULL)
                 .put("mph", camera.enforcedMph ?: JSONObject.NULL).put("note", camera.note ?: JSONObject.NULL)
@@ -27,6 +27,7 @@ object OwnerBackupCodec {
         }
         val settings = JSONObject()
         booleans.forEach { (key, default) -> settings.put(key, prefs.getBoolean(key, default)) }
+        settings.put("mobileLifetime",prefs.getInt("mobileLifetime",120).takeIf { it in MobileReportCapture.lifetimes } ?: 120)
         settings.put("tolerance", prefs.getInt("tolerance", 2))
         settings.put("theme",prefs.getString("theme","system"))
         val overrides = JSONArray()
@@ -43,7 +44,7 @@ object OwnerBackupCodec {
         roadCorrections.forEach { item -> roadRecords.put(JSONObject().put("id", item.id)
             .put("kind", item.kind.name).put("mph", item.mph ?: JSONObject.NULL)
             .put("sourceValue", item.sourceValue ?: JSONObject.NULL).put("updated", item.updatedAtMs)) }
-        return JSONObject().put("format", "speed-buddy-owner-backup").put("version", 6)
+        return JSONObject().put("format", "speed-buddy-owner-backup").put("version", 7)
             .put("cameras", records).put("settings", settings)
             .put("cameraCorrections", overrides).put("roadLimits", limits)
             .put("suppressedCameraIds", JSONArray(suppressedCameraIds.sorted()))
@@ -54,7 +55,7 @@ object OwnerBackupCodec {
     fun parse(text: String): OwnerBackup {
         require(text.length <= 2_000_000) { "Backup is too large" }
         val root = JSONObject(text)
-        require(root.getString("format") == "speed-buddy-owner-backup" && root.getInt("version") in 1..6) {
+        require(root.getString("format") == "speed-buddy-owner-backup" && root.getInt("version") in 1..7) {
             "Unsupported Speed Buddy backup"
         }
         val records = root.getJSONArray("cameras")
@@ -71,7 +72,7 @@ object OwnerBackupCodec {
                 lon.isFinite() && lon in -180.0..180.0 && (direction == null || direction.isFinite() && direction >= 0.0 && direction < 360.0) &&
                 (mph == null || mph in 5..130) && (note == null || note.length <= 100) &&
                 (!both || direction != null)) { "Invalid camera record" }
-            Camera(id, GeoPoint(lat, lon), CameraType.valueOf(item.getString("type")), CameraSource.USER,
+            Camera(id, GeoPoint(lat, lon), CameraType.valueOf(item.getString("type")).also { require(it != CameraType.MOBILE) { "Temporary reports are not permanent cameras" } }, CameraSource.USER,
                 direction, mph, note, item.getLong("updated"), both)
         }
         require(cameras.map { it.id }.distinct().size == cameras.size) { "Duplicate camera IDs" }
@@ -81,6 +82,9 @@ object OwnerBackupCodec {
                 require(source.get(key) is Boolean) { "Invalid setting: $key" }
                 put(key, source.getBoolean(key))
             } }
+            if(source.has("mobileLifetime")) {
+                val value=source.getInt("mobileLifetime");require(value in MobileReportCapture.lifetimes) { "Invalid mobile report lifetime" };put("mobileLifetime",value)
+            }
             if(source.has("theme")) {
                 val theme=source.getString("theme");require(theme in listOf("system","light","dark")) { "Invalid appearance" };put("theme",theme)
             }
@@ -111,7 +115,7 @@ object OwnerBackupCodec {
                     (mph == null || mph in 5..130) && (sourcePoint == null || sourcePoint.lat.isFinite() &&
                         sourcePoint.lat in -90.0..90.0 && sourcePoint.lon.isFinite() && sourcePoint.lon in -180.0..180.0) &&
                     (note == null || note.length <= 100) && (!both || direction != null)) { "Invalid camera correction" }
-                CameraCorrection(id, sourceType, GeoPoint(lat, lon), CameraType.valueOf(item.getString("type")),
+                CameraCorrection(id, sourceType, GeoPoint(lat, lon), CameraType.valueOf(item.getString("type")).also { require(it != CameraType.MOBILE) },
                     direction, note, mph, sourcePoint, updated, both)
             }.also { require(it.map(CameraCorrection::id).distinct().size == it.size) { "Duplicate camera corrections" } }
         }

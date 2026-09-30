@@ -207,6 +207,28 @@ class MainActivity : ComponentActivity() {
                                         else { page = "map"; message = "Tap your road on the map to set its limit." }
                                     }
                                 }
+                            }, onReportMobile = {
+                                val live=DriveBus.state.value
+                                val observation=MobileReportCapture.create(live.fix,live.road,SystemClock.elapsedRealtime(),System.currentTimeMillis(),prefs.getInt("mobileLifetime",120))
+                                if(observation==null) android.widget.Toast.makeText(this@MainActivity,"Wait for a fresh, accurate GPS fix",android.widget.Toast.LENGTH_SHORT).show()
+                                else lifecycleScope.launch {
+                                    val result=runCatching { withContext(Dispatchers.IO) { MobileReportStore(db).record(observation) } }
+                                    android.widget.Toast.makeText(this@MainActivity,if(result.isSuccess) "Mobile camera reported · this phone only" else "Could not save report. Try again.",android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }, onMobileFeedback = { id,stillThere ->
+                                val live=DriveBus.state.value
+                                if(live.alert?.camera?.id==id) lifecycleScope.launch {
+                                    val result=runCatching { withContext(Dispatchers.IO) {
+                                        val store=MobileReportStore(db)
+                                        if(stillThere) store.confirm(id) else { store.remove(id);true }
+                                    } }
+                                    android.widget.Toast.makeText(this@MainActivity,when {
+                                        result.isFailure -> "Could not update report. Try again."
+                                        result.getOrNull()!=true -> "Report has expired"
+                                        stillThere -> "Report confirmed"
+                                        else -> "Report removed"
+                                    },android.widget.Toast.LENGTH_SHORT).show()
+                                }
                             })
                         "settings" -> SettingsScreen(prefs, { page = "drive" },
                             { page="cameras";lifecycleScope.launch { records=withContext(Dispatchers.IO) { db.userCameras() } } }, { page = "diagnostics" },
@@ -364,7 +386,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable internal fun DriveScreen(state: DriveState, onStart: () -> Unit, onStop: () -> Unit,
     onSettings: () -> Unit, onMap: () -> Unit, onDiagnostic: () -> Unit,
-    onAdd: () -> Unit, onQuick: (CameraType) -> Unit, onUnknownLimit: () -> Unit) {
+    onAdd: () -> Unit, onQuick: (CameraType) -> Unit, onUnknownLimit: () -> Unit,
+    onReportMobile: () -> Unit = {}, onMobileFeedback: (String,Boolean) -> Unit = { _,_-> }) {
     val speed = state.speedMph
     val moving = state.active && (speed == null || speed >= 5.0)
     val fix = state.fix
@@ -380,7 +403,7 @@ class MainActivity : ComponentActivity() {
     val national = state.limitMph != null && (
         tags?.get("maxspeed:type")?.startsWith("GB:nsl") == true ||
         tags?.get("maxspeed")?.startsWith("GB:nsl") == true || tags?.get("maxspeed") == "GB:motorway")
-    val compact=LocalConfiguration.current.screenHeightDp<650
+    val compact=LocalConfiguration.current.screenHeightDp<800
     Column(Modifier.fillMaxSize().then(if(compact) Modifier.verticalScroll(rememberScrollState()) else Modifier)
         .padding(horizontal = 22.dp, vertical = if(compact) 6.dp else 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -453,7 +476,7 @@ class MainActivity : ComponentActivity() {
                 if (alert != null) {
                     val symbol = when (alert.camera.type) {
                         CameraType.SPEED -> "S"; CameraType.RED_LIGHT -> "R"
-                        CameraType.COMBINED -> "R+"; CameraType.AVERAGE -> "A"
+                        CameraType.COMBINED -> "R+"; CameraType.AVERAGE -> "A";CameraType.MOBILE -> "M"
                     }
                     Surface(Modifier.size(42.dp), shape = CircleShape, color = Warning, contentColor = Background) {
                         Box(contentAlignment = Alignment.Center) {
@@ -468,6 +491,7 @@ class MainActivity : ComponentActivity() {
                         CameraType.RED_LIGHT -> "RED-LIGHT CAMERA AHEAD"
                         CameraType.COMBINED -> "SPEED + RED-LIGHT CAMERA"
                         CameraType.AVERAGE -> "AVERAGE-SPEED CAMERA"
+                        CameraType.MOBILE -> "MOBILE CAMERA REPORTED"
                     },
                         color = if (alert == null) Muted else Warning, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     Spacer(Modifier.height(4.dp))
@@ -478,7 +502,14 @@ class MainActivity : ComponentActivity() {
                     fontSize = 26.sp, fontWeight = FontWeight.Bold)
             }
         }
-        Spacer(Modifier.height(12.dp))
+        alert?.camera?.mobileReport?.let { report ->
+            MobileObservationActions(report,{onMobileFeedback(report.id,true)},{onMobileFeedback(report.id,false)},
+                confirmationEnabled=fixAge!=null && fixAge in 0..5_000 && fix!=null && fix.accuracyM<=35 && state.alertPositionFresh)
+        }
+        if(state.active) OutlinedButton(onClick=onReportMobile,
+            enabled=fix!=null && fixAge!=null && fixAge in 0..5_000 && fix.accuracyM<=35,
+            modifier=Modifier.fillMaxWidth().heightIn(min=48.dp).padding(top=4.dp)) { Text("Report mobile camera") }
+        Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             TextButton(onClick = onAdd, enabled = !moving) { Text("+ Add camera") }
             TextButton(onClick = onDiagnostic, enabled = !moving) { Text("Diagnostics") }
@@ -535,12 +566,24 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(22.dp)); SectionLabel("CAMERA ALERTS")
             Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
                 Column {
-                    listOf(Triple("Speed cameras", "speedCamera", true), Triple("Red-light cameras", "redCamera", true),
-                        Triple("Sound", "cameraSound", true), Triple("Vibration", "vibrate", true)).forEachIndexed { index, (label, key, default) ->
+                    listOf(Triple("Fixed cameras", "fixedCamera", true),Triple("Mobile camera reports", "mobileCamera", true),Triple("Speed cameras", "speedCamera", true), Triple("Red-light cameras", "redCamera", true),
+                        Triple("Voice warnings", "cameraSound", true), Triple("Vibration", "vibrate", true)).forEachIndexed { index, (label, key, default) ->
                         if (index > 0) HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                         SettingsToggle(label, prefs.getBoolean(key, default).also { version }) {
                             prefs.edit().putBoolean(key, it).apply(); version++
                         }
+                    }
+                    HorizontalDivider(color=Line,modifier=Modifier.padding(horizontal=16.dp))
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Mobile reports expire after",color=Ink,style=MaterialTheme.typography.bodyMedium)
+                        Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                            MobileReportCapture.lifetimes.forEach { minutes ->
+                                FilterChip(selected=prefs.getInt("mobileLifetime",120).also { version }==minutes,
+                                    onClick={prefs.edit().putInt("mobileLifetime",minutes).apply();version++},
+                                    label={Text(if(minutes<60) "$minutes min" else "${minutes/60} hr")})
+                            }
+                        }
+                        Text("New reports use this lifetime. Confirmation renews an active report. Reports stay on this phone; no shared live feed is connected.",color=Muted,style=MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -777,7 +820,7 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.fillMaxWidth().padding(16.dp)) {
                     Text(when (camera.type) { CameraType.SPEED -> "Speed camera"
                         CameraType.RED_LIGHT -> "Red-light camera"; CameraType.COMBINED -> "Speed + red-light camera"
-                        CameraType.AVERAGE -> "Average-speed camera" },
+                        CameraType.AVERAGE -> "Average-speed camera";CameraType.MOBILE -> "Mobile camera report" },
                         color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(4.dp))
                     Text("${camera.point.lat.format()}, ${camera.point.lon.format()}", color = Muted, fontSize = 13.sp)
@@ -811,8 +854,8 @@ private fun Double.format() = String.format(Locale.UK, "%.6f", this)
                 Column(Modifier.padding(16.dp)) {
                     Text("Camera type", color = Ink, fontWeight = FontWeight.SemiBold)
                     Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        CameraType.entries.forEach { value->FilterChip(type==value,{type=value},label={Text(when(value) {
-                            CameraType.SPEED->"Speed";CameraType.RED_LIGHT->"Red light";CameraType.COMBINED->"Combined";CameraType.AVERAGE->"Average speed" })}) }
+                        CameraType.entries.filter { it != CameraType.MOBILE }.forEach { value->FilterChip(type==value,{type=value},label={Text(when(value) {
+                            CameraType.SPEED->"Speed";CameraType.RED_LIGHT->"Red light";CameraType.COMBINED->"Combined";CameraType.AVERAGE->"Average speed";CameraType.MOBILE->"Mobile report" })}) }
                     }
                     OutlinedTextField(latitude, { latitude = it.take(14) }, label = { Text("Latitude") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true, modifier = Modifier.fillMaxWidth())

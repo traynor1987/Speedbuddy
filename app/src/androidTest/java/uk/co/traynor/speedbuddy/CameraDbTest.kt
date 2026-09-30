@@ -13,6 +13,64 @@ import org.junit.runner.RunWith
 class CameraDbTest {
     @Before fun createIsolatedTestDatabase() { InstrumentationRegistry.getInstrumentation().targetContext.deleteDatabase("speedbuddy-tests.db") }
     @After fun removeIsolatedTestDatabase() { InstrumentationRegistry.getInstrumentation().targetContext.deleteDatabase("speedbuddy-tests.db") }
+    @Test fun versionEightMigrationRetainsAllOwnerLayersAndAddsReports() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val owner=CameraDb(context,"speedbuddy-tests.db").use { db ->
+            val camera=db.create(GeoPoint(53.0,-2.0),CameraType.SPEED,0.0,30,"Keep")
+            db.saveCameraCorrection(CameraCorrection("lufop:keep",CameraSource.LUFOP,GeoPoint(53.0,-2.0),CameraType.RED_LIGHT,null,"Correction"))
+            db.suppressCamera("node/keep",CameraSource.OSM);db.saveRoadLimit("way/keep",20)
+            db.writableDatabase.execSQL("DROP TABLE mobile_reports");db.writableDatabase.version=8;camera
+        }
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
+            assertEquals(9,db.readableDatabase.version);assertEquals(owner.id,db.userCameras().single().id)
+            assertEquals("Correction",db.cameraCorrections().single().note)
+            assertTrue("node/keep" in db.suppressedCameraIds());assertEquals(20,db.roadLimit("way/keep"))
+            assertTrue(MobileReportStore(db).activeInBounds(52.0,-3.0,54.0,-1.0).isEmpty())
+        }
+    }
+    @Test fun temporaryReportsSurviveRestartAndFixedDatabaseRefreshThenExpire() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext;val now=System.currentTimeMillis()
+        val report=MobileReport("mobile:test",GeoPoint(53.0,-2.0),now,now,now+7_200_000,120,0.0,"way/1","High Street")
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
+            MobileReportStore(db).record(report);db.create(report.point,CameraType.SPEED)
+            db.replaceImported(listOf(Camera("lufop:test",report.point,CameraType.SPEED,CameraSource.LUFOP)),"test")
+        }
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
+            val store=MobileReportStore(db)
+            assertEquals(1,store.activeInBounds(52.0,-3.0,54.0,-1.0,now+1).size)
+            assertEquals(3,db.effectiveInBounds(52.0,-3.0,54.0,-1.0,emptyList()).size)
+            assertEquals(1,db.userCameras().size)
+            assertTrue(store.activeInBounds(52.0,-3.0,54.0,-1.0,report.expiresAtMs).isEmpty())
+            assertFalse(store.confirm(report.id,report.expiresAtMs))
+            store.prune(report.expiresAtMs)
+            assertEquals(2,db.effectiveInBounds(52.0,-3.0,54.0,-1.0,emptyList()).size)
+        }
+    }
+    @Test fun duplicateReportsConfirmTheSameIdentityAndNotThereRemovesOnlyReport() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext;val now=System.currentTimeMillis()
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
+            val report=MobileReport("mobile:first",GeoPoint(53.0,-2.0),now,now,now+7_200_000,120,0.0)
+            val store=MobileReportStore(db);store.record(report);val fixed=db.create(report.point,CameraType.SPEED)
+            val repeated=store.record(report.copy(id="mobile:repeat",reportedAtMs=now+1,observedAtMs=now+1,expiresAtMs=now+7_200_001))
+            assertEquals(report.id,repeated.id);assertEquals(now,repeated.reportedAtMs)
+            assertTrue(store.confirm(report.id,now+2));store.remove(report.id)
+            assertTrue(store.activeInBounds(52.0,-3.0,54.0,-1.0,now+3).isEmpty())
+            assertEquals(fixed.id,db.userCameras().single().id)
+            assertTrue(db.suppressedCameraIds().isEmpty())
+        }
+    }
+    @Test fun mobileCamerasCannotEnterPermanentTablesOrBackups() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext;val now=System.currentTimeMillis()
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
+            val report=MobileReport("mobile:test",GeoPoint(53.0,-2.0),now,now,now+7_200_000,120)
+            assertTrue(runCatching { db.upsert(report.asCamera()) }.isFailure)
+            val prefs=context.getSharedPreferences("mobile-tests",0)
+            prefs.edit().putBoolean("fixedCamera",false).putBoolean("mobileCamera",true).putInt("mobileLifetime",60).commit()
+            val backup=OwnerBackupCodec.parse(OwnerBackupCodec.export(listOf(report.asCamera()),prefs))
+            assertTrue(backup.cameras.isEmpty());assertEquals(false,backup.settings["fixedCamera"]);assertEquals(60,backup.settings["mobileLifetime"])
+            prefs.edit().clear().commit()
+        }
+    }
     @Test fun bundledUkCameraLayerIsCompleteAndDoesNotInventBearings() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val batch = context.assets.open("lufop-uk-2026-09.zip").use(LufopAscImporter::inspect)
@@ -276,6 +334,7 @@ class CameraDbTest {
         val context=InstrumentationRegistry.getInstrumentation().targetContext
         val owner=CameraDb(context,"speedbuddy-tests.db").use { db->
             val camera=db.create(GeoPoint(53.0,-2.0),CameraType.COMBINED,359.9,30,"Owner",true)
+            db.writableDatabase.execSQL("DROP TABLE mobile_reports")
             db.writableDatabase.execSQL("DROP TABLE camera_aliases")
             db.writableDatabase.execSQL("DROP INDEX owner_location")
             db.writableDatabase.version=7
@@ -285,7 +344,7 @@ class CameraDbTest {
             assertEquals(owner.id,db.userCameras().single().id)
             assertTrue(db.userCameras().single().bidirectional)
             assertTrue(db.aliasLinks().isEmpty())
-            assertEquals(8,db.readableDatabase.version)
+            assertEquals(9,db.readableDatabase.version)
         }
     }
     @Test fun ownerRestoreRollsBackAllDatabaseLayersOnFailure() {

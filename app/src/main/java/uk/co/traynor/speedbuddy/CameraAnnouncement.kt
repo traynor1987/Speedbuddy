@@ -4,6 +4,7 @@ package uk.co.traynor.speedbuddy
 object CameraAnnouncement {
     fun text(camera: Camera, matchedRoadLimitMph: Int?): String {
         val prefix = when (camera.type) {
+            CameraType.MOBILE -> "Mobile speed camera reported ahead."
             CameraType.SPEED -> "Speed camera ahead."
             CameraType.RED_LIGHT -> "Red light camera ahead."
             CameraType.COMBINED -> "Red light and speed camera ahead."

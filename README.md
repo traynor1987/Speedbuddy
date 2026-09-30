@@ -41,3 +41,7 @@ Map display: [MapLibre Native Android](https://maplibre.org/maplibre-native/andr
 7. Park, open the map, check fixed/red-light pins and tagged road colours; tap a road to correct its limit and a public camera to correct its direction. Confirm the driving screen uses the correction, a Lufop reimport retains it, and backup/restore carries it to a fresh installation. Pan to another area and confirm its road limits load automatically. Without network, previously cached map details may appear but unvisited tiles and road tags will not.
 
 Report time, road, posted limit, GPS accuracy, matched road ID, camera ID/rejection reason, and whether the 24-hour cache was available for discrepancies. These are visible in Diagnostics; no journey log is retained.
+
+## Temporary mobile-camera reports
+
+Drive has a one-tap Report mobile camera action. Local reports expire (two hours by default), appear as distinct amber mobile markers, and use the existing 300-yard directional camera warnings and music-ducking speech. Still there renews an active observation; Not there removes it. Settings → Camera alerts controls fixed/mobile/voice warnings and report lifetime. These are reports from this phone, not Google/Waze crowdsourced coverage; no provider key or billing setup is required. See [official provider research, architecture and physical acceptance](docs/road-alerts.md).

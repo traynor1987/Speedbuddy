@@ -49,7 +49,7 @@ private val MapMuted: Color @Composable get() = MaterialTheme.colorScheme.onSurf
 private val MapPanel: Color @Composable get() = MaterialTheme.colorScheme.surface
 private data class RoadMapData(val road: Road, val mph: Int?, val national: Boolean)
 private data class MapDrawData(val groups: List<CameraMapGroup>, val roads: List<RoadMapData>,
-    val cameraCount: Int)
+    val cameraCount: Int, val nextReportExpiry: Long?)
 
 /** Basemap tiles provide context; only the OSM extract supplies limit values. */
 @Composable
@@ -66,6 +66,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
     var drawnCenter by remember { mutableStateOf<GeoPoint?>(null) }
     var drawnZoom by remember { mutableDoubleStateOf(-1.0) }
     var revision by remember { mutableIntStateOf(0) }
+    var nextReportExpiry by remember { mutableStateOf<Long?>(null) }
     var loading by remember { mutableStateOf(false) }
     var mapAvailable by remember { mutableStateOf(true) }
     var status by remember { mutableStateOf("Loading nearby road limits…") }
@@ -79,6 +80,17 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
     var headingUp by rememberSaveable { mutableStateOf(false) }
     val drive by DriveBus.state.collectAsState()
     val currentMoving by rememberUpdatedState(moving)
+    LaunchedEffect(Unit) {
+        var lastRevision=OwnerDataRevision.cameras
+        while(true) {
+            kotlinx.coroutines.delay(1_000)
+            val now=System.currentTimeMillis()
+            if(lastRevision!=OwnerDataRevision.cameras || nextReportExpiry?.let { now>=it }==true) {
+                lastRevision=OwnerDataRevision.cameras;nextReportExpiry=null;revision++
+            }
+            if(camera?.type==CameraType.MOBILE && camera?.mobileReport?.activeAt(now)!=true) camera=null
+        }
+    }
     var mapLatitude by rememberSaveable { mutableStateOf<Double?>(null) }
     var mapLongitude by rememberSaveable { mutableStateOf<Double?>(null) }
     var mapZoom by rememberSaveable { mutableDoubleStateOf(14.0) }
@@ -141,7 +153,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                     if(clusters[selected.id]!=null) {
                         val target=clusters.getValue(selected.id);following=false
                         ready.cameraPosition=CameraPosition.Builder().target(LatLng(target.lat,target.lon)).zoom((ready.cameraPosition.zoom+2).coerceAtMost(19.0)).build()
-                    } else if (!currentMoving && markers[selected.id] != null) {
+                    } else if (markers[selected.id] != null && (!currentMoving || markers[selected.id]?.type==CameraType.MOBILE)) {
                         camera = markers[selected.id]; editingPosition = null; road = null; pin = null
                     } else if (!currentMoving && roadMarkers[selected.id] != null) {
                         road = roadMarkers[selected.id]; camera = null; editingPosition = null; pin = null
@@ -233,8 +245,9 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                 val raw = effective.tags["maxspeed"] ?: effective.tags["maxspeed:type"] ?: ""
                 RoadMapData(item, SpeedLimits.mph(effective.tags), raw.startsWith("GB:nsl") || raw == "GB:motorway")
             }
-            MapDrawData(CameraClustering.group(effective, zoom), nearbyRoads, effective.size)
+            MapDrawData(CameraClustering.group(effective, zoom), nearbyRoads, effective.size,effective.mapNotNull { it.mobileReport?.expiresAtMs }.minOrNull())
         }
+        nextReportExpiry=draw.nextReportExpiry
         ready.clear(); markers.clear();clusters.clear(); roadMarkers.clear(); locationMarker = null
         drive.fix?.takeIf { SystemClock.elapsedRealtime() - it.elapsedMs <= 5_000 }?.let { fix ->
             locationMarker = ready.addMarker(MarkerOptions().position(LatLng(fix.point.lat, fix.point.lon))
@@ -250,9 +263,10 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
             val label = if (group.count > 1) group.count.coerceAtMost(99).toString() +
                 (if (group.count > 99) "+" else "") else when (item?.type) {
                 CameraType.RED_LIGHT -> "R"; CameraType.COMBINED -> "R+"
-                CameraType.AVERAGE -> "A"; else -> "S"
+                CameraType.AVERAGE -> "A";CameraType.MOBILE -> "M"; else -> "S"
             }
             val colour = if (group.count > 1) android.graphics.Color.rgb(55, 119, 147)
+                else if (item?.type == CameraType.MOBILE) android.graphics.Color.rgb(255,190,72)
                 else if (item?.source == CameraSource.USER) android.graphics.Color.rgb(151, 211, 238)
                 else if (item?.type == CameraType.RED_LIGHT || item?.type == CameraType.COMBINED)
                     android.graphics.Color.rgb(236, 93, 95)
@@ -266,6 +280,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                 .title(if (group.count > 1) "${group.count} cameras · zoom in" else when (item?.type) {
                     CameraType.SPEED -> "Speed camera"; CameraType.RED_LIGHT -> "Red-light camera"
                     CameraType.COMBINED -> "Speed + red-light camera"; CameraType.AVERAGE -> "Average-speed camera"
+                    CameraType.MOBILE -> "Mobile speed camera report"
                     else -> "Camera"
                 })
                 .icon(icon))
@@ -360,6 +375,12 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
         if (pin != null) Text("✚", Modifier.align(Alignment.Center), color = Color(0xFF004A62),
             style = MaterialTheme.typography.headlineLarge)
         when {
+            camera?.mobileReport != null -> Box(Modifier.align(Alignment.BottomCenter)) {
+                val report=camera!!.mobileReport!!
+                MobileReportDetailSheet(report,{camera=null},
+                    { saveChange({ check(MobileReportStore(db).confirm(report.id)) { "This report has expired" } }) { revision++;camera=null } },
+                    { saveChange({ MobileReportStore(db).remove(report.id) }) { revision++;camera=null } })
+            }
             pin != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(null, pin!!, { pin = null }, { point, type, direction, mph, note, both ->
                 saveChange({ db.create(point,type,direction,mph,note,both) }) { revision++;pin=null }
             }) }
@@ -424,7 +445,10 @@ private fun mapPin(color: Int, letter: String, direction: Double? = null, both: 
     val bitmap = Bitmap.createBitmap(72, 72, Bitmap.Config.ARGB_8888)
     val canvas = AndroidCanvas(bitmap)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
-    canvas.drawCircle(36f, 36f, 30f, paint)
+    if(letter=="M") {
+        canvas.save();canvas.rotate(45f,36f,36f)
+        canvas.drawRoundRect(12f,12f,60f,60f,7f,7f,paint);canvas.restore()
+    } else canvas.drawCircle(36f, 36f, 30f, paint)
     paint.color = android.graphics.Color.BLACK; paint.textSize = if (letter.length > 2) 21f else 34f
     paint.isFakeBoldText = true
     paint.textAlign = Paint.Align.CENTER
@@ -434,6 +458,14 @@ private fun mapPin(color: Int, letter: String, direction: Double? = null, both: 
             canvas.drawRoundRect(18f,24f,54f,48f,4f,4f,paint);canvas.drawCircle(39f,36f,7f,paint)
             paint.style=Paint.Style.FILL;canvas.drawRect(22f,20f,31f,25f,paint)
             if(letter=="A") { paint.textSize=12f;canvas.drawText("AVG",36f,60f,paint) }
+        }
+        "M" -> {
+            paint.style=Paint.Style.STROKE;paint.strokeWidth=3f
+            canvas.drawRoundRect(17f,27f,55f,47f,4f,4f,paint)
+            canvas.drawRect(40f,29f,51f,37f,paint)
+            paint.style=Paint.Style.FILL
+            canvas.drawCircle(24f,49f,4f,paint);canvas.drawCircle(47f,49f,4f,paint)
+            canvas.drawCircle(28f,37f,5f,paint)
         }
         "R", "R+" -> {
             paint.style=Paint.Style.STROKE;paint.strokeWidth=3f

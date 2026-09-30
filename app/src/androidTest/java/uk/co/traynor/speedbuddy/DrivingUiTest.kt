@@ -13,6 +13,22 @@ import org.junit.Test
 
 class DrivingUiTest {
     @get:Rule val compose=createComposeRule()
+    @Test fun mobileWarningShowsMinimalActionsAndKeepsMainSignCentred() {
+        var reported=false;var feedback: Boolean?=null
+        val now=System.currentTimeMillis();val elapsed=android.os.SystemClock.elapsedRealtime()
+        val report=MobileReport("mobile:ui",GeoPoint(53.0,-2.0),now,now,now+7_200_000,120,0.0,"way/1","High Street")
+        val state=DriveState(active=true,limitMph=30,speedMph=0.0,
+            fix=Fix(report.point,4.0,0.0,null,null,elapsed),alert=Alert(report.asCamera(),200.0))
+        compose.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{},
+            onReportMobile={reported=true},onMobileFeedback={_,confirmed->feedback=confirmed}) } }
+        compose.onNodeWithText("MOBILE CAMERA REPORTED").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Still there").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(true,feedback) }
+        compose.onNodeWithText("Not there").performClick()
+        compose.runOnIdle { assertEquals(false,feedback) }
+        compose.onNodeWithText("Report mobile camera").performScrollTo().performClick()
+        compose.runOnIdle { assertTrue(reported) }
+    }
     @Test fun mainSignStaysCentredWithEitherTurnAndWithoutTurns() {
         var drive by mutableStateOf(DriveState(limitMph=30))
         compose.setContent { MaterialTheme { DriveScreen(drive,{},{},{},{},{},{},{},{}) } }

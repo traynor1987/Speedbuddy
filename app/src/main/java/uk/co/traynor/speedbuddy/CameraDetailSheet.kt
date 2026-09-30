@@ -18,7 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
     Surface(Modifier.fillMaxWidth().padding(12.dp),shape=RoundedCornerShape(18.dp)) {
         Column(Modifier.heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.65f)
             .verticalScroll(rememberScrollState()).padding(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
-            Text(when(camera.type) { CameraType.SPEED->"Speed camera";CameraType.RED_LIGHT->"Red-light camera";CameraType.COMBINED->"Speed + red-light camera";CameraType.AVERAGE->"Average-speed enforcement point" },
+            Text(when(camera.type) { CameraType.SPEED->"Speed camera";CameraType.RED_LIGHT->"Red-light camera";CameraType.COMBINED->"Speed + red-light camera";CameraType.AVERAGE->"Average-speed enforcement point";CameraType.MOBILE->"Mobile speed camera report" },
                 style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)
             Text(if(camera.source==CameraSource.USER) "USER ADDED · unverified" else "${camera.source.name} · ${if(camera.locallyCorrected) "local correction · unverified" else "source record · not locally verified"}",
                 color=MaterialTheme.colorScheme.onSurfaceVariant)

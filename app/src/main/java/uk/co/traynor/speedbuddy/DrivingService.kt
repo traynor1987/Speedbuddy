@@ -68,6 +68,7 @@ class DrivingService : Service(), LocationListener {
     private val limitVoiceGate = LimitChangeGate()
     private val sectionTracker=AverageSectionTracker()
     private var tick: Job? = null
+    private var lastMobilePrune = 0L
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
         super.onCreate(); locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
@@ -109,7 +110,27 @@ class DrivingService : Service(), LocationListener {
         if (tick == null) {
             try { locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this, Looper.getMainLooper()) }
             catch (_: Exception) { DriveBus.set(DriveState(status = "GPS unavailable")); stopSelf(); return START_NOT_STICKY }
-            tick = scope.launch { while (isActive) { delay(1000); val state = DriveBus.state.value
+            tick = scope.launch { while (isActive) { delay(1000); var state = DriveBus.state.value
+                val wallNow=System.currentTimeMillis()
+                val settings=getSharedPreferences("settings",Context.MODE_PRIVATE)
+                if(cameraRevision!=OwnerDataRevision.cameras && state.alert?.camera?.type==CameraType.MOBILE) {
+                    val report=state.alert!!.camera.mobileReport!!
+                    val stored=MobileReportStore(db).activeInBounds(report.point.lat-.00001,report.point.lon-.00001,
+                        report.point.lat+.00001,report.point.lon+.00001,wallNow).firstOrNull { it.id==report.id }
+                    state=if(stored==null) state.copy(alert=null,decision=CameraDecision(null,null,false,"Mobile report removed or expired"))
+                        else state.copy(alert=state.alert!!.copy(camera=stored.asCamera()))
+                    DriveBus.set(state)
+                }
+                state.alert?.let { alert ->
+                    if (!cameraEnabled(alert.camera,settings) || (alert.camera.type==CameraType.MOBILE && alert.camera.mobileReport?.activeAt(wallNow)!=true)) {
+                        state=state.copy(alert=null,decision=CameraDecision(null,null,false,"Camera warning ended"))
+                        DriveBus.set(state)
+                    }
+                }
+                if (wallNow-lastMobilePrune>=60_000) { runCatching { MobileReportStore(db).prune(wallNow) };lastMobilePrune=wallNow }
+                if(cameraRevision!=OwnerDataRevision.cameras && state.fix?.let { SystemClock.elapsedRealtime()-it.elapsedMs in 0..5_000 }==true)
+                    fixes.trySend(state.fix!!)
+
                 if (state.fix != null && SystemClock.elapsedRealtime() - state.fix.elapsedMs > 5000) {
                     speedFilter.current(SystemClock.elapsedRealtime()); matcher.reset(); limitStabilizer.reset()
                     DriveBus.set(state.copy(speedMph = null, limitMph = null, road = null, alertPositionFresh = false,
@@ -166,12 +187,8 @@ class DrivingService : Service(), LocationListener {
             cameraCenter=fix.point; cameraRevision=OwnerDataRevision.cameras; cameraSnapshot=cached
         }
         val cameras=effectiveCameraCache
-        val enabled = cameras.filter { when (it.type) {
-            CameraType.SPEED, CameraType.AVERAGE -> settings.getBoolean("speedCamera", true)
-            CameraType.RED_LIGHT -> settings.getBoolean("redCamera", true)
-            CameraType.COMBINED -> settings.getBoolean("speedCamera", true) || settings.getBoolean("redCamera", true)
-        } }
-        val (alert, decision) = detector.evaluate(fix, road, enabled, speed,correctedRoads.orEmpty())
+        val enabled = cameras.filter { cameraEnabled(it,settings) }
+        val (alert, decision) = detector.evaluate(fix, road, enabled, speed,correctedRoads.orEmpty(),wallNow)
         val section=if(settings.getBoolean("speedCamera",true)) sectionTracker.update(fix,road,cached?.averageSections.orEmpty()) else null
         val newCamera = alert != null && decision.reason == "New approach"
         val changedLimit=limitVoiceGate.update(limit)
@@ -211,6 +228,9 @@ class DrivingService : Service(), LocationListener {
             }
         }
     }
+    private fun cameraEnabled(camera: Camera, settings: android.content.SharedPreferences) = CameraAlertPolicy.enabled(
+        camera.type,settings.getBoolean("fixedCamera",true),settings.getBoolean("mobileCamera",true),
+        settings.getBoolean("speedCamera",true),settings.getBoolean("redCamera",true))
     private fun signal(sound: Boolean, vibration: Boolean) {
         if (sound) runCatching {
             ToneGenerator(AudioManager.STREAM_NOTIFICATION, 75).also { tone ->

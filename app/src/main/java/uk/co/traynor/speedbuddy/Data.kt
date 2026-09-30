@@ -33,7 +33,7 @@ data class CameraCorrection(val id: String, val source: CameraSource, val point:
             bidirectional = bidirectional,locallyCorrected=true) else camera
 }
 
-class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOpenHelper(context, databaseName, null, 8), CameraRepository {
+class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOpenHelper(context, databaseName, null, 9), CameraRepository {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE cameras(id TEXT PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, type TEXT NOT NULL, direction REAL, mph INTEGER, note TEXT, updated INTEGER NOT NULL, bidirectional INTEGER NOT NULL DEFAULT 0)")
         createImported(db)
@@ -41,6 +41,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         createSuppressed(db)
         createImportStatus(db)
         createAliases(db)
+        MobileReportStore.createTable(db)
         db.execSQL("CREATE INDEX owner_location ON cameras(lat,lon)")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -67,6 +68,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
             createAliases(db)
             db.execSQL("CREATE INDEX IF NOT EXISTS owner_location ON cameras(lat,lon)")
         }
+        if (oldVersion < 9 && newVersion >= 9) MobileReportStore.createTable(db)
     }
     private fun createAliases(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE camera_aliases(a TEXT NOT NULL,b TEXT NOT NULL,PRIMARY KEY(a,b))")
@@ -170,7 +172,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         }
         return CameraLayers.merge(raw + moved, owner, corrections, suppressedCameraIds(), aliasLinks()).filter {
             it.point.lat in south..north && it.point.lon in west..east
-        }
+        } + MobileReportStore(this).activeInBounds(south,west,north,east).map(MobileReport::asCamera)
     }
     fun restoreOwnerData(backup: OwnerBackup, prefs: android.content.SharedPreferences) {
         val database = writableDatabase
@@ -186,7 +188,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         } finally { database.endTransaction() }
     }
     fun saveCameraCorrection(value: CameraCorrection) {
-        require(value.source != CameraSource.USER && value.point.lat in -90.0..90.0 && value.point.lon in -180.0..180.0 &&
+        require(value.type != CameraType.MOBILE && value.source != CameraSource.USER && value.point.lat in -90.0..90.0 && value.point.lon in -180.0..180.0 &&
             (value.direction == null || value.direction.isFinite() && value.direction >= 0.0 && value.direction < 360.0) &&
             (!value.bidirectional || value.direction != null) &&
             (value.enforcedMph == null || value.enforcedMph in 5..130))
@@ -292,7 +294,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
     }
     /** Replaces only the downloaded layer. Owner cameras and OSM cache remain untouched. */
     fun replaceImported(cameras: List<Camera>, sourceDate: String): Int {
-        require(cameras.isNotEmpty() && cameras.all { it.source == CameraSource.LUFOP })
+        require(cameras.isNotEmpty() && cameras.all { it.source == CameraSource.LUFOP && it.type != CameraType.MOBILE && it.mobileReport==null })
         val database = writableDatabase
         database.beginTransaction()
         try {
@@ -348,7 +350,7 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         }
     }
     override fun upsert(camera: Camera) {
-        require(camera.source == CameraSource.USER && camera.id.isNotBlank() && camera.id.length<=100 &&
+        require(camera.type != CameraType.MOBILE && camera.mobileReport == null && camera.source == CameraSource.USER && camera.id.isNotBlank() && camera.id.length<=100 &&
             camera.point.lat.isFinite() && camera.point.lat in -90.0..90.0 && camera.point.lon.isFinite() && camera.point.lon in -180.0..180.0 &&
             (camera.direction==null || camera.direction.isFinite() && camera.direction>=0 && camera.direction<360) &&
             (camera.enforcedMph==null || camera.enforcedMph in 5..130) && (camera.note?.length ?: 0)<=100 &&
