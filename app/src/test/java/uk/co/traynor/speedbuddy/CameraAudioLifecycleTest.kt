@@ -27,8 +27,8 @@ class CameraAudioLifecycleTest {
         assertFalse(valid(alert = null))
         assertFalse(valid(alert = Alert(camera.copy(id = "other"), 180.0)))
         assertFalse(valid(alert = Alert(camera, 500.0)))
-        val expired = MobileReport("mobile:test", camera.point, 1L, 1L, 1_000L, 120, null, null, null).asCamera()
-        assertFalse(CameraCueValidity.relevant(Alert(expired, 100.0), 35.0, true, true, expired.id, true, 30, 2, 1_000L))
+        val expired = MobileReport("mobile:test", camera.point, 1L, 1L, 7_200_001L, 120, null, null, null).asCamera()
+        assertFalse(CameraCueValidity.relevant(Alert(expired, 100.0), 35.0, true, true, expired.id, true, 30, 2, 7_200_001L))
     }
 
     @Test fun limitChangeWaitsUntilCameraAudioFinishesAndLatestLimitWins() {
