@@ -72,7 +72,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
     var status by remember { mutableStateOf("Loading nearby road limits…") }
     var lastRoadFetchMs by remember { mutableLongStateOf(0L) }
     var camera by rememberSaveable { mutableStateOf<Camera?>(null) }
-    var editingPosition by rememberSaveable { mutableStateOf<GeoPoint?>(null) }
+    var editingPosition by rememberSaveable { mutableStateOf<CameraPositionDraft?>(null) }
     var pendingRemoval by remember { mutableStateOf<Camera?>(null) }
     var road by rememberSaveable { mutableStateOf<Road?>(null) }
     var pin by rememberSaveable { mutableStateOf<GeoPoint?>(null) }
@@ -176,7 +176,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                         ready.cameraPosition=CameraPosition.Builder().target(LatLng(target.lat,target.lon)).zoom((ready.cameraPosition.zoom+2).coerceAtMost(19.0)).build()
                     } else if (!currentMoving && junctionMarkers[selected.id] != null) {
                         junction=junctionMarkers[selected.id];editingJunction=false
-                        camera=null;pin=null;pinJunction=null;road=null;forceCameraEdit=false
+                        camera=null;editingPosition=null;pin=null;pinJunction=null;road=null;forceCameraEdit=false
                     } else if (markers[selected.id] != null && (!currentMoving || markers[selected.id]?.type==CameraType.MOBILE)) {
                         camera = markers[selected.id]; editingPosition = null; road = null; pin = null
                         junction=null;pinJunction=null;forceCameraEdit=false;editingJunction=false
@@ -195,7 +195,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                         ready.cameraPosition=CameraPosition.Builder().target(clicked).zoom(ready.cameraPosition.zoom).bearing(ready.cameraPosition.bearing).build()
                         return@addOnMapClickListener true
                     }
-                    if (camera != null) { editingPosition = point; following = false; return@addOnMapClickListener true }
+                    if (camera != null) { editingPosition = CameraPositionDraft(camera!!.id,point); following = false; return@addOnMapClickListener true }
                     road = snapshot?.roads?.let { RoadSelection.select(point, it) }
                     camera = null; pin = null
                     junction=null;pinJunction=null;editingJunction=false;forceCameraEdit=false
@@ -357,7 +357,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                     }
                 }
         }
-        editingPosition?.let { selected -> ready.addMarker(MarkerOptions()
+        editingPosition?.takeIf { it.cameraId==camera?.id }?.point?.let { selected -> ready.addMarker(MarkerOptions()
             .position(LatLng(selected.lat, selected.lon)).title("Proposed camera position")
             .icon(icons.fromBitmap(mapPin(android.graphics.Color.rgb(50, 168, 215), "+")))) }
         if (draw.groups.size > 600) status = "Zoom in for more cameras · ${draw.cameraCount} nearby"
@@ -448,8 +448,8 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                             .zoom(map?.cameraPosition?.zoom ?: 18.0).build()},
                     add={pin=selected.point;pinJunction=selected;junction=null;camera=null;following=false
                         map?.cameraPosition=CameraPosition.Builder().target(LatLng(selected.point.lat,selected.point.lon)).zoom(18.0).build()},
-                    select={member->camera=member;junction=null;forceCameraEdit=false},
-                    link={member->camera=member.copy(junction=selected);junction=null;forceCameraEdit=true},
+                    select={member->camera=member;editingPosition=null;junction=null;forceCameraEdit=false},
+                    link={member->camera=member.copy(junction=selected);editingPosition=null;junction=null;forceCameraEdit=true},
                     ungroup={saveChange({ JunctionStore(db).remove(selected.id) }) { junction=null;revision++ }})
             }
             pin != null && !moving -> Box(Modifier.align(Alignment.BottomCenter).imePadding()) { CameraMapEditor(null, pin!!, {
@@ -460,7 +460,7 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
                     revision++;pin=null;junction=group;pinJunction=null
                 }
             },junctionContext=pinJunction) }
-            camera != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(camera, editingPosition ?: camera!!.point, {
+            camera != null && !moving -> Box(Modifier.align(Alignment.BottomCenter).imePadding()) { CameraMapEditor(camera, editingPosition?.effectiveFor(camera!!) ?: camera!!.point, {
                 camera = null; editingPosition = null
             }, { point, type, direction, mph, note, both ->
                 val item = camera!!

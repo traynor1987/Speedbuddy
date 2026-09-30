@@ -94,4 +94,15 @@ class JunctionCamerasTest {
         assertTrue(turned.warning!!.closeReminder)
         assertFalse(turned.warning!!.announceApproach)
     }
+
+    @Test fun discardedPositionCannotMoveAnotherSelectedOrLinkedCamera() {
+        val first=camera("first")
+        val member=camera("member",40.0)
+        val nearby=camera("nearby",50.0).copy(junction=null)
+        val proposed=Geo.ahead(first.point,90.0,25.0)
+        val draft=CameraPositionDraft(first.id,proposed)
+        assertEquals(proposed,draft.effectiveFor(first))
+        assertEquals(member.point,draft.effectiveFor(member))
+        assertEquals(nearby.point,draft.effectiveFor(nearby.copy(junction=junction)))
+    }
 }

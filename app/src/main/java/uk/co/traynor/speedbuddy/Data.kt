@@ -180,7 +180,8 @@ class CameraDb(context: Context, databaseName: String = "cameras.db") : SQLiteOp
         val database = writableDatabase
         database.beginTransaction()
         try {
-            backup.junctions.forEach { JunctionStore(this).save(it) }
+            val replacingIds=backup.cameras.map { it.id }.toSet()
+            backup.junctions.forEach { JunctionStore(this).restore(it,replacingIds) }
             merge(backup.cameras); mergeCorrections(backup.corrections, backup.roadLimits)
             mergeSuppressed(backup.suppressedCameraIds); mergeRoadCorrections(backup.roadCorrections)
             backup.aliases.forEach { (a,b)->database.insertOrThrow("camera_aliases",null,ContentValues().apply { put("a",a);put("b",b) }.also {

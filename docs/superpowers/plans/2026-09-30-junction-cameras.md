@@ -27,26 +27,34 @@
 
 Files: JunctionCameras.kt, Core.kt, CameraAnnouncement.kt; JunctionCamerasTest.kt.
 Interfaces: CameraJunction(id,name,point,ways); Camera.junction; JunctionRules.validateMember; CameraEncounters.key.
-- [ ] Add failing tests for model/member validation, relevant group member selection, shared approach/close/speeding stages and per-camera passing/rearm.
-- [ ] Implement metadata validation and shared keys in the existing detector; retain per-camera geometry, distance/history and passing.
-- [ ] Run the focused JVM suite; all new and existing cases must pass.
+- [x] Add failing tests for model/member validation, relevant group member selection, shared approach/close/speeding stages and per-camera passing/rearm.
+- [x] Implement metadata validation and shared keys in the existing detector; retain per-camera geometry, distance/history and passing.
+- [x] Run the focused JVM suite; all new and existing cases must pass.
 
 ### Task 2: Persistence and backup
 
 Files: JunctionStore.kt, Data.kt, Backup.kt, MainActivity.kt; JunctionDbTest.kt.
 Interfaces: JunctionStore.all/save/remove/attach/setMembership; OwnerBackup.junctions; export/parse schema 8.
-- [ ] Add Android tests for schema 9 migration, restart, member edits, ungroup/delete, backup roundtrip, legacy backup and invalid restore rollback.
-- [ ] Add schema 10 tables; decorate bounded/all owner camera reads. Validate and save member links transactionally alongside camera writes.
-- [ ] Restore metadata before member cameras in the existing owner transaction; export all groups including empty ones.
-- [ ] Run Android database tests in CI; preserve imported/mobile/correction layers.
+- [x] Add Android tests for schema 9 migration, restart, member edits, ungroup/delete, backup roundtrip, legacy backup and invalid restore rollback.
+- [x] Add schema 10 tables; decorate bounded/all owner camera reads. Validate and save member links transactionally alongside camera writes.
+- [x] Restore metadata before member cameras in the existing owner transaction; export all groups including empty ones.
+- [x] Run Android database tests in CI; preserve imported/mobile/correction layers.
 
 ### Task 3: Map and driving UI
 
 Files: JunctionEditor.kt, CameraMapScreen.kt, CameraDetailSheet.kt, MainActivity.kt, DrivingService.kt.
 Interfaces: junction editor/list/detail callbacks; CameraMapEditor optional junction context.
-- [ ] Add UI tests for choosing four/five, persisted editor state and member direction validation.
-- [ ] Add Map Add menu, centre placement, saved junction marker/management, individual pin placement and grouped editor context. Require direction for grouped members; allow ungroup without deleting cameras.
-- [ ] Show group name/road count on Drive and camera details; maintain queued audio validity across relevant members of one group.
+- [x] Add UI tests for choosing four/five, persisted editor state and member direction validation.
+- [x] Add Map Add menu, centre placement, saved junction marker/management, individual pin placement and grouped editor context. Require direction for grouped members; allow ungroup without deleting cameras.
+- [x] Show group name/road count on Drive and camera details; maintain queued audio validity across relevant members of one group.
 - [ ] Run full unit/lint/APK/emulator checks, focused review, version 0.1.8 and deliver the acceptance APK with signing/backup guidance.
 
 Execution ruling: developer instructions and the user's feature request authorize implementation without extra design/plan approval stops. Implement natively in this session; use one focused reviewer before delivery.
+
+## Execution evidence
+
+- Model/encounter tests: initial implementation failed four new tests, then passed.
+- First complete Android run b4157d0: unit/lint/debug/test APK checks passed; 39 API-35 database/UI tests passed, including schema migration, backup and editor restoration.
+- Final review found three important cases: unvisited arms marked passed; a cancelled position reused by a different member; moved-centre backup restoration validated against obsolete geometry. No minor findings.
+- Turning and cross-camera position regressions were observed failing locally, then the focused JVM suite passed 30 tests after per-member approach tracking and camera-owned position drafts.
+- Overlapping backup restore regression failed against the original implementation on API 35 (9e68038): 41 tests, one failure in restoreCanMoveJunctionTogetherWithItsReplacedMembers. Restore now checks retained members against incoming metadata and validates replaced members during the transactional merge. Ordinary centre edits keep full member validation.

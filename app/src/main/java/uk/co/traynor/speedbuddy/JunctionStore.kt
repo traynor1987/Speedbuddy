@@ -14,13 +14,17 @@ class JunctionStore(private val db: CameraDb) {
         "SELECT id,name,lat,lon,ways FROM camera_junctions WHERE id=?", arrayOf(id)).use { c ->
         if (c.moveToFirst()) CameraJunction(c.getString(0), c.getString(1), GeoPoint(c.getDouble(2), c.getDouble(3)), c.getInt(4)) else null
     }
-    fun save(junction: CameraJunction) {
+    fun save(junction: CameraJunction) = save(junction,emptySet())
+    /** Incoming cameras are validated against the stored centre by CameraDb.merge in the same transaction. */
+    internal fun restore(junction: CameraJunction, replacingIds: Set<String>) = save(junction,replacingIds)
+    private fun save(junction: CameraJunction, replacingIds: Set<String>) {
         JunctionRules.validate(junction)
         val database = db.writableDatabase
         database.beginTransaction()
         try {
             require(find(junction.id) != null || all().size < 500) { "Maximum 500 junctions" }
-            db.userCameras().filter { it.junction?.id == junction.id }.forEach { JunctionRules.validateMember(it, junction) }
+            db.userCameras().filter { it.junction?.id == junction.id && it.id !in replacingIds }
+                .forEach { JunctionRules.validateMember(it, junction) }
             database.insertOrThrow("camera_junctions", null, ContentValues().apply {
                 put("id", junction.id); put("name", junction.name); put("lat", junction.point.lat)
                 put("lon", junction.point.lon); put("ways", junction.ways)

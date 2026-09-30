@@ -275,6 +275,7 @@ class CameraApproachDetector {
     private val closeNotified = mutableSetOf<String>()
     private val speedingNotified = mutableSetOf<String>()
     private val passed = mutableSetOf<String>()
+    private val approached = mutableSetOf<String>()
     private val previousDistance = mutableMapOf<String, Double>()
     private var activeCameraId: String? = null
     private val lastSeen = mutableMapOf<String, Long>()
@@ -336,14 +337,16 @@ class CameraApproachDetector {
                 else -> "Approaching"
             }
             previousDistance[camera.id] = distance
-            if (reason == "Camera behind or off heading" && distance < 120 && encounter in notified) passed += camera.id
+            if (reason == "Camera behind or off heading" && distance < 120 && camera.id in approached) passed += camera.id
             if (reason != "Approaching") { diagnostic = CameraDecision(camera, distance, false, reason, bearingDiff); continue }
             if (encounter in notified) {
+                approached += camera.id
                 activeCameraId = camera.id
                 return Alert(camera, distance, warning(camera, distance, false, speedMph, road, matchedRoadLimitMph, toleranceMph)) to
                     CameraDecision(camera, distance, true, "Approach active", bearingDiff)
             }
             if (distance <= CAMERA_ALERT_METERS) {
+                approached += camera.id
                 notified += encounter; activeCameraId = camera.id;encounterPoints[encounter]=camera.junction?.point ?: camera.point
                 return Alert(camera, distance, warning(camera, distance, true, speedMph, road, matchedRoadLimitMph, toleranceMph)) to
                     CameraDecision(camera, distance, true, "New approach", bearingDiff)
@@ -369,11 +372,11 @@ class CameraApproachDetector {
         notified.remove(key); closeNotified.remove(key); speedingNotified.remove(key)
         lastSeen.remove(key); encounterPoints.remove(key)
         val members = encounterMembers.remove(key).orEmpty()
-        members.forEach { passed.remove(it); previousDistance.remove(it) }
+        members.forEach { passed.remove(it); approached.remove(it); previousDistance.remove(it) }
         if (activeCameraId in members) activeCameraId = null
     }
     fun reset() {
-        notified.clear(); closeNotified.clear(); speedingNotified.clear(); passed.clear()
+        notified.clear(); closeNotified.clear(); speedingNotified.clear(); passed.clear(); approached.clear()
         previousDistance.clear(); activeCameraId = null; lastSeen.clear(); encounterPoints.clear(); encounterMembers.clear()
     }
 }
