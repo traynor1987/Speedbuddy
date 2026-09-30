@@ -1,8 +1,16 @@
 package uk.co.traynor.speedbuddy
 
+object CameraLimits {
+    fun resolve(camera: Camera, road: RoadMatch?, roadLimit: Int?): Int? =
+        camera.enforcedMph?.takeIf { it > 0 } ?: roadLimit?.takeIf {
+            it > 0 && road != null && road.confidence >= .55 &&
+                Geo.projection(camera.point, road.road.points).first <= 20
+        }
+}
+
 /** A spoken limit is either tagged on the camera or confidently matched to the current road. */
 object CameraAnnouncement {
-    fun text(camera: Camera, matchedRoadLimitMph: Int?): String {
+    fun text(camera: Camera, matchedRoadLimitMph: Int?, speeding: Boolean = false): String {
         val prefix = when (camera.type) {
             CameraType.MOBILE -> "Mobile speed camera reported ahead."
             CameraType.SPEED -> "Speed camera ahead."
@@ -11,6 +19,7 @@ object CameraAnnouncement {
             CameraType.AVERAGE -> "Average speed camera ahead."
         }
         val limit = camera.enforcedMph ?: matchedRoadLimitMph
-        return if (limit != null && limit > 0) "$prefix Speed limit $limit miles per hour." else prefix
+        val message = if (limit != null && limit > 0) "$prefix Speed limit $limit miles per hour." else prefix
+        return if (speeding && limit != null && limit > 0) "Warning, speeding. $message" else message
     }
 }

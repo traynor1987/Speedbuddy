@@ -555,13 +555,13 @@ class MainActivity : ComponentActivity() {
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     Column(Modifier.padding(16.dp)) {
                         Text("Warning threshold", color = Ink, fontSize = 16.sp)
-                        Text("Select a margin above the known limit", color = Muted, fontSize = 13.sp)
+                        Text("Margin for camera speeding alerts and the optional overspeed warning", color = Muted, fontSize = 13.sp)
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             listOf(0, 1, 2, 3, 5).forEach { value ->
                                 FilterChip(selected = prefs.getInt("tolerance", 2).also { version } == value,
                                     onClick = { prefs.edit().putInt("tolerance", value).apply(); version++ },
-                                    label = { Text("+$value") }, enabled = enabled)
+                                    label = { Text("+$value") })
                             }
                         }
                     }
@@ -578,6 +578,8 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     HorizontalDivider(color=Line,modifier=Modifier.padding(horizontal=16.dp))
+                    Text("Double beep at 100 yards. Speeding towards a camera adds a double beep and voice warning. Voice off keeps the beeps.",
+                        modifier=Modifier.padding(16.dp),color=Muted,style=MaterialTheme.typography.bodySmall)
                     Column(Modifier.padding(16.dp)) {
                         Text("Mobile reports expire after",color=Ink,style=MaterialTheme.typography.bodyMedium)
                         Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
