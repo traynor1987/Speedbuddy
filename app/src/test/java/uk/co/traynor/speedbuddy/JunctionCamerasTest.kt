@@ -82,4 +82,16 @@ class JunctionCamerasTest {
         assertFalse(relevant(next.copy(camera=next.camera.copy(junction=null))))
         assertFalse(relevant(null))
     }
+
+    @Test fun turningTowardsAnUnannouncedArmDoesNotTreatItAsAlreadyPassed() {
+        val north=camera("north",100.0)
+        val west=camera("west").copy(point=Geo.ahead(centre,270.0,60.0),direction=270.0)
+        val detector=CameraApproachDetector()
+        assertEquals(north.id,detector.evaluate(fix(160.0),null,listOf(north,west),28.0).first!!.camera.id)
+        detector.evaluate(fix(10.0),null,listOf(north,west),28.0)
+        val turned=detector.evaluate(fix(0.0,heading=270.0),null,listOf(north,west),28.0).first!!
+        assertEquals(west.id,turned.camera.id)
+        assertTrue(turned.warning!!.closeReminder)
+        assertFalse(turned.warning!!.announceApproach)
+    }
 }

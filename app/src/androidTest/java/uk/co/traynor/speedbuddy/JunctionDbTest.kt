@@ -110,4 +110,33 @@ class JunctionDbTest {
             assertTrue(JunctionStore(db).all().isEmpty());assertTrue(db.userCameras().isEmpty())
         }
     }
+
+    @Test fun restoreCanMoveJunctionTogetherWithItsReplacedMembers() {
+        val prefs=context.getSharedPreferences("junction-tests",0)
+        CameraDb(context,filename).use { db ->
+            JunctionStore(db).save(group)
+            val member=db.create(group.point,CameraType.COMBINED,0.0,30,junction=group)
+            val moved=group.copy(point=Geo.ahead(group.point,0.0,400.0))
+            val replacement=member.copy(point=moved.point,junction=moved)
+            val backup=OwnerBackup(listOf(replacement),emptyMap(),junctions=listOf(moved))
+            db.restoreOwnerData(backup,prefs)
+            assertEquals(moved,JunctionStore(db).find(group.id))
+            assertEquals(moved.point,db.userCameras().single().point)
+        }
+    }
+
+    @Test fun restoreCannotMoveJunctionAwayFromUnreplacedMembers() {
+        val prefs=context.getSharedPreferences("junction-tests",0)
+        CameraDb(context,filename).use { db ->
+            JunctionStore(db).save(group)
+            val member=db.create(group.point,CameraType.COMBINED,0.0,30,junction=group)
+            db.create(group.point,CameraType.RED_LIGHT,180.0,junction=group)
+            val moved=group.copy(point=Geo.ahead(group.point,0.0,400.0))
+            assertThrows(IllegalArgumentException::class.java) {
+                db.restoreOwnerData(OwnerBackup(listOf(member.copy(point=moved.point,junction=moved)),emptyMap(),junctions=listOf(moved)),prefs)
+            }
+            assertEquals(group,JunctionStore(db).find(group.id))
+            assertTrue(db.userCameras().all { it.point==group.point && it.junction==group })
+        }
+    }
 }
