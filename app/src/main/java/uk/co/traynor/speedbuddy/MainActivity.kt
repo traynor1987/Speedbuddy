@@ -220,11 +220,15 @@ class MainActivity : ComponentActivity() {
                                 if(live.alert?.camera?.id==id) lifecycleScope.launch {
                                     val result=runCatching { withContext(Dispatchers.IO) {
                                         val store=MobileReportStore(db)
-                                        if(stillThere) store.confirm(id) else { store.remove(id);true }
+                                        if(stillThere) {
+                                            val current=DriveBus.state.value
+                                            val report=current.alert?.camera?.mobileReport?.takeIf { it.id==id }
+                                            if(report!=null && MobileReportFeedback.canConfirm(report,current.fix,SystemClock.elapsedRealtime(),System.currentTimeMillis())) store.confirm(id) else false
+                                        } else { store.remove(id);true }
                                     } }
                                     android.widget.Toast.makeText(this@MainActivity,when {
                                         result.isFailure -> "Could not update report. Try again."
-                                        result.getOrNull()!=true -> "Report has expired"
+                                        result.getOrNull()!=true -> "Confirm near an active report with a fresh GPS fix"
                                         stillThere -> "Report confirmed"
                                         else -> "Report removed"
                                     },android.widget.Toast.LENGTH_SHORT).show()
@@ -504,7 +508,7 @@ class MainActivity : ComponentActivity() {
         }
         alert?.camera?.mobileReport?.let { report ->
             MobileObservationActions(report,{onMobileFeedback(report.id,true)},{onMobileFeedback(report.id,false)},
-                confirmationEnabled=fixAge!=null && fixAge in 0..5_000 && fix!=null && fix.accuracyM<=35 && state.alertPositionFresh)
+                confirmationEnabled=MobileReportFeedback.canConfirm(report,fix,SystemClock.elapsedRealtime(),System.currentTimeMillis()) && state.alertPositionFresh)
         }
         if(state.active) OutlinedButton(onClick=onReportMobile,
             enabled=fix!=null && fixAge!=null && fixAge in 0..5_000 && fix.accuracyM<=35,

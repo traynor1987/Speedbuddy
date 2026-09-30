@@ -64,10 +64,20 @@ class MobileReportPolicyTest {
         val decision=CameraApproachDetector().evaluate(fix,RoadMatch(own,0.0,0.0,.9),listOf(camera),22.0,listOf(own,other),2_000L)
         assertNull(decision.first);assertEquals("Different reported road",decision.second.reason)
     }
+    @Test fun presenceConfirmationRequiresFreshAccurateNearbyFixAndActiveReport() {
+        val fix=Fix(point,4.0,0.0,null,null,1_000L)
+        assertTrue(MobileReportFeedback.canConfirm(report(),fix,1_000L,2_000L))
+        assertFalse(MobileReportFeedback.canConfirm(report(),fix,6_001L,2_000L))
+        assertFalse(MobileReportFeedback.canConfirm(report(),fix.copy(accuracyM=36.0),1_000L,2_000L))
+        assertFalse(MobileReportFeedback.canConfirm(report(),fix.copy(point=Geo.ahead(point,0.0,500.0)),1_000L,2_000L))
+        assertFalse(MobileReportFeedback.canConfirm(report(),fix,1_000L,report().expiresAtMs))
+        assertFalse(MobileReportFeedback.canConfirm(report(),null,1_000L,2_000L))
+    }
     @Test fun mobileToggleDoesNotDisableFixedCameras() {
         assertTrue(CameraAlertPolicy.enabled(CameraType.SPEED,true,false,true,true))
         assertFalse(CameraAlertPolicy.enabled(CameraType.MOBILE,true,false,true,true))
         assertFalse(CameraAlertPolicy.enabled(CameraType.SPEED,false,true,true,true))
+        assertFalse(CameraAlertPolicy.enabled(CameraType.AVERAGE,false,true,true,true))
         assertTrue(CameraAlertPolicy.enabled(CameraType.MOBILE,false,true,false,false))
     }
 }

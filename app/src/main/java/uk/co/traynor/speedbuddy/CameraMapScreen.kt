@@ -378,8 +378,12 @@ fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
             camera?.mobileReport != null -> Box(Modifier.align(Alignment.BottomCenter)) {
                 val report=camera!!.mobileReport!!
                 MobileReportDetailSheet(report,{camera=null},
-                    { saveChange({ check(MobileReportStore(db).confirm(report.id)) { "This report has expired" } }) { revision++;camera=null } },
-                    { saveChange({ MobileReportStore(db).remove(report.id) }) { revision++;camera=null } })
+                    { saveChange({
+                        check(MobileReportFeedback.canConfirm(report,DriveBus.state.value.fix,SystemClock.elapsedRealtime(),System.currentTimeMillis())) { "Confirm near the report with a fresh GPS fix" }
+                        check(MobileReportStore(db).confirm(report.id)) { "This report has expired" }
+                    }) { revision++;camera=null } },
+                    { saveChange({ MobileReportStore(db).remove(report.id) }) { revision++;camera=null } },
+                    confirmationEnabled=MobileReportFeedback.canConfirm(report,drive.fix,SystemClock.elapsedRealtime(),System.currentTimeMillis()))
             }
             pin != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { CameraMapEditor(null, pin!!, { pin = null }, { point, type, direction, mph, note, both ->
                 saveChange({ db.create(point,type,direction,mph,note,both) }) { revision++;pin=null }

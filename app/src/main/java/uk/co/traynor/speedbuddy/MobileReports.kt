@@ -76,3 +76,10 @@ fun mobileAgeLabel(report: MobileReport, nowMs: Long): String {
     val age=if(minutes==0) "just now" else if(minutes==1) "1 min ago" else "$minutes min ago"
     return (if(report.observedAtMs>report.reportedAtMs) "Confirmed " else "Reported ")+age
 }
+
+object MobileReportFeedback {
+    fun canConfirm(report: MobileReport,fix: Fix?,elapsedNowMs: Long,wallNowMs: Long): Boolean =
+        report.activeAt(wallNowMs) && fix!=null && elapsedNowMs-fix.elapsedMs in 0..5_000 &&
+            fix.accuracyM.isFinite() && fix.accuracyM in 0.0..35.0 &&
+            Geo.distance(fix.point,report.point)<=CAMERA_ALERT_METERS+35
+}

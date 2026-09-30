@@ -121,6 +121,9 @@ class DrivingService : Service(), LocationListener {
                         else state.copy(alert=state.alert!!.copy(camera=stored.asCamera()))
                     DriveBus.set(state)
                 }
+                if(!fixedSpeedEnabled(settings) && state.averageSection!=null) {
+                    state=state.copy(averageSection=null);DriveBus.set(state)
+                }
                 state.alert?.let { alert ->
                     if (!cameraEnabled(alert.camera,settings) || (alert.camera.type==CameraType.MOBILE && alert.camera.mobileReport?.activeAt(wallNow)!=true)) {
                         state=state.copy(alert=null,decision=CameraDecision(null,null,false,"Camera warning ended"))
@@ -189,7 +192,7 @@ class DrivingService : Service(), LocationListener {
         val cameras=effectiveCameraCache
         val enabled = cameras.filter { cameraEnabled(it,settings) }
         val (alert, decision) = detector.evaluate(fix, road, enabled, speed,correctedRoads.orEmpty(),wallNow)
-        val section=if(settings.getBoolean("speedCamera",true)) sectionTracker.update(fix,road,cached?.averageSections.orEmpty()) else null
+        val section=if(fixedSpeedEnabled(settings)) sectionTracker.update(fix,road,cached?.averageSections.orEmpty()) else null
         val newCamera = alert != null && decision.reason == "New approach"
         val changedLimit=limitVoiceGate.update(limit)
         val tolerance = settings.getInt("tolerance",2)
@@ -228,6 +231,9 @@ class DrivingService : Service(), LocationListener {
             }
         }
     }
+    private fun fixedSpeedEnabled(settings: android.content.SharedPreferences) = CameraAlertPolicy.enabled(
+        CameraType.AVERAGE,settings.getBoolean("fixedCamera",true),settings.getBoolean("mobileCamera",true),
+        settings.getBoolean("speedCamera",true),settings.getBoolean("redCamera",true))
     private fun cameraEnabled(camera: Camera, settings: android.content.SharedPreferences) = CameraAlertPolicy.enabled(
         camera.type,settings.getBoolean("fixedCamera",true),settings.getBoolean("mobileCamera",true),
         settings.getBoolean("speedCamera",true),settings.getBoolean("redCamera",true))

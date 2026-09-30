@@ -28,7 +28,7 @@ import java.util.Date
     }
 }
 
-@Composable internal fun MobileReportDetailSheet(report: MobileReport,close: ()->Unit,confirm: ()->Unit,remove: ()->Unit) {
+@Composable internal fun MobileReportDetailSheet(report: MobileReport,close: ()->Unit,confirm: ()->Unit,remove: ()->Unit,confirmationEnabled: Boolean=false) {
     Surface(Modifier.fillMaxWidth().padding(12.dp),shape=RoundedCornerShape(18.dp)) {
         Column(Modifier.heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.65f)
             .verticalScroll(rememberScrollState()).padding(18.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -40,7 +40,9 @@ import java.util.Date
             Text(report.direction?.let { "Reported travel direction ${it.toInt()}°" } ?: "Travel direction unknown")
             Text("A local observation; presence and enforcement direction are unverified.",style=MaterialTheme.typography.bodySmall,
                 color=MaterialTheme.colorScheme.onSurfaceVariant)
-            MobileObservationActions(report,confirm,remove)
+            if(!confirmationEnabled) Text("Confirm when near this report with a fresh GPS fix.",style=MaterialTheme.typography.bodySmall,
+                color=MaterialTheme.colorScheme.onSurfaceVariant)
+            MobileObservationActions(report,confirm,remove,confirmationEnabled)
             TextButton(onClick=close) { Text("Close") }
         }
     }
