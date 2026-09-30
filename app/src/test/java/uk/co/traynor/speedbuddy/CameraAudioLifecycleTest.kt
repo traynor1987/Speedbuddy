@@ -42,6 +42,13 @@ class CameraAudioLifecycleTest {
         assertEquals(30, gate.update(30, false, true))
     }
 
+    @Test fun queuedSpeedingLimitMustStillBeTheCurrentReliableLimit() {
+        fun valid(currentLimit: Int?) = CameraCueValidity.relevant(Alert(camera, 180.0),
+            35.0, true, true, camera.id, true, 30, 2, 1_000L, currentLimit)
+        assertTrue(valid(30))
+        assertFalse(valid(40)); assertFalse(valid(20)); assertFalse(valid(null))
+    }
+
     @Test fun unknownOrDisabledLimitDoesNotReplayDeferredAnnouncement() {
         val gate = DeferredLimitVoice()
         gate.update(30, false, true); gate.update(20, true, true)

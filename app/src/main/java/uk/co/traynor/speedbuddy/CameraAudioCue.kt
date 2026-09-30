@@ -18,9 +18,10 @@ internal data class QueuedCameraSpeech(val text: String, val queuedAtMs: Long,
 
 object CameraCueValidity {
     fun relevant(alert: Alert?, speed: Double?, fresh: Boolean, enabled: Boolean,
-        id: String, speeding: Boolean, limit: Int?, tolerance: Int, nowMs: Long): Boolean =
+        id: String, speeding: Boolean, limit: Int?, tolerance: Int, nowMs: Long,
+        currentLimit: Int? = limit): Boolean =
         fresh && enabled && alert != null && alert.camera.id == id &&
             alert.distanceM <= CAMERA_ALERT_METERS + 35 &&
             (alert.camera.type != CameraType.MOBILE || alert.camera.mobileReport?.activeAt(nowMs) == true) &&
-            (!speeding || (limit != null && speed != null && speed.isFinite() && speed > limit + tolerance.coerceAtLeast(0)))
+            (!speeding || (limit != null && currentLimit == limit && speed != null && speed.isFinite() && speed > limit + tolerance.coerceAtLeast(0)))
 }

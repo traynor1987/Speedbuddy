@@ -31,7 +31,12 @@ stages together; merely stopping or fluctuating around 100 yards does not.
 
 Two 160ms tones, with a 110ms gap, precede speeding speech. The existing temporary
 navigation audio focus ducks compatible media players and is released afterwards.
-Media volume is never changed. Stop Drive, focus loss and a timeout cancel pending
+Media volume is never changed. Beeps do not wait for the speech engine. Queued
+speech has a ten-second maximum age and rechecks the current camera identity,
+category/voice settings, GPS freshness, speed and current reliable limit. Changes
+to the limit or a driver slowing below threshold cancel stale speeding speech.
+The latest still-valid limit change waits for camera audio to finish.
+Stop Drive, focus loss and a timeout cancel pending
 tones/speech and release resources. A beep-only reminder can accompany ongoing
 approach speech without cutting the sentence off. TTS failure retains audible
 fallbacks; actual routing and volume depend on Android/audio settings.

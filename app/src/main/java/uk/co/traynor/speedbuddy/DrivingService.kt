@@ -210,6 +210,7 @@ class DrivingService : Service(), LocationListener {
                 cameraVoice.play(CameraAudioCue.from(alert.camera, warning, settings.getBoolean("cameraSound", true)),
                     relevant = { cameraCueRelevant(alert.camera.id, false, warning.limitMph) },
                     voiceAllowed = { settings.getBoolean("cameraSound", true) &&
+                        currentCameraLimit() == warning.limitMph &&
                         (!warning.speeding || cameraCueRelevant(alert.camera.id, true, warning.limitMph)) })
                 signal(false,settings.getBoolean("vibrate",true))
             }
@@ -246,7 +247,12 @@ class DrivingService : Service(), LocationListener {
         } == true
         return CameraCueValidity.relevant(live.alert, live.speedMph, fresh,
             live.alert?.let { cameraEnabled(it.camera, settings) } == true,
-            id, speeding, limit, settings.getInt("tolerance", 2), System.currentTimeMillis())
+            id, speeding, limit, settings.getInt("tolerance", 2), System.currentTimeMillis(),
+            currentLimit = currentCameraLimit())
+    }
+    private fun currentCameraLimit(): Int? {
+        val live = DriveBus.state.value
+        return live.alert?.let { CameraLimits.resolve(it.camera, live.road, live.limitMph) }
     }
     private fun announceLimitIfReady(settings: android.content.SharedPreferences) {
         val current = DriveBus.state.value
