@@ -50,8 +50,9 @@ class CombinedRoadCacheTest {
         val other=road.copy(id="way/unrelated",points=listOf(otherPoint,Geo.ahead(otherPoint,0.0,300.0)))
         RoadDb(context,name).use { db ->
             // The partial tile is newer; that must not hide missing valid older regional roads.
-            db.replace(RoadTileData(tile,2000,listOf(other),emptyList(),complete=false))
-            val snapshot=OsmSnapshot(p,1000,listOf(road),listOf(camera),listOf(section))
+            val now=System.currentTimeMillis()
+            db.replace(RoadTileData(tile,now-1000,listOf(other),emptyList(),complete=false))
+            val snapshot=OsmSnapshot(p,now-2000,listOf(road),listOf(camera),listOf(section))
             val repository=DrivingRoadRepository(db) { snapshot }
             val local=repository.nearby(p,false)
             assertEquals(setOf(road.id,other.id),local.roads.map { it.road.id }.toSet())
@@ -60,6 +61,20 @@ class CombinedRoadCacheTest {
             assertEquals(road.id,match.road.id)
             assertEquals(30,LimitDecisionEngine().decide(fix,match,SpeedLimits.mph(match.road.tags),null,emptyList(),1000).mph)
             assertEquals(camera,local.cameras.single());assertEquals(section,local.averageSections.single())
+            assertTrue(db.coverage().isEmpty())
+        }
+        context.deleteDatabase(name)
+    }
+    @Test fun expiredRegionalCacheDoesNotReplaceReadablePartialTile() {
+        val name="combined-expired.db";context.deleteDatabase(name)
+        RoadDb(context,name).use { db ->
+            val now=System.currentTimeMillis()
+            val other=road.copy(id="way/unrelated")
+            db.replace(RoadTileData(tile,now-1000,listOf(other),emptyList(),complete=false))
+            val expired=OsmSnapshot(p,now-2_592_000_001L,listOf(road),listOf(camera),listOf(section))
+            val local=DrivingRoadRepository(db) { expired }.nearby(p,false)
+            assertEquals(listOf(other),local.roads.map { it.road })
+            assertTrue(local.cameras.isEmpty());assertTrue(local.averageSections.isEmpty())
             assertTrue(db.coverage().isEmpty())
         }
         context.deleteDatabase(name)
