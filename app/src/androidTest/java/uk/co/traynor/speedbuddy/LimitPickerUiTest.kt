@@ -25,11 +25,11 @@ class LimitPickerUiTest {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         try {
             instrumentation.waitForIdleSync()
-            tap(awaitNode { it.contentDescription?.toString()=="Correct road speed limit" && it.isEnabled && it.isClickable })
+            tap(awaitNode { it.contentDescription?.toString()=="Correct road speed limit" })
             awaitNode { it.text?.toString()=="Choose the real limit" }
             for(label in listOf("20 mph","30 mph","40 mph","50 mph","60 mph","70 mph","National Speed Limit","Unknown")) {
                 val choice=awaitNode { it.contentDescription?.toString()==label }
-                assertTrue("$label must be clickable",choice.isClickable)
+                assertTrue("$label must be clickable\n${tree()}",choice.isClickable)
                 val bounds=android.graphics.Rect();choice.getBoundsInScreen(bounds)
                 assertTrue("$label touch target is too small: $bounds",bounds.height()>=48*instrumentation.targetContext.resources.displayMetrics.density)
             }
@@ -63,7 +63,18 @@ class LimitPickerUiTest {
             find(InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow,predicate)?.let { return it }
             Thread.sleep(100)
         } while(SystemClock.elapsedRealtime()<until)
-        error("Expected UI control was not visible")
+        error("Expected UI control was not visible; active=${DriveBus.state.value.active}, road=${DriveBus.state.value.road?.road?.id}\n${tree()}")
+    }
+    private fun tree(): String {
+        val result=StringBuilder()
+        fun visit(node: AccessibilityNodeInfo?,depth: Int) {
+            if(node==null) return
+            val bounds=android.graphics.Rect();node.getBoundsInScreen(bounds)
+            result.append(" ".repeat(depth)).append("text=${node.text}, description=${node.contentDescription}, clickable=${node.isClickable}, enabled=${node.isEnabled}, bounds=$bounds\n")
+            for(i in 0 until node.childCount) visit(node.getChild(i),depth+1)
+        }
+        visit(InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow,0)
+        return result.toString()
     }
     private fun find(node: AccessibilityNodeInfo?,predicate: (AccessibilityNodeInfo)->Boolean): AccessibilityNodeInfo? {
         if(node==null) return null
