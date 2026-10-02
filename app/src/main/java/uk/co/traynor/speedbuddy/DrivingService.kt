@@ -30,6 +30,7 @@ data class DriveState(
     val roadDataStatus: String = "", val limitDecision: LimitDecision? = null,
     val sourceLimitMph: Int? = null, val tooEarlyAvailable: Boolean = false,
     val awaitingBoundary: Boolean = false, val coverageTiles: Int = 0, val targetTiles: Int = 0,
+    val boundaryAvailable: Boolean = false,val correctionMessage: String = "",
 )
 object DriveBus { private val mutable = MutableStateFlow(DriveState()); val state = mutable.asStateFlow(); fun set(state: DriveState) { mutable.value = state } }
 
@@ -69,6 +70,8 @@ class DrivingService : Service(), LocationListener {
     private var tick: Job? = null
     private var processing: Job? = null
     private var feedbackJob: Job? = null
+    private var feedbackMessage = ""
+    private var feedbackAt = 0L
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
         super.onCreate(); locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
@@ -99,7 +102,7 @@ class DrivingService : Service(), LocationListener {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stopSelf(); return START_NOT_STICKY }
-        if (intent?.action in listOf("TOO_EARLY","CHANGED_NOW","CANCEL_BOUNDARY","RESET_CORRECTIONS","SET_OVERRIDE")) {
+        if (intent?.action in listOf("TOO_EARLY","CHANGED_NOW","STARTS_HERE","CANCEL_BOUNDARY","RESET_CORRECTIONS","RESET_ROAD","SET_LIMIT","SET_OVERRIDE")) {
             if (tick == null || !ready) { if (tick == null) stopSelf(); return START_NOT_STICKY }
             handleFeedback(intent!!)
             return START_NOT_STICKY
@@ -121,11 +124,12 @@ class DrivingService : Service(), LocationListener {
             tick = scope.launch { while (isActive) { delay(1000); val state = DriveBus.state.value
                 if (state.fix != null && SystemClock.elapsedRealtime() - state.fix.elapsedMs > 5000) {
                     speedFilter.current(SystemClock.elapsedRealtime()); matcher.reset(); limitEngine.reset()
-                    DriveBus.set(state.copy(speedMph = null, limitMph = null, road = null, alert = null, upcoming = null, tooEarlyAvailable = false, awaitingBoundary = false, status = "GPS signal lost"))
+                    DriveBus.set(state.copy(speedMph = null, limitMph = null, road = null, alert = null, upcoming = null, limitDecision=null, tooEarlyAvailable = false, boundaryAvailable=false, awaitingBoundary = false, status = "GPS signal lost"))
                 }
                 val current = DriveBus.state.value
                 val now = SystemClock.elapsedRealtime()
-                DriveBus.set(current.copy(roadDataStatus = roadStatus(now), tooEarlyAvailable = limitEngine.canReport(now)))
+                DriveBus.set(current.copy(roadDataStatus = roadStatus(now), tooEarlyAvailable = limitEngine.canReport(now),boundaryAvailable=limitEngine.canMarkBoundary(now),
+                    correctionMessage=feedbackMessage.takeIf { now-feedbackAt in 0..6000 } ?: ""))
                 current.fix?.takeIf { now-it.elapsedMs in 0..5000 }?.let { refresh(it) }
             } }
         }
@@ -175,15 +179,17 @@ class DrivingService : Service(), LocationListener {
                 val (alert,cameraDecision)=detector.evaluate(fix,road,enabled,speed)
                 if(alert!=null && alert.camera.id!=lastAlertId) { lastAlertId=alert.camera.id;signal(settings.getBoolean("cameraSound",true),settings.getBoolean("vibrate",true)) }
                 val tolerance=settings.getInt("tolerance",2)
-                if(settings.getBoolean("overspeed",false) && overspeed.update(speed,limit,tolerance)) signal(false,settings.getBoolean("vibrate",true))
+                val alertLimit=limit.takeUnless { decision.assumed }
+                if(settings.getBoolean("overspeed",false) && overspeed.update(speed,alertLimit,tolerance)) signal(false,settings.getBoolean("vibrate",true))
                 val age=local.roads.firstOrNull { it.road.id==road?.road?.id }?.let { (wallNow-it.fetchedAt).coerceAtLeast(0) }
                 val wanted=RoadTiles.covering(fix.point)
                 DriveBus.set(DriveState(active=true,speedMph=speed,limitMph=limit,fix=fix,road=road,alert=alert,decision=cameraDecision,
                     dataAgeMs=age,status=when { speed==null -> "GPS speed unavailable";limit==null -> "Road limit unknown";else -> "" },
-                    overspeed=settings.getBoolean("overspeed",false) && overspeed.isOver(speed,limit,tolerance),mapStatus=mapStatus,
+                    overspeed=settings.getBoolean("overspeed",false) && overspeed.isOver(speed,alertLimit,tolerance),mapStatus=mapStatus,
                     upcoming=upcoming,publicCameraCount=publicCameras.size,userCameraCount=userCameras.size,importedCameraCount=importedCount,importedNearbyCount=importedNearby.size,
                     roadDataStatus=roadStatus(now),limitDecision=decision,sourceLimitMph=source,tooEarlyAvailable=limitEngine.canReport(now),awaitingBoundary=limitEngine.pendingFeedback,
-                    coverageTiles=wanted.count { it in coverage },targetTiles=wanted.size))
+                    coverageTiles=wanted.count { it in coverage },targetTiles=wanted.size,boundaryAvailable=limitEngine.canMarkBoundary(now),
+                    correctionMessage=feedbackMessage.takeIf { now-feedbackAt in 0..6000 } ?: ""))
                 refresh(fix)
             } catch(e: Exception) {
                 if(e is CancellationException) throw e
@@ -234,35 +240,67 @@ class DrivingService : Service(), LocationListener {
         val fix=state.fix ?: return
         val now=SystemClock.elapsedRealtime()
         if(now-fix.elapsedMs !in 0..5000 || feedbackJob?.isActive==true) return
+        if(intent.action in listOf("SET_LIMIT","STARTS_HERE","TOO_EARLY") &&
+            intent.getStringExtra("road")!=state.road?.road?.id) { feedback("Road changed. Tap the sign again.");return }
         when(intent.action) {
-            "TOO_EARLY" -> if(limitEngine.tooEarly(fix,now)) DriveBus.set(state.copy(limitMph=limitEngine.decide(fix,state.road,state.sourceLimitMph,null,boundaries,now).mph,
-                tooEarlyAvailable=false,awaitingBoundary=true,upcoming=state.limitMph?.let { UpcomingLimit(it,0.0,false) }))
+            "TOO_EARLY" -> if(limitEngine.tooEarly(fix,now)) {
+                val d=limitEngine.decide(fix,state.road,state.sourceLimitMph,null,boundaries,now)
+                DriveBus.set(state.copy(limitMph=d.mph,limitDecision=d,tooEarlyAvailable=false,awaitingBoundary=true,upcoming=d.upcoming))
+            }
             "CANCEL_BOUNDARY" -> { limitEngine.cancelFeedback();DriveBus.set(state.copy(awaitingBoundary=false,tooEarlyAvailable=false)) }
-            "CHANGED_NOW" -> {
-                val correction=limitEngine.changedNow(fix,now) ?: return
+            "CHANGED_NOW","STARTS_HERE" -> {
+                if(intent.getStringExtra("road")?.let { it!=state.road?.road?.id } == true) { feedback("Road changed. Tap the sign again.");return }
+                if(intent.action=="STARTS_HERE" && intent.getIntExtra("mph",OWNER_UNKNOWN)!=state.sourceLimitMph) {
+                    feedback("Limit changed. Tap the sign again.");return
+                }
+                val correction=limitEngine.startsHere(fix,now) ?: run { feedback("Wait for a clear road and GPS match.");return }
                 feedbackJob=scope.launch {
                     try {
                         withContext(Dispatchers.IO) { roads.saveBoundary(correction) }
                         boundaries=withContext(Dispatchers.IO) { roads.boundaries() };limitEngine.feedbackSaved()
-                        DriveBus.set(DriveBus.state.value.copy(limitMph=correction.newMph,awaitingBoundary=false,tooEarlyAvailable=false,upcoming=null))
-                    } catch(e: Exception) { if(e is CancellationException) throw e;Log.w("SpeedBuddy","Boundary could not be saved",e) }
+                        applyLiveCorrections()
+                        feedback("Limit starts here • saved")
+                    } catch(e: Exception) { if(e is CancellationException) throw e;Log.w("SpeedBuddy","Boundary could not be saved",e);feedback("Could not save. Try again when stopped.") }
                 }
             }
-            "RESET_CORRECTIONS","SET_OVERRIDE" -> {
-                if((state.speedMph ?: Double.MAX_VALUE)>=5) return
+            "SET_LIMIT","RESET_CORRECTIONS","RESET_ROAD","SET_OVERRIDE" -> {
+                if(intent.action!="SET_LIMIT" && (state.speedMph ?: Double.MAX_VALUE)>=5) return
                 val road=state.road?.road
-                if(intent.action=="SET_OVERRIDE" && (road==null || fix.bearing==null)) return
+                if(intent.action!="RESET_CORRECTIONS" && (road==null || fix.bearing==null)) return
+                val row=if(intent.action in listOf("SET_LIMIT","SET_OVERRIDE")) QuickLimitCorrection.capture(fix,state.road,state.sourceLimitMph,
+                    intent.getIntExtra("mph",OWNER_UNKNOWN),intent.getStringExtra("road") ?: road!!.id,now) else null
+                if(intent.action in listOf("SET_LIMIT","SET_OVERRIDE") && row==null) { feedback("Road or GPS changed. Tap the sign again.");return }
                 feedbackJob=scope.launch {
                     try {
                         withContext(Dispatchers.IO) {
                             if(intent.action=="RESET_CORRECTIONS") roads.resetCorrections()
-                            else roads.setOverride(road!!.id,fix.bearing!!,intent.getIntExtra("mph",0).takeIf { it>0 })
+                            else if(intent.action=="RESET_ROAD") roads.setOverride(road!!.id,fix.bearing!!,null)
+                            else roads.saveOverride(row!!)
                         }
                         boundaries=withContext(Dispatchers.IO) { roads.boundaries() };overrides=withContext(Dispatchers.IO) { roads.overrides() };limitEngine.reset()
-                    } catch(e: Exception) { if(e is CancellationException) throw e;Log.w("SpeedBuddy","Correction update failed",e) }
+                        // Never overwrite a newer road fix with the saved picker target.
+                        applyLiveCorrections()
+                        feedback(if(row!=null) "Road limit saved" else "Corrections reset")
+                    } catch(e: Exception) { if(e is CancellationException) throw e;Log.w("SpeedBuddy","Correction update failed",e);feedback("Could not save. Try again when stopped.") }
                 }
             }
         }
+    }
+    private fun feedback(message: String) {
+        feedbackMessage=message;feedbackAt=SystemClock.elapsedRealtime()
+        DriveBus.set(DriveBus.state.value.copy(correctionMessage=message))
+    }
+    private fun applyLiveCorrections() {
+        val live=DriveBus.state.value
+        val current=live.fix
+        val now=SystemClock.elapsedRealtime()
+        if(current==null || now-current.elapsedMs !in 0..5000) {
+            DriveBus.set(live.copy(limitMph=null,limitDecision=null,upcoming=null,awaitingBoundary=false,boundaryAvailable=false,tooEarlyAvailable=false))
+            return
+        }
+        val selected=live.road?.let { RoadDb.selectOverride(overrides,it.road.id,current.bearing) }
+        val decision=limitEngine.decide(current,live.road,live.sourceLimitMph,selected,boundaries,now)
+        DriveBus.set(live.copy(limitMph=decision.mph,limitDecision=decision,upcoming=decision.upcoming,awaitingBoundary=false,boundaryAvailable=false,tooEarlyAvailable=false))
     }
     private fun signal(sound: Boolean, vibration: Boolean) {
         if (sound) runCatching {

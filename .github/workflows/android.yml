@@ -107,8 +107,11 @@ jobs:
         run: |
           umask 077
           python3 - <<'PY'
-          import base64, os
+          import base64, os, json
           from pathlib import Path
+          tracked=json.loads(Path('docs/owner-signing-certificate.json').read_text())['certificateSha256']
+          if os.environ['OWNER_CERTIFICATE'] != tracked:
+              raise SystemExit('CI signer differs from the tracked permanent owner identity; no APK produced.')
           Path(os.environ['RUNNER_TEMP'], 'speedbuddy-owner.jks').write_bytes(base64.b64decode(os.environ['OWNER_KEY'], validate=True))
           PY
           mkdir -p acceptance

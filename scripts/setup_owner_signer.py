@@ -6,10 +6,24 @@ import getpass
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+
+PIN_FILE=Path(__file__).resolve().parents[1]/'docs'/'owner-signing-certificate.json'
+
+def resolve_certificate_pin(variable_pin):
+    tracked=''
+    if PIN_FILE.exists():
+        try: tracked=json.loads(PIN_FILE.read_text())['certificateSha256']
+        except (KeyError, json.JSONDecodeError): raise ValueError('Invalid tracked owner certificate; recover its identity first')
+        if not isinstance(tracked,str) or not re.fullmatch(r'[0-9a-f]{64}',tracked):
+            raise ValueError('Invalid tracked owner certificate; recover its identity first')
+    if tracked and variable_pin and tracked!=variable_pin:
+        raise ValueError('CI variable differs from tracked owner certificate; no signing identity changed')
+    return tracked or variable_pin
 
 
 def run(args, *, value=None, env=None):
@@ -35,6 +49,7 @@ def main():
     variables = json.loads(run(["gh", "variable", "list", "--repo", repo, "--json", "name,value"]))
     pin = next((item["value"].strip().lower() for item in variables
                 if item["name"] == "SPEED_BUDDY_SIGNING_CERT_SHA256"), "")
+    pin=resolve_certificate_pin(pin)
     # Refuse generation if an established pin exists. Never rotate automatically.
     if args.create and pin:
         raise ValueError("An owner certificate is already pinned; recover and reuse its key")

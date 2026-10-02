@@ -16,6 +16,8 @@ class OwnerSignerSetupTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.key = Path(self.tmp.name) / 'owner.jks'
+        pin_patch=patch.object(module,'PIN_FILE',Path(self.tmp.name)/'public-pin.json',create=True)
+        pin_patch.start();self.addCleanup(pin_patch.stop)
 
     def invoke(self, answers):
         with patch.object(module.sys, 'argv', ['setup_owner_signer.py', '--create', '--keystore', str(self.key)]), \
@@ -45,6 +47,18 @@ class OwnerSignerSetupTest(unittest.TestCase):
     def test_redirected_input_never_reads_a_password(self):
         with patch.object(module.sys.stdin, 'isatty', return_value=False):
             self.invoke([b'', b'[]'])
+
+    def test_tracked_pin_is_reused_when_ci_variable_is_not_configured(self):
+        module.PIN_FILE.write_text(json.dumps({'certificateSha256':'b'*64}))
+        self.assertEqual(module.resolve_certificate_pin(''), 'b'*64)
+
+    def test_conflicting_ci_pin_cannot_replace_tracked_identity(self):
+        module.PIN_FILE.write_text(json.dumps({'certificateSha256':'b'*64}))
+        with self.assertRaises(ValueError): module.resolve_certificate_pin('a'*64)
+
+    def test_invalid_tracked_pin_cannot_be_treated_as_no_signer(self):
+        module.PIN_FILE.write_text('{}')
+        with self.assertRaises(ValueError): module.resolve_certificate_pin('')
 
 
 if __name__ == '__main__':

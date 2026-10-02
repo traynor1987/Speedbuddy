@@ -9,7 +9,7 @@ import org.json.JSONObject
 import kotlin.math.cos
 
 /** Public tile storage is independent of owner cameras, settings and local corrections. */
-class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,1) {
+class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,2) {
     override fun onConfigure(db: SQLiteDatabase) { db.execSQL("PRAGMA auto_vacuum=INCREMENTAL") }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE tiles(id TEXT PRIMARY KEY,fetched INTEGER NOT NULL,bytes INTEGER NOT NULL,complete INTEGER NOT NULL)")
@@ -20,10 +20,12 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         db.execSQL("CREATE TRIGGER road_delete AFTER DELETE ON roads BEGIN DELETE FROM road_cells WHERE pk=OLD.pk; END")
         db.execSQL("CREATE TABLE public_cameras(tile TEXT NOT NULL,id TEXT NOT NULL,lat REAL NOT NULL,lon REAL NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(tile,id))")
         db.execSQL("CREATE INDEX public_camera_location ON public_cameras(lat,lon)")
-        db.execSQL("CREATE TABLE overrides(road TEXT NOT NULL,bearing REAL NOT NULL,mph INTEGER NOT NULL,PRIMARY KEY(road,bearing))")
+        db.execSQL("CREATE TABLE overrides(road TEXT NOT NULL,bearing REAL NOT NULL,mph INTEGER NOT NULL,payload TEXT,PRIMARY KEY(road,bearing))")
         db.execSQL("CREATE TABLE boundaries(key TEXT PRIMARY KEY,payload TEXT NOT NULL)")
     }
-    override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
+        if(oldVersion<2) db.execSQL("ALTER TABLE overrides ADD COLUMN payload TEXT")
+    }
     fun coverage(): Map<RoadTile,Long> = readableDatabase.rawQuery("SELECT id,fetched FROM tiles WHERE complete=1",null).use { c ->
         buildMap { while(c.moveToNext()) put(RoadTile.parse(c.getString(0)),c.getLong(1)) }
     }
@@ -77,17 +79,34 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         finally { db.endTransaction() }
         db.execSQL("PRAGMA incremental_vacuum(2048)")
     }
-    data class Override(val road: String,val bearing: Double,val mph: Int)
-    fun overrides(): List<Override> = readableDatabase.rawQuery("SELECT road,bearing,mph FROM overrides",null).use { c ->
-        buildList { while(c.moveToNext()) add(Override(c.getString(0),c.getDouble(1),c.getInt(2))) }
+    data class Override(val road: String,val bearing: Double,val mph: Int,val sourceMph: Int? = null,
+        val point: GeoPoint? = null,val recordedAt: Long = 0,val accuracy: Double? = null)
+    fun overrides(): List<Override> = readableDatabase.rawQuery("SELECT road,bearing,mph,payload FROM overrides",null).use { c ->
+        buildList { while(c.moveToNext()) add(if(c.isNull(3)) Override(c.getString(0),c.getDouble(1),c.getInt(2)) else RoadJson.decodeOverride(JSONObject(c.getString(3)))) }
     }
     fun overrideFor(road: String,bearing: Double?): Int? = selectOverride(overrides(),road,bearing)
     fun setOverride(road: String,bearing: Double,mph: Int?) {
-        require(road.isNotBlank() && bearing.isFinite() && bearing in 0.0..<360.0 && (mph==null || mph in 5..100))
+        if(mph!=null) { saveOverride(Override(road,bearing,mph));return }
+        require(road.isNotBlank() && bearing.isFinite() && bearing in 0.0..<360.0)
         val db=writableDatabase;db.beginTransaction()
         try {
             overrides().filter { it.road==road && Geo.difference(it.bearing,bearing)<45 }.forEach { db.delete("overrides","road=? AND bearing=?",arrayOf(road,it.bearing.toString())) }
-            if(mph!=null) db.insertOrThrow("overrides",null,ContentValues().apply { put("road",road);put("bearing",bearing);put("mph",mph) })
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+    fun saveOverride(row: Override) {
+        require(row.road.isNotBlank() && row.road.length<=100 && row.bearing.isFinite() && row.bearing in 0.0..<360.0 && OwnerLimit.valid(row.mph))
+        require(row.sourceMph==null || row.sourceMph in 5..100)
+        require(row.point==null || validPoint(row.point))
+        require(row.recordedAt>=0 && (row.accuracy==null || row.accuracy.isFinite() && row.accuracy in 0.0..20.0))
+        val db=writableDatabase;db.beginTransaction()
+        try {
+            overrides().filter { it.road==row.road && Geo.difference(it.bearing,row.bearing)<45 }.forEach {
+                db.delete("overrides","road=? AND bearing=?",arrayOf(it.road,it.bearing.toString()))
+            }
+            db.insertOrThrow("overrides",null,ContentValues().apply {
+                put("road",row.road);put("bearing",row.bearing);put("mph",row.mph);put("payload",RoadJson.override(row).toString())
+            })
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -114,7 +133,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         val db = writableDatabase
         db.beginTransaction()
         try {
-            overrides.forEach { setOverride(it.road, it.bearing, it.mph) }
+            overrides.forEach(::saveOverride)
             boundaries.forEach(::saveBoundary)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
@@ -127,6 +146,12 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
 }
 
 internal object RoadJson {
+    fun override(o: RoadDb.Override)=JSONObject().put("road",o.road).put("bearing",o.bearing).put("mph",o.mph)
+        .put("source",o.sourceMph?:JSONObject.NULL).put("point",o.point?.let(::point)?:JSONObject.NULL)
+        .put("at",o.recordedAt).put("accuracy",o.accuracy?:JSONObject.NULL)
+    fun decodeOverride(j: JSONObject)=RoadDb.Override(j.getString("road"),j.getDouble("bearing"),j.getInt("mph"),
+        if(j.isNull("source")) null else j.getInt("source"),if(j.isNull("point")) null else point(j.getJSONArray("point")),
+        j.optLong("at",0),if(j.isNull("accuracy")) null else j.getDouble("accuracy"))
     fun point(p: GeoPoint)=JSONArray().put(p.lat).put(p.lon)
     fun point(a: JSONArray)=GeoPoint(a.getDouble(0),a.getDouble(1))
     fun encode(r: Road)=JSONObject().put("id",r.id).put("name",r.name?:JSONObject.NULL).put("points",JSONArray().apply { r.points.forEach { put(point(it)) } }).put("tags",JSONObject(r.tags))

@@ -37,6 +37,14 @@ class OwnerBackupMigrationTest {
             OwnerBackupCodec.parse(current().put("unrecognizedOwnerRecords", org.json.JSONArray().put("precious")).toString())
         }
     }
+    @Test fun newCorrectionEvidenceAndUnknownSelectionRestoreFromV10() {
+        val root=current().put("version",10).put("roadOverrides",org.json.JSONArray().put(org.json.JSONObject()
+            .put("road","way/2").put("bearing",0).put("mph",0).put("source",30)
+            .put("point",org.json.JSONArray().put(53.0).put(-2.0)).put("at",1234).put("accuracy",5)))
+        val row=OwnerBackupCodec.parse(root.toString()).roadOverrides.single()
+        assertEquals(0,row.mph);assertEquals(30,row.sourceMph);assertEquals(GeoPoint(53.0,-2.0),row.point)
+        assertEquals(1234L,row.recordedAt);assertEquals(5.0,row.accuracy!!,0.0)
+    }
     private fun current() = org.json.JSONObject().put("format", "speed-buddy-owner-backup").put("version", 9)
         .put("cameras", org.json.JSONArray()).put("settings", org.json.JSONObject())
         .put("roadOverrides", org.json.JSONArray()).put("boundaries", org.json.JSONArray())

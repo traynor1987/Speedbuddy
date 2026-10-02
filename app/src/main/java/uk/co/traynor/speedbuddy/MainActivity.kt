@@ -31,6 +31,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import java.util.Locale
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -168,7 +170,8 @@ class MainActivity : ComponentActivity() {
                                 records = db.userCameras()
                                 message = "Camera position saved. Edit the details while stopped."
                             } },
-                            { action -> startService(Intent(this@MainActivity,DrivingService::class.java).setAction(action)) })
+                            { action, mph, road -> startService(Intent(this@MainActivity,DrivingService::class.java).setAction(action)
+                                .putExtra("mph",mph ?: OWNER_UNKNOWN).putExtra("road",road)) })
                         "settings" -> key(backupBusy) { SettingsScreen(prefs, { page = "drive" },
                             { records = db.userCameras(); page = "cameras" }, { page = "diagnostics" },
                             { if (!backupBusy && !state.active) exportBackup.launch("SpeedBuddy-backup.json") else message = "Stop Driving and wait for backup work to finish." },
@@ -216,27 +219,65 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun LimitSign(limit: Int?, national: Boolean, modifier: Modifier = Modifier) {
-    val circle = modifier.clip(CircleShape)
+@Composable internal fun LimitSign(limit: Int?, national: Boolean, modifier: Modifier = Modifier) {
+    BoxWithConstraints(modifier) {
+    val circle = Modifier.fillMaxSize().clip(CircleShape)
+    val signSize=maxWidth.value
     when {
-        limit == null -> Box(circle.border(2.dp, Line, CircleShape).background(Panel), contentAlignment = Alignment.Center) {
-            Text("--", fontSize = 58.sp, fontWeight = FontWeight.Bold, color = Muted)
-        }
         national -> Box(circle.background(Color.White), contentAlignment = Alignment.Center) {
             Canvas(Modifier.fillMaxSize()) {
                 drawLine(Color(0xFF111111), Offset(size.width * .18f, size.height * .82f),
                     Offset(size.width * .82f, size.height * .18f), strokeWidth = size.width * .14f)
             }
         }
-        else -> Box(circle.background(Color.White).border(14.dp, Color(0xFFDC282B), CircleShape), contentAlignment = Alignment.Center) {
-            Text(limit.toString(), color = Color(0xFF111111), fontSize = if (limit >= 100) 53.sp else 69.sp,
-                fontWeight = FontWeight.Black, letterSpacing = (-3).sp, maxLines = 1)
+        limit == null -> Box(circle.border(2.dp, Line, CircleShape).background(Panel), contentAlignment = Alignment.Center) {
+            Text("--", fontSize = (signSize*.36f).sp, fontWeight = FontWeight.Bold, color = Muted)
+        }
+        else -> Box(circle.background(Color.White).border((signSize*.088f).dp, Color(0xFFDC282B), CircleShape), contentAlignment = Alignment.Center) {
+            Text(limit.toString(), color = Color(0xFF111111), fontSize = (signSize*if(limit>=100) .33f else .44f).sp,
+                fontWeight = FontWeight.Black, letterSpacing = (-signSize*.019f).sp, maxLines = 1)
+        }
+    }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable internal fun LimitCorrectionPicker(state: DriveState,onDismiss: () -> Unit,onFeedback: (String,Int?,String?) -> Unit) {
+    ModalBottomSheet(onDismissRequest=onDismiss,containerColor=Panel,sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true)) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=20.dp),horizontalAlignment=Alignment.CenterHorizontally) {
+            Text("Choose the real limit",fontSize=23.sp,fontWeight=FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+            OwnerLimit.choices.chunked(2).forEach { choices ->
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                    choices.forEach { value ->
+                        val label=when(value) { OWNER_NATIONAL -> "National Speed Limit";OWNER_UNKNOWN -> "Unknown";else -> "$value mph" }
+                        Column(Modifier.weight(1f).heightIn(min=110.dp).semantics { contentDescription=label }
+                            .clickable { onFeedback("SET_LIMIT",value,state.road?.road?.id);onDismiss() }.padding(6.dp),
+                            horizontalAlignment=Alignment.CenterHorizontally) {
+                            LimitSign(value.takeIf { it>0 },value==OWNER_NATIONAL,Modifier.size(78.dp))
+                            Text(label,fontSize=14.sp,textAlign=TextAlign.Center)
+                        }
+                    }
+                }
+            }
+            if(state.boundaryAvailable || state.awaitingBoundary) Button(onClick={
+                onFeedback("STARTS_HERE",state.sourceLimitMph,state.road?.road?.id);onDismiss()
+            },modifier=Modifier.fillMaxWidth().heightIn(min=56.dp)) {
+                Text("This limit starts here",fontSize=18.sp)
+            }
+            if(state.tooEarlyAvailable && !state.awaitingBoundary) TextButton(onClick={
+                onFeedback("TOO_EARLY",null,state.road?.road?.id);onDismiss()
+            },modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)) { Text("Changed too soon") }
+            if(state.awaitingBoundary) TextButton(onClick={ onFeedback("CANCEL_BOUNDARY",null,state.road?.road?.id);onDismiss() }) { Text("Cancel boundary correction") }
+            Spacer(Modifier.height(20.dp))
         }
     }
 }
 
-@Composable private fun DriveScreen(state: DriveState, onStart: () -> Unit, onStop: () -> Unit,
-    onSettings: () -> Unit, onDiagnostic: () -> Unit, onAdd: () -> Unit, onQuick: (CameraType) -> Unit, onFeedback: (String) -> Unit) {
+@Composable internal fun DriveScreen(state: DriveState, onStart: () -> Unit, onStop: () -> Unit,
+    onSettings: () -> Unit, onDiagnostic: () -> Unit, onAdd: () -> Unit, onQuick: (CameraType) -> Unit, onFeedback: (String,Int?,String?) -> Unit) {
+    var pickerFor by remember { mutableStateOf<DriveState?>(null) }
+    pickerFor?.let { LimitCorrectionPicker(it,{pickerFor=null},onFeedback) }
     val speed = state.speedMph
     val moving = state.active && (speed == null || speed >= 5.0)
     val fix = state.fix
@@ -249,7 +290,7 @@ class MainActivity : ComponentActivity() {
         else -> "GPS FIX · ${fix.accuracyM.roundToInt()} M"
     }
     val tags = state.road?.road?.tags
-    val national = state.limitMph != null && state.sourceLimitMph == state.limitMph && state.limitDecision?.ownerApplied != true && state.limitDecision?.boundaryApplied != true && (
+    val national = state.limitDecision?.national==true || state.limitMph != null && state.limitDecision?.assumed!=true && state.sourceLimitMph == state.limitMph && state.limitDecision?.ownerApplied != true && state.limitDecision?.boundaryApplied != true && (
         tags?.get("maxspeed:type")?.startsWith("GB:nsl") == true ||
         tags?.get("maxspeed")?.startsWith("GB:nsl") == true || tags?.get("maxspeed") == "GB:motorway")
     Column(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -269,27 +310,31 @@ class MainActivity : ComponentActivity() {
         Text("CURRENT ROAD LIMIT", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            LimitSign(state.limitMph, national, Modifier.size(158.dp))
+            Box(contentAlignment=Alignment.CenterEnd) {
+                LimitSign(state.limitMph, national, Modifier.size(158.dp)
+                    .semantics { contentDescription="Correct road speed limit" }.clickable(enabled=state.active && state.road!=null) { pickerFor=state })
+                if(state.limitDecision?.assumed==true) Text("!",color=Warning,fontSize=40.sp,fontWeight=FontWeight.Black,
+                    modifier=Modifier.align(Alignment.TopEnd).offset(x=14.dp))
+            }
             state.upcoming?.let { next ->
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("UPCOMING", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text(if(next.uncertain) "UNCERTAIN" else "UPCOMING", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(5.dp))
                     LimitSign(next.mph, next.national, Modifier.size(64.dp))
-                    Text("${(next.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
+                    if(next.distanceM>0) Text("${(next.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 11.sp)
                 }
             }
         }
         Spacer(Modifier.height(9.dp))
         Text(when {
+            state.limitDecision?.assumed==true -> "Assumed • not confirmed"
+            national -> "National speed limit" + (state.limitMph?.let { " · $it mph" } ?: "")
             state.limitMph == null -> "Limit unknown"
-            national -> "National speed limit · ${state.limitMph} mph"
             else -> "${state.limitMph} mph"
         }, color = Muted, fontSize = 15.sp)
         if (state.roadDataStatus.isNotBlank()) Text(state.roadDataStatus, color = Muted, fontSize = 11.sp)
-        if (state.awaitingBoundary) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { onFeedback("CHANGED_NOW") }) { Text("Changed now", fontSize = 13.sp) }
-            TextButton(onClick = { onFeedback("CANCEL_BOUNDARY") }) { Text("Cancel", fontSize = 13.sp) }
-        } else if (state.tooEarlyAvailable) TextButton(onClick = { onFeedback("TOO_EARLY") }) { Text("Too early", fontSize = 13.sp) }
+        if(state.awaitingBoundary) Text("Tap the limit at the real sign",color=Accent,fontSize=13.sp)
+        if(state.correctionMessage.isNotBlank()) Text(state.correctionMessage,color=Accent,fontSize=13.sp)
         Spacer(Modifier.weight(1f))
         val alert = state.alert
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp),
@@ -455,6 +500,8 @@ class MainActivity : ComponentActivity() {
             "Displayed limit" to state.limitMph?.let { "$it mph" },
             "Source limit" to state.sourceLimitMph?.let { "$it mph · saved OSM" },
             "Owner correction" to state.limitDecision?.ownerApplied?.toString(),
+            "Assumed limit" to state.limitDecision?.assumed?.toString(),
+            "Inherited from" to state.limitDecision?.inheritedFrom,
             "Learned boundary" to state.limitDecision?.boundaryApplied?.toString(),
             "Decision reason" to state.limitDecision?.reason,
             "Coverage tiles" to "${state.coverageTiles} / ${state.targetTiles} in 20-mile target",
@@ -462,16 +509,12 @@ class MainActivity : ComponentActivity() {
             "Map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
             "Map request" to state.mapStatus))
         val parked = state.active && (state.speedMph ?: Double.MAX_VALUE) < 5.0
-        var overrideText by remember { mutableStateOf("") }
         if (state.active) Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
             Column(Modifier.padding(16.dp)) {
                 Text("Local road corrections", fontWeight = FontWeight.Bold)
                 Text("Applies to this matched OSM way and travel direction. Source tags stay unchanged.", color = Muted, fontSize = 12.sp)
-                OutlinedTextField(overrideText, { overrideText = it.take(3) }, label = { Text("Correct limit in mph") }, enabled = parked, singleLine = true)
-                Row {
-                    TextButton(onClick = { correction("SET_OVERRIDE", overrideText.toIntOrNull()) }, enabled = parked && state.road != null && state.fix?.bearing != null && overrideText.toIntOrNull() in 5..100) { Text("Save") }
-                    TextButton(onClick = { correction("SET_OVERRIDE", null) }, enabled = parked && state.road != null && state.fix?.bearing != null) { Text("Reset road") }
-                }
+                Text("Tap the main speed-limit sign to correct it.",color=Muted,fontSize=13.sp)
+                TextButton(onClick = { correction("RESET_ROAD", null) }, enabled = parked && state.road != null && state.fix?.bearing != null) { Text("Reset road") }
                 TextButton(onClick = { correction("RESET_CORRECTIONS", null) }, enabled = parked) { Text("Reset all learned limits & boundaries") }
             }
         }

@@ -44,9 +44,9 @@ object OwnerBackupCodec {
         val settings = JSONObject()
         booleans.forEach { (key, default) -> settings.put(key, prefs.getBoolean(key, default)) }
         settings.put("tolerance", prefs.getInt("tolerance", 2))
-        val text = JSONObject().put("format", "speed-buddy-owner-backup").put("version", 9)
+        val text = JSONObject().put("format", "speed-buddy-owner-backup").put("version", 10)
             .put("cameras", records).put("settings", settings)
-            .put("roadOverrides", JSONArray(roadOverrides.map { JSONObject().put("road", it.road).put("bearing", it.bearing).put("mph", it.mph) }))
+            .put("roadOverrides", JSONArray(roadOverrides.map(RoadJson::override)))
             .put("boundaries", JSONArray(boundaries.map(RoadJson::boundary)))
             .put("legacyArchives", JSONArray(legacyArchives.distinct())).toString(2)
         parse(text)
@@ -55,13 +55,13 @@ object OwnerBackupCodec {
     fun parse(text: String): OwnerBackup {
         require(text.length <= MAX_CHARS) { "Backup is too large" }
         val root = JSONObject(text); val version = root.getInt("version")
-        require(root.getString("format") == "speed-buddy-owner-backup" && version in 1..9) { "Unsupported Speed Buddy backup" }
-        if (version == 9) requireKnownKeys(root, setOf("format", "version", "cameras", "settings", "roadOverrides", "boundaries", "legacyArchives"))
+        require(root.getString("format") == "speed-buddy-owner-backup" && version in 1..10) { "Unsupported Speed Buddy backup" }
+        if (version >= 9) requireKnownKeys(root, setOf("format", "version", "cameras", "settings", "roadOverrides", "boundaries", "legacyArchives"))
         val records = root.getJSONArray("cameras"); require(records.length() <= 10_000)
         val archived = linkedSetOf<String>()
         val cameras = (0 until records.length()).map { index ->
             val item = records.getJSONObject(index); val id = item.getString("id")
-            if (version == 9) requireKnownKeys(item, setOf("id", "lat", "lon", "type", "direction", "mph", "note", "updated"))
+            if (version >= 9) requireKnownKeys(item, setOf("id", "lat", "lon", "type", "direction", "mph", "note", "updated"))
             val lat = item.getDouble("lat"); val lon = item.getDouble("lon")
             val direction = if (item.isNull("direction")) null else item.getDouble("direction")
             val mph = if (item.isNull("mph")) null else item.getInt("mph")
@@ -76,7 +76,7 @@ object OwnerBackupCodec {
         }
         require(cameras.map { it.id }.distinct().size == cameras.size) { "Duplicate camera IDs" }
         val source = root.getJSONObject("settings")
-        if (version == 9) requireKnownKeys(source, booleans.keys + "tolerance")
+        if (version >= 9) requireKnownKeys(source, booleans.keys + "tolerance")
         val settings = buildMap<String, Any> {
             booleans.forEach { (key, _) -> if (source.has(key)) {
                 require(source.get(key) is Boolean) { "Invalid setting: $key" }; put(key, source.getBoolean(key))
@@ -94,10 +94,13 @@ object OwnerBackupCodec {
         val overrides = if (version < 9) emptyList() else root.getJSONArray("roadOverrides").let { array ->
             require(array.length() <= 10_000)
             (0 until array.length()).map { i -> val item = array.getJSONObject(i)
-                requireKnownKeys(item, setOf("road", "bearing", "mph"))
-                RoadDb.Override(item.getString("road"), item.getDouble("bearing"), item.getInt("mph")).also {
+                requireKnownKeys(item, if(version==9) setOf("road", "bearing", "mph") else setOf("road","bearing","mph","source","point","at","accuracy"))
+                RoadJson.decodeOverride(item).also {
                     require(it.road.isNotBlank() && it.road.length <= 100 && it.bearing.isFinite() &&
-                        it.bearing in 0.0..<360.0 && it.mph in 5..100) { "Invalid road override" }
+                        it.bearing in 0.0..<360.0 && (if(version==9) it.mph in 5..100 else OwnerLimit.valid(it.mph)) &&
+                        (it.sourceMph==null || it.sourceMph in 5..100) && (it.point==null || validPoint(it.point)) &&
+                        it.recordedAt>=0 && (it.accuracy==null || it.accuracy.isFinite() && it.accuracy in 0.0..20.0)) { "Invalid road override" }
+                    if(!item.isNull("point")) require(item.getJSONArray("point").length()==2)
                 }
             }.also { require(it.map { row -> row.road to row.bearing }.distinct().size == it.size) }
         }

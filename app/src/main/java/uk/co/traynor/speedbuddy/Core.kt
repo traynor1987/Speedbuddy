@@ -103,9 +103,17 @@ class RoadLimitStabilizer {
         if (match != null) {
             if (limit != null) {
                 val prior = lastMatch
-                if (prior != null && lastLimit != limit && prior.road.id != match.road.id) {
-                    if (candidateId != match.road.id) { candidateId = match.road.id; candidateSince = nowMs; candidateCount = 0 }
-                    if (fix.accuracyM <= 25 && match.confidence >= .6) candidateCount++ else candidateCount = 0
+                if(prior==null && (match.confidence<.7 || fix.accuracyM>20 ||
+                    (match.headingDifference ?: 90.0)>30 || fix.bearing==null)) return null
+                if (prior != null && lastLimit != limit) {
+                    val candidate = "${match.road.id}|$limit"
+                    if (candidateId != candidate) { candidateId = candidate; candidateSince = nowMs; candidateCount = 0 }
+                    // Weak/side-road matches never become authoritative just because time passed.
+                    // Strong, aligned fixes may confirm a real short zone in a few seconds.
+                    if (fix.accuracyM <= 20 && match.confidence >= .8 &&
+                        (match.headingDifference ?: 90.0) <= 25 && fix.bearing != null) candidateCount++ else {
+                        candidateCount = 0; candidateSince = nowMs
+                    }
                     val junction = listOf(prior.road.points.first(),prior.road.points.last()).flatMap { a -> listOf(match.road.points.first(),match.road.points.last()).map { b -> a to b } }
                         .filter { Geo.distance(it.first,it.second) < 15 }
                         .minByOrNull { Geo.distance(fix.point,it.first) }?.first
@@ -135,7 +143,7 @@ class RoadLimitStabilizer {
     fun reset() { lastMatch = null; lastLimit = null; lastSeenMs = 0; candidateId = null; candidateCount = 0 }
 }
 
-data class UpcomingLimit(val mph: Int, val distanceM: Double, val national: Boolean)
+data class UpcomingLimit(val mph: Int, val distanceM: Double, val national: Boolean, val uncertain: Boolean = false)
 
 /** Preview only a connected continuation of the current named road, never a nearby side road. */
 class UpcomingLimitDetector {

@@ -1,0 +1,7 @@
+{
+  "certificateSha256": "ddcf05c06ca3442774ea24273ea9a31c213bbc78520032cfa2994c2118d2f947",
+  "keyAlias": "speedbuddy-owner",
+  "keyAlgorithm": "RSA-3072",
+  "createdAt": "2026-10-02",
+  "purpose": "Permanent Speed Buddy owner release signer; never replace without explicit owner rotation"
+}
