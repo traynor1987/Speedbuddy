@@ -73,6 +73,19 @@ class RoadDbTest {
             it.resetCorrections(); assertNull(it.overrideFor(road.id,0.0)); assertTrue(it.boundaries().isEmpty())
         }
     }
+    @Test fun spatialLookupFindsTileSeamsAndExcludesDistantRoads() {
+        context.deleteDatabase("road-test.db")
+        RoadDb(context,"road-test.db").use { db ->
+            val seam=GeoPoint(tile.north-.0001,point.lon)
+            val crossing=road.copy(id="way/seam",points=listOf(Geo.ahead(seam,180.0,100.0),Geo.ahead(seam,0.0,400.0)))
+            val far=RoadTile.at(Geo.ahead(point,90.0,25000.0))
+            val remote=road.copy(id="way/far",points=road.points.map { Geo.ahead(it,90.0,25000.0) })
+            db.replace(RoadTileData(tile,1000,listOf(crossing),emptyList()))
+            db.replace(RoadTileData(far,1000,listOf(remote),emptyList()))
+            val candidates=db.nearby(Geo.ahead(seam,0.0,200.0)).roads.map { it.road.id }
+            assertTrue("way/seam" in candidates);assertFalse("way/far" in candidates)
+        }
+    }
     @Test fun cleanupRetainsCurrentCoverageAndOwnerData() {
         context.deleteDatabase("road-test.db")
         RoadDb(context,"road-test.db").use {

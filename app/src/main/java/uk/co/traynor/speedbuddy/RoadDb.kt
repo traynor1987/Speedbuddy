@@ -15,8 +15,9 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         db.execSQL("CREATE TABLE tiles(id TEXT PRIMARY KEY,fetched INTEGER NOT NULL,bytes INTEGER NOT NULL,complete INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE roads(pk INTEGER PRIMARY KEY,tile TEXT NOT NULL,road_id TEXT NOT NULL,payload TEXT NOT NULL,UNIQUE(tile,road_id))")
         db.execSQL("CREATE INDEX road_tile ON roads(tile)")
-        db.execSQL("CREATE VIRTUAL TABLE road_bounds USING rtree(pk,south,north,west,east)")
-        db.execSQL("CREATE TRIGGER road_delete AFTER DELETE ON roads BEGIN DELETE FROM road_bounds WHERE pk=OLD.pk; END")
+        db.execSQL("CREATE TABLE road_cells(y INTEGER NOT NULL,x INTEGER NOT NULL,pk INTEGER NOT NULL,PRIMARY KEY(y,x,pk))")
+        db.execSQL("CREATE INDEX road_cells_pk ON road_cells(pk)")
+        db.execSQL("CREATE TRIGGER road_delete AFTER DELETE ON roads BEGIN DELETE FROM road_cells WHERE pk=OLD.pk; END")
         db.execSQL("CREATE TABLE public_cameras(tile TEXT NOT NULL,id TEXT NOT NULL,lat REAL NOT NULL,lon REAL NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(tile,id))")
         db.execSQL("CREATE INDEX public_camera_location ON public_cameras(lat,lon)")
         db.execSQL("CREATE TABLE overrides(road TEXT NOT NULL,bearing REAL NOT NULL,mph INTEGER NOT NULL,PRIMARY KEY(road,bearing))")
@@ -42,7 +43,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
             db.insertOrThrow("tiles",null,ContentValues().apply { put("id",data.tile.id);put("fetched",data.fetchedAt);put("bytes",bytes);put("complete",if(data.complete) 1 else 0) })
             payloads.forEach { (r,json) ->
                 val pk = db.insertOrThrow("roads",null,ContentValues().apply { put("tile",data.tile.id);put("road_id",r.id);put("payload",json) })
-                db.execSQL("INSERT INTO road_bounds VALUES(?,?,?,?,?)",arrayOf<Any>(pk,r.points.minOf { it.lat },r.points.maxOf { it.lat },r.points.minOf { it.lon },r.points.maxOf { it.lon }))
+                RoadCells.forRoad(r.points,data.tile).forEach { (y,x) -> db.execSQL("INSERT INTO road_cells VALUES(?,?,?)",arrayOf<Any>(y,x,pk)) }
             }
             cameraPayloads.forEach { (c,json) -> db.insertOrThrow("public_cameras",null,ContentValues().apply {
                 put("tile",data.tile.id);put("id",c.id);put("lat",c.point.lat);put("lon",c.point.lon);put("payload",json)
@@ -55,8 +56,9 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
     }
     fun nearby(point: GeoPoint): LocalRoads {
         val dy=700.0/111195.0; val dx=700.0/(111320.0*cos(Math.toRadians(point.lat)).coerceAtLeast(.1))
-        val roads=readableDatabase.rawQuery("SELECT r.road_id,r.payload,t.fetched FROM road_bounds b JOIN roads r ON r.pk=b.pk JOIN tiles t ON t.id=r.tile WHERE b.south<=? AND b.north>=? AND b.west<=? AND b.east>=? ORDER BY t.fetched DESC",
-            arrayOf((point.lat+dy).toString(),(point.lat-dy).toString(),(point.lon+dx).toString(),(point.lon-dx).toString())).use { c ->
+        val low=RoadCells.at(GeoPoint(point.lat-dy,point.lon-dx));val high=RoadCells.at(GeoPoint(point.lat+dy,point.lon+dx))
+        val roads=readableDatabase.rawQuery("SELECT r.road_id,r.payload,t.fetched FROM roads r JOIN tiles t ON t.id=r.tile WHERE r.pk IN (SELECT pk FROM road_cells WHERE y BETWEEN ? AND ? AND x BETWEEN ? AND ?) ORDER BY t.fetched DESC",
+            arrayOf(low.first.toString(),high.first.toString(),low.second.toString(),high.second.toString())).use { c ->
             val seen=mutableSetOf<String>();buildList { while(c.moveToNext()) if(seen.add(c.getString(0))) add(SavedRoad(RoadJson.decode(JSONObject(c.getString(1))),c.getLong(2))) }
         }
         val cameras=readableDatabase.rawQuery("SELECT c.id,c.payload FROM public_cameras c JOIN tiles t ON t.id=c.tile WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ? ORDER BY t.fetched DESC",

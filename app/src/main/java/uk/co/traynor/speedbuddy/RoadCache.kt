@@ -78,3 +78,20 @@ fun passedBoundary(fix: Fix, point: GeoPoint, bearing: Double): Boolean {
     val lateral = abs(distance*sin(Math.toRadians(Geo.difference(bearing,Geo.bearing(point,fix.point)))))
     return forward >= max(5.0,fix.accuracyM*.6) && lateral <= max(35.0,fix.accuracyM*2)
 }
+
+/** Portable spatial buckets; Android framework SQLite does not guarantee the RTree extension. */
+object RoadCells {
+    fun at(p: GeoPoint)=floor(p.lat/.005).toInt() to floor(p.lon/.0075).toInt()
+    fun forRoad(points: List<GeoPoint>,tile: RoadTile): Set<Pair<Int,Int>> {
+        val dy=1500.0/111195.0;val dx=1500.0/(111320.0*cos(Math.toRadians(tile.center.lat)).coerceAtLeast(.1))
+        return buildSet {
+            points.zipWithNext().forEach { (a,b) ->
+                val south=max(min(a.lat,b.lat),tile.south-dy);val north=min(max(a.lat,b.lat),tile.north+dy)
+                val west=max(min(a.lon,b.lon),tile.west-dx);val east=min(max(a.lon,b.lon),tile.east+dx)
+                if(south>north || west>east) return@forEach
+                val low=at(GeoPoint(south,west));val high=at(GeoPoint(north,east))
+                for(y in low.first..high.first) for(x in low.second..high.second) add(y to x)
+            }
+        }
+    }
+}
