@@ -110,6 +110,15 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         val db=writableDatabase;db.beginTransaction()
         try { db.delete("boundaries",null,null);db.delete("overrides",null,null);db.setTransactionSuccessful() } finally { db.endTransaction() }
     }
+    fun mergeOwnerCorrections(overrides: List<Override>, boundaries: List<BoundaryCorrection>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            overrides.forEach { setOverride(it.road, it.bearing, it.mph) }
+            boundaries.forEach(::saveBoundary)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
     companion object {
         fun selectOverride(overrides: List<Override>,road: String,bearing: Double?): Int? = bearing?.let { heading ->
             overrides.filter { it.road==road && Geo.difference(it.bearing,heading)<45 }.minByOrNull { Geo.difference(it.bearing,heading) }?.mph

@@ -8,6 +8,8 @@ A small, owner-first Android GPS speedometer with tagged OpenStreetMap road limi
 
 Open in Android Studio with Android SDK 36 and JDK 17, or run `gradle testDebugUnitTest assembleDebug` with Gradle 8.13. The debug APK will be under `app/build/outputs/apk/debug/`. CI is defined in `.github/workflows/android.yml` and will run when this repository is pushed to GitHub. Instrumented database test requires an emulator or device (`gradle connectedDebugAndroidTest`).
 
+Owner acceptance builds use a permanent release key, never a CI debug key. See [secure signer setup, backup coverage and clean-install acceptance](docs/OWNER_ACCEPTANCE.md). Version 0.2.1/code 10 starts the permanent installation lineage. Keep the old installation until its external owner backup has been verified and the signed candidate is available. Legacy preview corrections/suppressions are retained as JSON archives but are not active in this branch.
+
 ## Design
 
 - A foreground `location` service is started by a visible activity after precise, while-in-use location permission. It requests one-second GPS updates from Android `LocationManager`. The active notification stops it; screen rotation and activity recreation do not start a second GPS subscription. No background location permission is requested.

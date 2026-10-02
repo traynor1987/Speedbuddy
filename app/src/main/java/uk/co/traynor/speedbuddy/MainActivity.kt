@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
         if (result[Manifest.permission.ACCESS_FINE_LOCATION] == true) startDriving()
     }
     private fun startDriving() {
+        if (OwnerBackupWork.busy.value) return
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             permission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
             return
@@ -70,25 +71,62 @@ class MainActivity : ComponentActivity() {
             var editing by remember { mutableStateOf<Camera?>(null) }
             var message by remember { mutableStateOf("") }
             var importedInfo by remember { mutableStateOf(db.importedInfo()) }
+            var pendingBackup by remember { mutableStateOf<OwnerBackup?>(null) }
+            val backupBusy by OwnerBackupWork.busy.collectAsState()
+            LaunchedEffect(backupBusy) {
+                if (!backupBusy) records = withContext(Dispatchers.IO) { db.userCameras() }
+            }
             val exportBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-                if (uri != null) runCatching {
-                    val content = OwnerBackupCodec.export(db.userCameras(), prefs)
+                if (uri != null && !backupBusy && !DriveBus.state.value.active) lifecycleScope.launch {
+                    runCatching { OwnerBackupWork.perform { withContext(Dispatchers.IO) {
+                    val content = RoadDb(this@MainActivity).use { roads ->
+                        OwnerBackupCodec.export(db.userCameras(), prefs, roads.overrides(), roads.boundaries(),
+                            OwnerBackupStore(this@MainActivity).legacyArchives())
+                    }
                     contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(content) }
                         ?: error("Could not open backup file")
-                }.onSuccess { message = "Camera and settings backup saved." }
+                    val saved = contentResolver.openInputStream(uri)?.use(OwnerBackupCodec::read)
+                        ?: error("Could not verify backup file")
+                    check(saved == content) { "Backup read-back differs from export" }
+                    OwnerBackupCodec.parse(saved)
+                } } }.onSuccess { message = "Owner backup saved and verified, including road corrections and retained archives." }
                     .onFailure { message = "Backup failed: ${it.message ?: "Unknown error"}" }
+                }
             }
             val importBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                if (uri != null) runCatching {
-                    val content = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                if (uri != null && !backupBusy && !DriveBus.state.value.active) lifecycleScope.launch {
+                    runCatching { OwnerBackupWork.perform { withContext(Dispatchers.IO) {
+                    val content = contentResolver.openInputStream(uri)?.use(OwnerBackupCodec::read)
                         ?: error("Could not read backup file")
-                    val backup = OwnerBackupCodec.parse(content)
-                    db.merge(backup.cameras)
-                    OwnerBackupCodec.applySettings(backup.settings, prefs)
-                    records = db.userCameras()
-                    backup.cameras.size
-                }.onSuccess { message = "Restored $it cameras and settings. Existing cameras were kept." }
+                    OwnerBackupCodec.parse(content)
+                } } }.onSuccess { pendingBackup = it }
                     .onFailure { message = "Restore failed: ${it.message ?: "Invalid backup"}" }
+                }
+            }
+            pendingBackup?.let { backup ->
+                AlertDialog(onDismissRequest = { if (!backupBusy) pendingBackup = null },
+                    title = { Text("Review owner backup") },
+                    text = { Text("Restore ${backup.cameras.size} personal cameras, supported settings, " +
+                        "${backup.roadOverrides.size} road overrides and ${backup.boundaries.size} learned boundaries. " +
+                        if (backup.archivedOnly.isEmpty()) "The complete source is retained before restore." else
+                            "Archived only, not active in this build: ${backup.archivedOnly.joinToString()}. " +
+                            "The complete original JSON is retained and included in later exports. Keep your external backup too.") },
+                    dismissButton = { TextButton(enabled = !backupBusy, onClick = { pendingBackup = null }) { Text("Cancel") } },
+                    confirmButton = { TextButton(enabled = !backupBusy, onClick = {
+                        if (DriveBus.state.value.active) { message = "Stop Driving before restoring a backup." }
+                        else lifecycleScope.launch {
+                            runCatching { OwnerBackupWork.perform { withContext(Dispatchers.IO) {
+                                RoadDb(this@MainActivity).use { roads ->
+                                    OwnerBackupStore(this@MainActivity).restore(backup, db, roads, prefs)
+                                }
+                                db.userCameras()
+                            } } }.onSuccess {
+                                records = it; pendingBackup = null
+                                message = "Restored supported owner data. " + if (backup.archivedOnly.isEmpty()) "" else
+                                    "Other preview data is archived only; see the restore review."
+                            }.onFailure { message = "Restore incomplete: ${it.message}. Keep your original external backup; stop Driving and retry. Do not delete it." }
+                        }
+                    }) { Text("Restore supported data") } })
             }
             val importLufop = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 if (uri != null) {
@@ -131,12 +169,12 @@ class MainActivity : ComponentActivity() {
                                 message = "Camera position saved. Edit the details while stopped."
                             } },
                             { action -> startService(Intent(this@MainActivity,DrivingService::class.java).setAction(action)) })
-                        "settings" -> SettingsScreen(prefs, { page = "drive" },
+                        "settings" -> key(backupBusy) { SettingsScreen(prefs, { page = "drive" },
                             { records = db.userCameras(); page = "cameras" }, { page = "diagnostics" },
-                            { exportBackup.launch("SpeedBuddy-backup.json") },
-                            { importBackup.launch(arrayOf("application/json", "text/plain")) }, importedInfo,
+                            { if (!backupBusy && !state.active) exportBackup.launch("SpeedBuddy-backup.json") else message = "Stop Driving and wait for backup work to finish." },
+                            { if (!backupBusy && !state.active) importBackup.launch(arrayOf("application/json", "text/plain")) else message = "Stop Driving and wait for backup work to finish." }, importedInfo,
                             { if (moving) message = "Import cameras while parked."
-                              else importLufop.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) })
+                              else importLufop.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }) }
                         "diagnostics" -> DiagnosticsScreen(state,
                             { action, mph -> startService(Intent(this@MainActivity,DrivingService::class.java).setAction(action).putExtra("mph",mph ?: 0)) },
                             { page = "drive" })
@@ -152,7 +190,10 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
-                    if (message.isNotEmpty()) AlertDialog(onDismissRequest = { message = "" },
+                    if (backupBusy) AlertDialog(onDismissRequest = {}, confirmButton = {},
+                        title = { Text("Owner backup in progress") },
+                        text = { Text("Please wait before driving or changing owner data.") })
+                    if (message.isNotEmpty() && !backupBusy) AlertDialog(onDismissRequest = { message = "" },
                         confirmButton = { TextButton(onClick = { message = "" }) { Text("OK") } },
                         text = { Text(message, color = Ink) })
                   }
@@ -333,9 +374,9 @@ class MainActivity : ComponentActivity() {
                 Column {
                     MenuRow("Manage my cameras", "View, edit or delete saved cameras", cameras)
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
-                    MenuRow("Back up cameras and settings", "Save a JSON file to your chosen location", exportBackup)
+                    MenuRow("Back up owner data", "Cameras, settings, road corrections and retained archives", exportBackup)
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
-                    MenuRow("Restore backup", "Merge saved cameras and restore settings", importBackup)
+                    MenuRow("Restore backup", "Review restored data and archive-only records first", importBackup)
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     MenuRow("Diagnostics", "GPS, road match and camera decisions", diagnostics)
                 }

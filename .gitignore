@@ -6,5 +6,10 @@
 .idea/
 *.keystore
 *.jks
+*.p12
+*.pfx
+*.key
+__pycache__/
+*.py[cod]
 
 .kotlin/
