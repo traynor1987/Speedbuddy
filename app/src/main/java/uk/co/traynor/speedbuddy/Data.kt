@@ -7,8 +7,6 @@ import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.UUID
 import kotlin.math.cos
 
@@ -125,32 +123,12 @@ object OsmCoverage {
     }
 }
 
-class OsmDataSource(private val context: Context) {
+/** Reads the pre-0.2 single extract only, for one-time migration into RoadDb. */
+class LegacyOsmCache(private val context: Context) {
     private val cacheFile get() = File(context.filesDir, "osm-snapshot.json")
     fun cached(): OsmSnapshot? = runCatching { decode(JSONObject(cacheFile.readText()), cacheFile.lastModified()) }.getOrNull()
-    fun fetch(point: GeoPoint): OsmSnapshot {
-        val latStep = 1.5 / 111.195; val lonStep = 1.5 / (111.32 * cos(Math.toRadians(point.lat)))
-        val box = "${point.lat - latStep},${point.lon - lonStep},${point.lat + latStep},${point.lon + lonStep}"
-        val query = """[out:json][timeout:25];(way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"]($box);node["highway"="speed_camera"]($box);node["enforcement"~"maxspeed|traffic_signals|red_light_camera"]($box);relation["type"="enforcement"]["enforcement"~"maxspeed|traffic_signals|red_light_camera"]($box););out geom;"""
-        val connection = URL("https://overpass-api.de/api/interpreter").openConnection() as HttpURLConnection
-        try {
-            connection.requestMethod = "POST"; connection.doOutput = true
-            connection.connectTimeout = 8000; connection.readTimeout = 30000
-            connection.setRequestProperty("User-Agent", "SpeedBuddy/0.1 (owner-first driving utility)")
-            connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-            connection.outputStream.use { it.write("data=${java.net.URLEncoder.encode(query, "UTF-8")}".toByteArray()) }
-            if (connection.responseCode != 200) throw IllegalStateException("Overpass HTTP ${connection.responseCode}")
-            val response = connection.inputStream.bufferedReader().use { it.readText() }
-            if (response.length > 8_000_000) throw IllegalStateException("Map response too large")
-            val snapshot = decode(JSONObject(response), System.currentTimeMillis(), point)
-            val temp = File(context.filesDir, "osm-snapshot.tmp")
-            temp.writeText(response)
-            if (!temp.renameTo(cacheFile)) throw IllegalStateException("Could not save map cache")
-            return snapshot
-        } finally { connection.disconnect() }
-    }
-    private fun decode(json: JSONObject, fetched: Long, centerOverride: GeoPoint? = null): OsmSnapshot {
-        val center = centerOverride ?: run {
+    private fun decode(json: JSONObject, fetched: Long): OsmSnapshot {
+        val center = run {
             val saved = context.getSharedPreferences("cache", Context.MODE_PRIVATE)
             GeoPoint(saved.getString("lat", "0")!!.toDouble(), saved.getString("lon", "0")!!.toDouble())
         }
@@ -180,8 +158,6 @@ class OsmDataSource(private val context: Context) {
                 }
             }
         }
-        if (centerOverride != null) context.getSharedPreferences("cache", Context.MODE_PRIVATE).edit()
-            .putString("lat", center.lat.toString()).putString("lon", center.lon.toString()).apply()
         return OsmSnapshot(center, fetched, roads, cameras.values.toList())
     }
     private fun category(enforcement: String, highway: String): CameraType? = when {

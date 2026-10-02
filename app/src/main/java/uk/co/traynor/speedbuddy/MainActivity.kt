@@ -129,14 +129,17 @@ class MainActivity : ComponentActivity() {
                                 db.create(it.point, type, it.bearing)
                                 records = db.userCameras()
                                 message = "Camera position saved. Edit the details while stopped."
-                            } })
+                            } },
+                            { action -> startService(Intent(this@MainActivity,DrivingService::class.java).setAction(action)) })
                         "settings" -> SettingsScreen(prefs, { page = "drive" },
                             { records = db.userCameras(); page = "cameras" }, { page = "diagnostics" },
                             { exportBackup.launch("SpeedBuddy-backup.json") },
                             { importBackup.launch(arrayOf("application/json", "text/plain")) }, importedInfo,
                             { if (moving) message = "Import cameras while parked."
                               else importLufop.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) })
-                        "diagnostics" -> DiagnosticsScreen(state) { page = "drive" }
+                        "diagnostics" -> DiagnosticsScreen(state,
+                            { action, mph -> startService(Intent(this@MainActivity,DrivingService::class.java).setAction(action).putExtra("mph",mph ?: 0)) },
+                            { page = "drive" })
                         "cameras" -> CameraList(records, moving, { page = "settings" },
                             { editing = it; page = "edit" },
                             { db.delete(it.id); records = db.userCameras() })
@@ -192,7 +195,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun DriveScreen(state: DriveState, onStart: () -> Unit, onStop: () -> Unit,
-    onSettings: () -> Unit, onDiagnostic: () -> Unit, onAdd: () -> Unit, onQuick: (CameraType) -> Unit) {
+    onSettings: () -> Unit, onDiagnostic: () -> Unit, onAdd: () -> Unit, onQuick: (CameraType) -> Unit, onFeedback: (String) -> Unit) {
     val speed = state.speedMph
     val moving = state.active && (speed == null || speed >= 5.0)
     val fix = state.fix
@@ -205,7 +208,7 @@ class MainActivity : ComponentActivity() {
         else -> "GPS FIX · ${fix.accuracyM.roundToInt()} M"
     }
     val tags = state.road?.road?.tags
-    val national = state.limitMph != null && (
+    val national = state.limitMph != null && state.sourceLimitMph == state.limitMph && state.limitDecision?.ownerApplied != true && state.limitDecision?.boundaryApplied != true && (
         tags?.get("maxspeed:type")?.startsWith("GB:nsl") == true ||
         tags?.get("maxspeed")?.startsWith("GB:nsl") == true || tags?.get("maxspeed") == "GB:motorway")
     Column(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -241,6 +244,11 @@ class MainActivity : ComponentActivity() {
             national -> "National speed limit · ${state.limitMph} mph"
             else -> "${state.limitMph} mph"
         }, color = Muted, fontSize = 15.sp)
+        if (state.roadDataStatus.isNotBlank()) Text(state.roadDataStatus, color = Muted, fontSize = 11.sp)
+        if (state.awaitingBoundary) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { onFeedback("CHANGED_NOW") }) { Text("Changed now", fontSize = 13.sp) }
+            TextButton(onClick = { onFeedback("CANCEL_BOUNDARY") }) { Text("Cancel", fontSize = 13.sp) }
+        } else if (state.tooEarlyAvailable) TextButton(onClick = { onFeedback("TOO_EARLY") }) { Text("Too early", fontSize = 13.sp) }
         Spacer(Modifier.weight(1f))
         val alert = state.alert
         Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp),
@@ -382,7 +390,7 @@ class MainActivity : ComponentActivity() {
     }
     Spacer(Modifier.height(20.dp))
 }
-@Composable private fun DiagnosticsScreen(state: DriveState, back: () -> Unit) = Page("Diagnostics", back) {
+@Composable private fun DiagnosticsScreen(state: DriveState, correction: (String, Int?) -> Unit, back: () -> Unit) = Page("Diagnostics", back) {
     val fix = state.fix
     val fixAge = fix?.let { SystemClock.elapsedRealtime() - it.elapsedMs }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
@@ -403,9 +411,29 @@ class MainActivity : ComponentActivity() {
         DiagnosticCard("ROAD", listOf(
             "Matched road" to state.road?.road?.let { "${it.name ?: "Unnamed"} · ${it.id}" },
             "Confidence" to state.road?.let { String.format(Locale.UK, "%.2f", it.confidence) },
-            "Known limit" to state.limitMph?.let { "$it mph · OSM" },
+            "Displayed limit" to state.limitMph?.let { "$it mph" },
+            "Source limit" to state.sourceLimitMph?.let { "$it mph · saved OSM" },
+            "Owner correction" to state.limitDecision?.ownerApplied?.toString(),
+            "Learned boundary" to state.limitDecision?.boundaryApplied?.toString(),
+            "Decision reason" to state.limitDecision?.reason,
+            "Coverage tiles" to "${state.coverageTiles} / ${state.targetTiles} in 20-mile target",
+            "Data mode" to if ((state.dataAgeMs ?: 0) > ROAD_FRESH_MS) "Older saved road data" else "Saved road data",
             "Map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
             "Map request" to state.mapStatus))
+        val parked = state.active && (state.speedMph ?: Double.MAX_VALUE) < 5.0
+        var overrideText by remember { mutableStateOf("") }
+        if (state.active) Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Local road corrections", fontWeight = FontWeight.Bold)
+                Text("Applies to this matched OSM way and travel direction. Source tags stay unchanged.", color = Muted, fontSize = 12.sp)
+                OutlinedTextField(overrideText, { overrideText = it.take(3) }, label = { Text("Correct limit in mph") }, enabled = parked, singleLine = true)
+                Row {
+                    TextButton(onClick = { correction("SET_OVERRIDE", overrideText.toIntOrNull()) }, enabled = parked && state.road != null && state.fix?.bearing != null && overrideText.toIntOrNull() in 5..100) { Text("Save") }
+                    TextButton(onClick = { correction("SET_OVERRIDE", null) }, enabled = parked && state.road != null && state.fix?.bearing != null) { Text("Reset road") }
+                }
+                TextButton(onClick = { correction("RESET_CORRECTIONS", null) }, enabled = parked) { Text("Reset all learned limits & boundaries") }
+            }
+        }
         DiagnosticCard("CAMERA", listOf(
             "Public records nearby" to state.publicCameraCount.toString(),
             "Lufop UK records" to state.importedCameraCount.toString(),

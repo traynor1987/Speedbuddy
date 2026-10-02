@@ -7,7 +7,7 @@ Architecture: pure refresh/decision logic + transactional SQLite tile storage + 
 Tech: Kotlin, SQLiteOpenHelper, coroutines, existing Compose and Android CI.
 Spec: ../specs/2026-10-02-offline-road-limits-design.md
 
-Global constraints: 20-mile target; 15-minute check; no blocking Start; retain old data on failure; <=90 daily requests /9 MB transfer, one request at a time, >=30 sec spacing; seven-day refresh age; 64 MB/160 tile cleanup; static tagged limits only; no navigation; no source modifications.
+Global constraints: 20-mile target; 15-minute check; no blocking Start; retain old data on failure; <=90 daily requests /9 MB transfer, one request at a time, >=30 sec spacing; seven-day refresh age; 32 MB public-payload/160 tile cleanup plus database overhead; static tagged limits only; no navigation; no source modifications.
 Review focus: Overpass successful HTTP with runtime remark/partial geometry; stale timestamps across restarts; noisy GPS at nearby parallel road; opposite-direction feedback; stop while download or DB work is in flight. Pin these in tests and review.
 
 1. Persistent road subsystem: RoadCache.kt (tiles/planner/query models), RoadDb.kt (atomic storage/spatial queries/corrections), RoadDownload.kt (strict JSON/count/size validation and budget). Tests: RoadCacheTest unit and RoadDbTest instrumentation. Write RED fixtures first; prove failed refresh preserves old data; implement; run suite; commit.

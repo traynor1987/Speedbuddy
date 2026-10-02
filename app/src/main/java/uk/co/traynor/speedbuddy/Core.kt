@@ -96,9 +96,28 @@ class RoadLimitStabilizer {
     private var lastMatch: RoadMatch? = null
     private var lastLimit: Int? = null
     private var lastSeenMs: Long = 0
+    private var candidateId: String? = null
+    private var candidateSince = 0L
+    private var candidateCount = 0
     fun resolve(fix: Fix, match: RoadMatch?, limit: Int?, nowMs: Long): Int? {
         if (match != null) {
-            if (limit != null) { lastMatch = match; lastLimit = limit; lastSeenMs = nowMs }
+            if (limit != null) {
+                val prior = lastMatch
+                if (prior != null && lastLimit != limit && prior.road.id != match.road.id) {
+                    if (candidateId != match.road.id) { candidateId = match.road.id; candidateSince = nowMs; candidateCount = 0 }
+                    if (fix.accuracyM <= 25 && match.confidence >= .6) candidateCount++ else candidateCount = 0
+                    val junction = listOf(prior.road.points.first(),prior.road.points.last()).flatMap { a -> listOf(match.road.points.first(),match.road.points.last()).map { b -> a to b } }
+                        .filter { Geo.distance(it.first,it.second) < 15 }
+                        .minByOrNull { Geo.distance(fix.point,it.first) }?.first
+                    val crossed = junction == null || fix.bearing?.let { passedBoundary(fix,junction,it) } == true
+                    if (candidateCount < 3 || nowMs-candidateSince < 2000 || !crossed) {
+                        val distance = Geo.projection(fix.point,prior.road.points).first
+                        return lastLimit.takeIf { distance <= max(30.0,fix.accuracyM*2) || junction != null && distance < 150 }
+                    }
+                }
+                candidateId = null; candidateCount = 0
+                lastMatch = match; lastLimit = limit; lastSeenMs = nowMs
+            }
             else reset()
             return limit
         }
@@ -113,7 +132,7 @@ class RoadLimitStabilizer {
         }
         return lastLimit
     }
-    fun reset() { lastMatch = null; lastLimit = null; lastSeenMs = 0 }
+    fun reset() { lastMatch = null; lastLimit = null; lastSeenMs = 0; candidateId = null; candidateCount = 0 }
 }
 
 data class UpcomingLimit(val mph: Int, val distanceM: Double, val national: Boolean)
@@ -161,7 +180,8 @@ class RoadMatcher {
             val (distance, heading, _) = Geo.projection(fix.point, road.points)
             if (distance > max(20.0, fix.accuracyM * 1.5) || heading == null) null else {
                 val direction = fix.bearing?.let { b ->
-                    if (road.tags["oneway"] == "yes") Geo.difference(b, heading)
+                    if (road.tags["oneway"] == "-1") Geo.difference(b, (heading + 180) % 360)
+                    else if (road.tags["oneway"] in listOf("yes", "1", "true")) Geo.difference(b, heading)
                     else min(Geo.difference(b, heading), Geo.difference(b, (heading + 180) % 360))
                 }
                 if (direction != null && direction > 55) null else {
