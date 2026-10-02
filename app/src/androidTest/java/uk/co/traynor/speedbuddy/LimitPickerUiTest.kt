@@ -25,6 +25,8 @@ class LimitPickerUiTest {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         try {
             instrumentation.waitForIdleSync()
+            val mapEntry=actionable(awaitNode { it.text?.toString()=="Map" })
+            assertTrue("The main driving screen must offer the complete map",mapEntry.isClickable)
             tap(actionable(awaitNode { it.contentDescription?.toString()=="Correct road speed limit" }))
             awaitNode { it.text?.toString()=="Choose the real limit" }
             for(label in listOf("20 mph","30 mph","40 mph","50 mph","60 mph","70 mph","National Speed Limit","Unknown")) {
@@ -39,6 +41,10 @@ class LimitPickerUiTest {
             val until=SystemClock.elapsedRealtime()+5000
             while(find(instrumentation.uiAutomation.rootInActiveWindow) { it.text?.toString()=="Choose the real limit" }!=null && SystemClock.elapsedRealtime()<until) Thread.sleep(100)
             assertNull(find(instrumentation.uiAutomation.rootInActiveWindow) { it.text?.toString()=="Choose the real limit" })
+            tap(actionable(awaitNode { it.text?.toString()=="Map" }))
+            awaitNode { it.text?.toString()=="Camera map" }
+            tap(actionable(awaitNode { it.text?.toString()=="‹ Back" }))
+            awaitNode { it.contentDescription?.toString()=="Correct road speed limit" }
         } finally {
             instrumentation.runOnMainSync { activity.finish() }
             DriveBus.set(DriveState())

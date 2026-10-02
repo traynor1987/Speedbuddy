@@ -115,8 +115,8 @@ jobs:
           Path(os.environ['RUNNER_TEMP'], 'speedbuddy-owner.jks').write_bytes(base64.b64decode(os.environ['OWNER_KEY'], validate=True))
           PY
           mkdir -p acceptance
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$RUNNER_TEMP/speedbuddy-owner.jks" --ks-key-alias "$OWNER_ALIAS" --ks-pass env:OWNER_STORE_PASSWORD --key-pass env:OWNER_KEY_PASSWORD --out acceptance/SpeedBuddy-0.2.1-owner-acceptance.apk app/build/outputs/apk/release/app-release-unsigned.apk
-          python3 scripts/verify_owner_apk.py --apk acceptance/SpeedBuddy-0.2.1-owner-acceptance.apk --build-tools "$ANDROID_HOME/build-tools/36.0.0" --source-sha "$SPEED_BUDDY_SOURCE_SHA" --certificate "$OWNER_CERTIFICATE" --version-code 10 --version-name 0.2.1 --output acceptance/owner-build.json
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$RUNNER_TEMP/speedbuddy-owner.jks" --ks-key-alias "$OWNER_ALIAS" --ks-pass env:OWNER_STORE_PASSWORD --key-pass env:OWNER_KEY_PASSWORD --out acceptance/SpeedBuddy-0.2.2-owner-acceptance.apk app/build/outputs/apk/release/app-release-unsigned.apk
+          python3 scripts/verify_owner_apk.py --apk acceptance/SpeedBuddy-0.2.2-owner-acceptance.apk --build-tools "$ANDROID_HOME/build-tools/36.0.0" --source-sha "$SPEED_BUDDY_SOURCE_SHA" --certificate "$OWNER_CERTIFICATE" --version-code 11 --version-name 0.2.2 --output acceptance/owner-build.json
       - name: Remove temporary private key
         if: always()
         run: rm -f "$RUNNER_TEMP/speedbuddy-owner.jks"

@@ -36,9 +36,16 @@ class LufopImportTest {
 
     @Test fun importedCameraParticipatesInNormalApproachDetection() {
         val camera = LufopAscImporter.parse(zip("GBFeuRougeGB.asc" to "-2, 53.005, \"Red light\"\n")).single()
-        val fix = Fix(GeoPoint(53.002, -2.0), 5.0, 12.5, 1.0, 0.0, 1000)
+        val fix = Fix(GeoPoint(53.003, -2.0), 5.0, 12.5, 1.0, 0.0, 1000)
         val (alert, decision) = CameraApproachDetector().evaluate(fix, null, listOf(camera), 28.0)
         assertTrue(decision.accepted)
         assertEquals(CameraType.RED_LIGHT, alert?.camera?.type)
     }
+    @Test fun expansionBudgetAppliesToIgnoredArchiveMembersToo() {
+        assertThrows(IllegalArgumentException::class.java) {
+            LufopAscImporter.inspectLimited(zip("ignored.asc" to "x".repeat(2000),
+                "GBFixeGB.asc" to "-2, 53, \"UK camera\""),1000)
+        }
+    }
+
 }

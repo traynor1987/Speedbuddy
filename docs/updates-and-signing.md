@@ -1,0 +1,15 @@
+# Signed releases and updates
+
+The app ID is `uk.co.traynor.speedbuddy`. The permanent owner certificate is pinned in [owner-signing-certificate.json](owner-signing-certificate.json). The incomplete 0.2.1 build and complete 0.2.2 build share this signer; code 11 advances from code 10 and installs as an ordinary update. Future releases must increase the version code and keep the same signing identity.
+
+`.github/workflows/android.yml` is the sole signing pipeline. On pushes it runs JVM/Python tests, debug/release lint, builds and API-35 instrumentation. Only after both validation jobs pass does it build the exact source SHA, use the four existing `SPEED_BUDDY_*` Actions secrets, check the public `SPEED_BUDDY_SIGNING_CERT_SHA256` variable against the tracked certificate, sign and independently verify package/version/source/certificate. Private key files are removed before artifact upload; logs and owner artifacts contain public provenance only. The obsolete map-branch release workflow is not retained.
+
+The owner signer is already configured. Do not generate a replacement key. See [owner release design](superpowers/specs/2026-10-02-owner-release-design.md) for secure backup/setup tooling if restoring the existing identity is necessary. Never put the private key or passwords in the repository, issue, release assets or chat.
+
+Acceptance APKs are published as GitHub prereleases at the exact tested branch head. They are installed directly from GitHub. Promotion to a stable release and merge remain gated on owner physical acceptance. An historical ephemeral-debug installation requires a separately verified external JSON backup and clean install once the acceptance APK is ready; never restore a raw database. If permanently signed 0.2.1 is installed, back up and update in place without uninstalling.
+
+## In-app update centre
+
+Settings → Updates checks the public GitHub `/releases/latest` API only on demand, while parked. It selects the stable release asset named `SpeedBuddy-release.apk` when its semantic version is newer. The app downloads over HTTPS, accepts redirects only to GitHub release asset hosts, caps size, verifies the GitHub asset SHA-256 digest, checks the APK package ID and increasing Android version code, then compares its APK signing certificate with the installed signer. It hands the verified APK to Android's installer using a temporary read-only FileProvider URI. Android asks for permission to install from Speed Buddy if needed and confirms installation. There are no silent installs, background downloads, or driving-time interruptions. Offline or missing releases report a recoverable error; alerts and road data are unaffected.
+
+The downloaded file is a temporary cache entry. It is replaced by a verified APK only after all checks pass; an incomplete or failed download is removed. Android independently verifies the update signature again during installation. Device acceptance must exercise the signed-build upgrade path; the debug build correctly refuses an APK signed by a different key.

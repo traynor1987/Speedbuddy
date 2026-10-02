@@ -13,3 +13,6 @@ __pycache__/
 *.py[cod]
 
 .kotlin/
+
+# Obsolete alternate signing pipeline must never be staged again.
+.github/workflows/signed-release.yml

@@ -22,7 +22,7 @@ class LimitCorrectionDbTest {
         }
         RoadDb(context,"learning-test.db").use { db ->
             assertEquals(row,db.overrides().single());assertEquals(40,db.overrideFor(r.id,0.0));assertNull(db.overrideFor(r.id,180.0))
-            val text=OwnerBackupCodec.export(emptyList(),context.getSharedPreferences("learning-test",0),db.overrides())
+            val text=OwnerBackupCodec.export(emptyList(),context.getSharedPreferences("learning-test",0),roadOverrides = db.overrides())
             val parsed=OwnerBackupCodec.parse(text)
             RoadDb(context,"learning-restore.db").use { restored ->
                 restored.mergeOwnerCorrections(parsed.roadOverrides,parsed.boundaries)

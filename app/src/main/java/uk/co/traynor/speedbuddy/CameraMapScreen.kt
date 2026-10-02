@@ -1,0 +1,735 @@
+package uk.co.traynor.speedbuddy
+
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Paint
+import android.os.SystemClock
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.maplibre.android.MapLibre
+import org.maplibre.android.annotations.IconFactory
+import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.annotations.PolylineOptions
+import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapView
+import kotlin.math.abs
+
+private val MapInk: Color @Composable get() = MaterialTheme.colorScheme.onSurface
+private val MapMuted: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+private val MapPanel: Color @Composable get() = MaterialTheme.colorScheme.surface
+private data class RoadMapData(val road: Road, val mph: Int?, val national: Boolean)
+private data class MapDrawData(val groups: List<CameraMapGroup>, val roads: List<RoadMapData>,
+    val cameraCount: Int, val nextReportExpiry: Long?, val junctions: List<CameraJunction>)
+
+/** Basemap tiles provide context; only the OSM extract supplies limit values. */
+@Composable
+fun CameraMapScreen(db: CameraDb, current: GeoPoint?, moving: Boolean,
+    sourceRevision: Long, sourceCameraCount: Int, back: () -> Unit) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val scope = rememberCoroutineScope()
+    val source = remember { OsmDataSource(context, "editor") }
+    var snapshot by remember { mutableStateOf(source.cached(current)) }
+    var map by remember { mutableStateOf<MapLibreMap?>(null) }
+    var viewport by remember { mutableIntStateOf(0) }
+    var drawnCenter by remember { mutableStateOf<GeoPoint?>(null) }
+    var drawnZoom by remember { mutableDoubleStateOf(-1.0) }
+    var revision by remember { mutableIntStateOf(0) }
+    var nextReportExpiry by remember { mutableStateOf<Long?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var mapAvailable by remember { mutableStateOf(true) }
+    var status by remember { mutableStateOf("Loading nearby road limits…") }
+    var lastRoadFetchMs by remember { mutableLongStateOf(0L) }
+    var camera by rememberSaveable { mutableStateOf<Camera?>(null) }
+    var editingPosition by rememberSaveable { mutableStateOf<CameraPositionDraft?>(null) }
+    var pendingRemoval by remember { mutableStateOf<Camera?>(null) }
+    var road by rememberSaveable { mutableStateOf<Road?>(null) }
+    var pin by rememberSaveable { mutableStateOf<GeoPoint?>(null) }
+    var pinJunction by rememberSaveable { mutableStateOf<CameraJunction?>(null) }
+    var junction by rememberSaveable { mutableStateOf<CameraJunction?>(null) }
+    var editingJunction by rememberSaveable { mutableStateOf(false) }
+    var forceCameraEdit by rememberSaveable { mutableStateOf(false) }
+    var addMenu by remember { mutableStateOf(false) }
+    var junctionMembers by remember { mutableStateOf<List<Camera>>(emptyList()) }
+    var nearbyOwnerCameras by remember { mutableStateOf<List<Camera>>(emptyList()) }
+    var following by rememberSaveable { mutableStateOf(true) }
+    var headingUp by rememberSaveable { mutableStateOf(false) }
+    val drive by DriveBus.state.collectAsState()
+    val currentMoving by rememberUpdatedState(moving)
+    LaunchedEffect(Unit) {
+        var lastRevision=OwnerDataRevision.cameras
+        while(true) {
+            kotlinx.coroutines.delay(1_000)
+            val now=System.currentTimeMillis()
+            if(lastRevision!=OwnerDataRevision.cameras || nextReportExpiry?.let { now>=it }==true) {
+                lastRevision=OwnerDataRevision.cameras;nextReportExpiry=null;revision++
+            }
+            if(camera?.type==CameraType.MOBILE && camera?.mobileReport?.activeAt(now)!=true) camera=null
+        }
+    }
+    var mapLatitude by rememberSaveable { mutableStateOf<Double?>(null) }
+    var mapLongitude by rememberSaveable { mutableStateOf<Double?>(null) }
+    var mapZoom by rememberSaveable { mutableDoubleStateOf(14.0) }
+    var mapBearing by rememberSaveable { mutableDoubleStateOf(0.0) }
+    var drawnBearing by remember { mutableDoubleStateOf(-1.0) }
+    val markers = remember { mutableMapOf<Long, Camera>() }
+    val clusters=remember { mutableMapOf<Long,GeoPoint>() }
+    val markerIcons=remember { mutableMapOf<String,org.maplibre.android.annotations.Icon>() }
+    val roadMarkers = remember { mutableMapOf<Long, Road>() }
+    val junctionMarkers = remember { mutableMapOf<Long, CameraJunction>() }
+    LaunchedEffect(junction?.id, revision) {
+        val selected = junction ?: return@LaunchedEffect
+        val owners = withContext(Dispatchers.IO) { db.userCameras() }
+        junctionMembers = owners.filter { it.junction?.id == selected.id }
+        nearbyOwnerCameras = owners.filter { it.junction == null && it.type in listOf(CameraType.SPEED,CameraType.RED_LIGHT,CameraType.COMBINED) &&
+            Geo.distance(it.point,selected.point)<=300 }
+    }
+    var locationMarker by remember { mutableStateOf<org.maplibre.android.annotations.Marker?>(null) }
+    BackHandler(enabled = pendingRemoval != null || pin != null || camera != null || road != null || junction != null) {
+        pendingRemoval = null; pin = null; camera = null; editingPosition = null; road = null
+        pinJunction=null;junction=null;editingJunction=false;forceCameraEdit=false
+    }
+    fun saveChange(operation: ()->Unit,requireParked: Boolean=true,done: ()->Unit) { scope.launch {
+        if(requireParked && currentMoving) { status="Park before making changes";return@launch }
+        runCatching { withContext(Dispatchers.IO) { operation() } }
+            .onSuccess { done() }.onFailure { status="Could not save change: ${it.message?.take(80) ?: "Try again"}" }
+    } }
+    val mapView = remember(context) {
+        MapLibre.getInstance(context)
+        MapView(context).apply {
+            onCreate(null)
+            addOnDidFailLoadingMapListener { mapAvailable = false }
+            addOnDidFinishLoadingMapListener { mapAvailable = true }
+        }
+    }
+    LaunchedEffect(moving) { if (moving) { pin = null; camera = null; editingPosition = null; road = null
+        junction=null;pinJunction=null;editingJunction=false;forceCameraEdit=false;addMenu=false } }
+    DisposableEffect(mapView, lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> when (event) {
+            Lifecycle.Event.ON_START -> mapView.onStart()
+            Lifecycle.Event.ON_RESUME -> mapView.onResume()
+            Lifecycle.Event.ON_PAUSE -> mapView.onPause()
+            Lifecycle.Event.ON_STOP -> mapView.onStop()
+            else -> Unit
+        } }
+        lifecycle.addObserver(observer)
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) mapView.onStart()
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) mapView.onResume()
+        onDispose { lifecycle.removeObserver(observer); mapView.onPause();mapView.onStop();mapView.onDestroy() }
+    }
+    LaunchedEffect(mapView) {
+        mapView.getMapAsync { ready ->
+            ready.cameraPosition = CameraPosition.Builder()
+                .target(LatLng(mapLatitude ?: current?.lat ?: 53.550, mapLongitude ?: current?.lon ?: -2.777)).zoom(mapZoom).bearing(mapBearing).build()
+            ready.setStyle(SpeedBuddyMapProvider.styleUrl) {
+                ready.addOnCameraMoveStartedListener { reason ->
+                    if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) following = false
+                }
+                ready.addOnCameraIdleListener {
+                    val center = ready.cameraPosition.target
+                    if (center != null) {
+                        mapLatitude=center.latitude;mapLongitude=center.longitude;mapZoom=ready.cameraPosition.zoom;mapBearing=ready.cameraPosition.bearing
+                        val point = GeoPoint(center.latitude, center.longitude)
+                        if (drawnCenter?.let { Geo.distance(it, point) > 300 } != false ||
+                            abs(drawnZoom - ready.cameraPosition.zoom) > .4 ||
+                            Geo.difference(drawnBearing,ready.cameraPosition.bearing)>10) viewport++
+                    }
+                    if (pin != null) ready.cameraPosition.target?.let { pin = GeoPoint(it.latitude, it.longitude) }
+                    if (editingJunction) ready.cameraPosition.target?.let { target ->
+                        junction=junction?.copy(point=GeoPoint(target.latitude,target.longitude))
+                    }
+                }
+                ready.setOnMarkerClickListener { selected ->
+                    if(clusters[selected.id]!=null) {
+                        val target=clusters.getValue(selected.id);following=false
+                        ready.cameraPosition=CameraPosition.Builder().target(LatLng(target.lat,target.lon)).zoom((ready.cameraPosition.zoom+2).coerceAtMost(19.0)).build()
+                    } else if (!currentMoving && junctionMarkers[selected.id] != null) {
+                        junction=junctionMarkers[selected.id];editingJunction=false
+                        camera=null;editingPosition=null;pin=null;pinJunction=null;road=null;forceCameraEdit=false
+                    } else if (markers[selected.id] != null && (!currentMoving || markers[selected.id]?.type==CameraType.MOBILE)) {
+                        camera = markers[selected.id]; editingPosition = null; road = null; pin = null
+                        junction=null;pinJunction=null;forceCameraEdit=false;editingJunction=false
+                    } else if (!currentMoving && roadMarkers[selected.id] != null) {
+                        road = roadMarkers[selected.id]; camera = null; editingPosition = null; pin = null
+                        junction=null;pinJunction=null;editingJunction=false;forceCameraEdit=false
+                    }
+                    true
+                }
+                ready.addOnMapClickListener { clicked ->
+                    if (currentMoving) return@addOnMapClickListener false
+                    val point = GeoPoint(clicked.latitude, clicked.longitude)
+                    if (pin != null || editingJunction) {
+                        following=false
+                        if(pin != null) pin=point else junction=junction?.copy(point=point)
+                        ready.cameraPosition=CameraPosition.Builder().target(clicked).zoom(ready.cameraPosition.zoom).bearing(ready.cameraPosition.bearing).build()
+                        return@addOnMapClickListener true
+                    }
+                    if (camera != null) { editingPosition = CameraPositionDraft(camera!!.id,point); following = false; return@addOnMapClickListener true }
+                    road = snapshot?.roads?.let { RoadSelection.select(point, it) }
+                    camera = null; pin = null
+                    junction=null;pinJunction=null;editingJunction=false;forceCameraEdit=false
+                    road != null
+                }
+                ready.addOnMapLongClickListener { selected ->
+                    if (currentMoving) false else {
+                        pin = GeoPoint(selected.latitude, selected.longitude)
+                        camera = null; road = null; following = false
+                        pinJunction=null;junction=null;editingJunction=false;forceCameraEdit=false
+                        true
+                    }
+                }
+                map = ready
+            }
+        }
+    }
+    LaunchedEffect(drive.fix?.elapsedMs, following, headingUp, map) {
+        val fix = drive.fix ?: return@LaunchedEffect
+        val ready = map ?: return@LaunchedEffect
+        if (!following || !drive.active || pin != null || editingJunction) return@LaunchedEffect
+        ready.cameraPosition = CameraPosition.Builder().target(LatLng(fix.point.lat, fix.point.lon))
+            .zoom(ready.cameraPosition.zoom.coerceAtLeast(14.0))
+            .bearing(if (headingUp && fix.speedMps != null && fix.speedMps > 3) fix.bearing ?: 0.0 else 0.0).build()
+    }
+    LaunchedEffect(drive.fix?.elapsedMs, map) {
+        val ready = map ?: return@LaunchedEffect
+        val fix = drive.fix
+        if (fix == null || SystemClock.elapsedRealtime() - fix.elapsedMs > 5_000) {
+            locationMarker?.remove(); locationMarker = null
+        } else {
+            val position = LatLng(fix.point.lat, fix.point.lon)
+            if (locationMarker == null) locationMarker = ready.addMarker(MarkerOptions().position(position)
+                .title("Current location")
+                .icon(IconFactory.getInstance(context).fromBitmap(mapPin(android.graphics.Color.rgb(45, 157, 230), "•"))))
+            else locationMarker?.position = position
+            val angle=fix.bearing?.takeIf { fix.speedMps?.let { it>2 }==true }?.let { ((it-ready.cameraPosition.bearing+360)%360).toInt()/15*15 }
+            val icon=markerIcons.getOrPut("location:$angle") { IconFactory.getInstance(context).fromBitmap(mapPin(android.graphics.Color.rgb(45,157,230),"•",angle?.toDouble())) }
+            locationMarker?.icon=icon
+        }
+    }
+    LaunchedEffect(map, viewport, sourceRevision) {
+        val center = map?.cameraPosition?.target ?: return@LaunchedEffect
+        val point = GeoPoint(center.latitude, center.longitude)
+        val now = System.currentTimeMillis()
+        val saved=withContext(Dispatchers.IO) { source.cached(point) }
+        if(saved!=null && saved.usable(point,now)) {
+            snapshot=saved
+            status="Saved road limits ready"
+            return@LaunchedEffect
+        }
+        if (snapshot?.usable(point, now) == true) {
+            status = "Road limits ready"
+            return@LaunchedEffect
+        }
+        if ((map?.cameraPosition?.zoom ?: 0.0) < 12.0 || now - lastRoadFetchMs < 30_000) return@LaunchedEffect
+        lastRoadFetchMs = now
+        loading = true; status = "Loading nearby tagged road limits…"
+        runCatching { withContext(Dispatchers.IO) { source.fetch(point) } }
+            .onSuccess { snapshot = it; status = "Tap a road to inspect its tagged limit" }
+            .onFailure { status = "Road data unavailable: ${it.message?.take(70) ?: "Unknown error"}" }
+        loading = false
+    }
+    LaunchedEffect(pin != null) {
+        val target = pin ?: return@LaunchedEffect
+        val ready = map ?: return@LaunchedEffect
+        ready.cameraPosition = CameraPosition.Builder().target(LatLng(target.lat, target.lon))
+            .zoom(ready.cameraPosition.zoom).bearing(ready.cameraPosition.bearing).build()
+    }
+    LaunchedEffect(map, snapshot, viewport, revision, road?.id, editingPosition, sourceRevision) {
+        val ready = map ?: return@LaunchedEffect
+        val center = ready.cameraPosition.target ?: return@LaunchedEffect
+        val point = GeoPoint(center.latitude, center.longitude)
+        val zoom = ready.cameraPosition.zoom
+        if (zoom < 9) { ready.clear(); locationMarker=null;markers.clear();clusters.clear(); roadMarkers.clear();junctionMarkers.clear(); status = "Zoom in to see camera coverage"; return@LaunchedEffect }
+        val span = (0.045 * Math.pow(2.0, 14.0 - zoom)).coerceIn(0.002, 1.0)
+        val draw = withContext(Dispatchers.IO) {
+            val public = snapshot?.cameras.orEmpty()
+            val effective = db.effectiveInBounds(point.lat-span,point.lon-span*1.7,
+                point.lat+span,point.lon+span*1.7,public)
+            val limits = db.roadCorrections().associateBy { it.id }
+            val nearbyRoads = snapshot?.roads.orEmpty().filter { item -> item.points.any {
+                abs(it.lat - point.lat) <= span && abs(it.lon - point.lon) <= span * 1.7
+            } }.map { item ->
+                val effective = limits[item.id]?.apply(item) ?: item
+                val raw = effective.tags["maxspeed"] ?: effective.tags["maxspeed:type"] ?: ""
+                RoadMapData(item, SpeedLimits.mph(effective.tags), raw.startsWith("GB:nsl") || raw == "GB:motorway")
+            }
+            val junctions=JunctionStore(db).all().filter { it.point.lat in point.lat-span..point.lat+span && it.point.lon in point.lon-span*1.7..point.lon+span*1.7 }
+            MapDrawData(CameraClustering.group(effective.filter { zoom>=16 || it.junction==null }, zoom), nearbyRoads,
+                effective.size,effective.mapNotNull { it.mobileReport?.expiresAtMs }.minOrNull(),junctions)
+        }
+        nextReportExpiry=draw.nextReportExpiry
+        ready.clear(); markers.clear();clusters.clear(); roadMarkers.clear();junctionMarkers.clear(); locationMarker = null
+        drive.fix?.takeIf { SystemClock.elapsedRealtime() - it.elapsedMs <= 5_000 }?.let { fix ->
+            locationMarker = ready.addMarker(MarkerOptions().position(LatLng(fix.point.lat, fix.point.lon))
+                .title("Current location")
+                .icon(IconFactory.getInstance(context).fromBitmap(mapPin(android.graphics.Color.rgb(45, 157, 230), "•"))))
+        }
+        drawnCenter = point; drawnZoom = zoom; drawnBearing=ready.cameraPosition.bearing
+        val icons = IconFactory.getInstance(context)
+        val iconCache = markerIcons
+        if(iconCache.size>512) iconCache.clear()
+        draw.groups.take(600).forEach { group ->
+            val item = group.camera
+            val label = if (group.count > 1) group.count.coerceAtMost(99).toString() +
+                (if (group.count > 99) "+" else "") else when (item?.type) {
+                CameraType.RED_LIGHT -> "R"; CameraType.COMBINED -> "R+"
+                CameraType.AVERAGE -> "A";CameraType.MOBILE -> "M"; else -> "S"
+            }
+            val colour = if (group.count > 1) android.graphics.Color.rgb(55, 119, 147)
+                else if (item?.type == CameraType.MOBILE) android.graphics.Color.rgb(255,190,72)
+                else if (item?.source == CameraSource.USER) android.graphics.Color.rgb(151, 211, 238)
+                else if (item?.type == CameraType.RED_LIGHT || item?.type == CameraType.COMBINED)
+                    android.graphics.Color.rgb(236, 93, 95)
+                else android.graphics.Color.rgb(239, 176, 74)
+            val angle = item?.direction?.let { ((it - ready.cameraPosition.bearing + 360) % 360).toInt() / 15 * 15 }
+            val key = "$colour:$label:$angle"
+            val icon = iconCache.getOrPut("$key:${item?.bidirectional}") {
+                icons.fromBitmap(mapPin(colour, label, angle?.toDouble(), item?.bidirectional == true))
+            }
+            val marker = ready.addMarker(MarkerOptions().position(LatLng(group.point.lat, group.point.lon))
+                .title(if (group.count > 1) "${group.count} cameras · zoom in" else when (item?.type) {
+                    CameraType.SPEED -> "Speed camera"; CameraType.RED_LIGHT -> "Red-light camera"
+                    CameraType.COMBINED -> "Speed + red-light camera"; CameraType.AVERAGE -> "Average-speed camera"
+                    CameraType.MOBILE -> "Mobile speed camera report"
+                    else -> "Camera"
+                })
+                .icon(icon))
+            if (item != null) markers[marker.id] = item else clusters[marker.id]=group.point
+        }
+        draw.junctions.take(200).forEach { group ->
+            val label="J${group.ways}"
+            val icon=iconCache.getOrPut(label) { icons.fromBitmap(mapPin(android.graphics.Color.rgb(181,155,245),label)) }
+            val marker=ready.addMarker(MarkerOptions().position(LatLng(group.point.lat,group.point.lon))
+                .title("${group.name} · ${group.ways}-way camera junction").icon(icon))
+            junctionMarkers[marker.id]=group
+        }
+        snapshot?.averageSections.orEmpty().forEach { section->
+            ready.addPolyline(PolylineOptions().addAll(section.points.map { LatLng(it.lat,it.lon) })
+                .color(android.graphics.Color.rgb(152,100,210)).width(6f))
+        }
+        draw.roads.forEach { (item, mph) ->
+            ready.addPolyline(PolylineOptions().addAll(item.points.map { LatLng(it.lat, it.lon) })
+                .color(when { item.id == road?.id -> android.graphics.Color.WHITE
+                    mph == null -> android.graphics.Color.GRAY
+                    mph <= 30 -> android.graphics.Color.YELLOW
+                    else -> android.graphics.Color.GREEN }).width(if (item.id == road?.id) 9f else 4f))
+        }
+        if (zoom >= 15.0) {
+            val positions = mutableListOf<GeoPoint>()
+            draw.roads.asSequence().filter { it.mph != null && it.road.id != road?.id }
+                .take(120).forEach { item ->
+                    val position = item.road.points[item.road.points.size / 2]
+                    if (positions.size < 24 && positions.none { Geo.distance(it, position) < 85 }) {
+                        positions += position
+                        val label = if (item.national) "NSL" else item.mph.toString()
+                        val icon = iconCache.getOrPut("limit:$label") {
+                            icons.fromBitmap(mapSpeedSign(label))
+                        }
+                        val marker = ready.addMarker(MarkerOptions().position(LatLng(position.lat, position.lon))
+                            .title("${item.road.name ?: "Road"} · ${if (item.national) "national speed limit" else "${item.mph} mph"}")
+                            .icon(icon))
+                        roadMarkers[marker.id] = item.road
+                    }
+                }
+        }
+        editingPosition?.takeIf { it.cameraId==camera?.id }?.point?.let { selected -> ready.addMarker(MarkerOptions()
+            .position(LatLng(selected.lat, selected.lon)).title("Proposed camera position")
+            .icon(icons.fromBitmap(mapPin(android.graphics.Color.rgb(50, 168, 215), "+")))) }
+        if (draw.groups.size > 600) status = "Zoom in for more cameras · ${draw.cameraCount} nearby"
+    }
+    Box(Modifier.fillMaxSize().background(Color(0xFF071019))) {
+        AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+        Column(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Surface(color = MapPanel, shape = RoundedCornerShape(16.dp)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = back) { Text("‹ Back") }
+                    Text("Camera map", Modifier.weight(1f), color = MapInk, fontWeight = FontWeight.Bold)
+                    Box {
+                        TextButton(enabled = !moving, onClick={addMenu=true}) { Text("+ Add") }
+                        DropdownMenu(expanded=addMenu && !moving,onDismissRequest={addMenu=false}) {
+                            DropdownMenuItem(text={Text("Camera pin")},onClick={
+                                map?.cameraPosition?.target?.let { center -> pin=GeoPoint(center.latitude,center.longitude) }
+                                pinJunction=null;camera=null;road=null;junction=null;editingJunction=false;addMenu=false;following=false
+                            })
+                            listOf(4,5).forEach { count -> DropdownMenuItem(text={Text("$count-way camera junction")},onClick={
+                                map?.cameraPosition?.target?.let { centre ->
+                                    junction=CameraJunction("junction:${java.util.UUID.randomUUID()}","",GeoPoint(centre.latitude,centre.longitude),count)
+                                    editingJunction=true;pin=null;pinJunction=null;camera=null;road=null;following=false
+                                };addMenu=false
+                            }) }
+                        }
+                    }
+                    TextButton(onClick = {
+                        following = true
+                        val fix = drive.fix
+                        if (fix != null) map?.cameraPosition = CameraPosition.Builder()
+                            .target(LatLng(fix.point.lat, fix.point.lon)).zoom(15.0).build()
+                    }, enabled = drive.fix != null) { Text("◎", modifier = Modifier.sizeIn(minWidth = 48.dp).semantics { contentDescription="Recenter on current location" },
+                        color = MapInk) }
+                    TextButton(onClick = { headingUp = !headingUp }, enabled = drive.active) {
+                        Text(if (headingUp) "Heading" else "N ↑",Modifier.semantics { contentDescription=if(headingUp) "Switch to north-up map" else "Follow travel direction" })
+                    }
+                }
+            }
+            Surface(color = MapPanel, shape = RoundedCornerShape(12.dp)) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(if (sourceCameraCount == 0) "Preparing UK camera data…" else
+                                "$sourceCameraCount source cameras · road limits",
+                                color = MapInk, style = MaterialTheme.typography.labelMedium)
+                            Text(status, color = MapMuted, style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1)
+                        }
+                        if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        TextButton(enabled = !loading && !moving, onClick = {
+                            val center = map?.cameraPosition?.target ?: return@TextButton
+                            loading = true; status = "Refreshing road data…"
+                            scope.launch {
+                                runCatching { withContext(Dispatchers.IO) {
+                                    source.fetch(GeoPoint(center.latitude, center.longitude))
+                                } }.onSuccess { snapshot = it; status = "Road limits ready" }
+                                    .onFailure { status = "Road data unavailable: ${it.message?.take(70) ?: "Unknown error"}" }
+                                loading = false
+                            }
+                        }) { Text("Refresh") }
+                    }
+                    if (!mapAvailable) Text("Base map unavailable. Saved camera alerts and road data still work.",
+                        color = Color(0xFFFFCA75), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+        if (pin != null || editingJunction) Text("✚", Modifier.align(Alignment.Center), color = Color(0xFF004A62),
+            style = MaterialTheme.typography.headlineLarge)
+        when {
+            camera?.mobileReport != null -> Box(Modifier.align(Alignment.BottomCenter)) {
+                val report=camera!!.mobileReport!!
+                MobileReportDetailSheet(report,{camera=null},
+                    { saveChange({
+                        check(MobileReportFeedback.canConfirm(report,DriveBus.state.value.fix,SystemClock.elapsedRealtime(),System.currentTimeMillis())) { "Confirm near the report with a fresh GPS fix" }
+                        check(MobileReportStore(db).confirm(report.id)) { "This report has expired" }
+                    },requireParked=false) { revision++;camera=null } },
+                    { saveChange({ MobileReportStore(db).remove(report.id) },requireParked=false) { revision++;camera=null } },
+                    confirmationEnabled=MobileReportFeedback.canConfirm(report,drive.fix,SystemClock.elapsedRealtime(),System.currentTimeMillis()))
+            }
+            junction != null && !moving -> Box(Modifier.align(Alignment.BottomCenter).imePadding()) {
+                val selected=junction!!
+                if(editingJunction) JunctionEditor(selected,{junction=null;editingJunction=false}) { updated ->
+                    saveChange({ JunctionStore(db).save(updated) }) { junction=updated;editingJunction=false;revision++ }
+                } else JunctionDetails(selected,junctionMembers,nearbyOwnerCameras,
+                    close={junction=null},edit={editingJunction=true;following=false
+                        map?.cameraPosition=CameraPosition.Builder().target(LatLng(selected.point.lat,selected.point.lon))
+                            .zoom(map?.cameraPosition?.zoom ?: 18.0).build()},
+                    add={pin=selected.point;pinJunction=selected;junction=null;camera=null;following=false
+                        map?.cameraPosition=CameraPosition.Builder().target(LatLng(selected.point.lat,selected.point.lon)).zoom(18.0).build()},
+                    select={member->camera=member;editingPosition=null;junction=null;forceCameraEdit=false},
+                    link={member->camera=member.copy(junction=selected);editingPosition=null;junction=null;forceCameraEdit=true},
+                    ungroup={saveChange({ JunctionStore(db).remove(selected.id) }) { junction=null;revision++ }})
+            }
+            pin != null && !moving -> Box(Modifier.align(Alignment.BottomCenter).imePadding()) { CameraMapEditor(null, pin!!, {
+                pin=null;junction=pinJunction;pinJunction=null
+            }, { point, type, direction, mph, note, both ->
+                val group=pinJunction
+                saveChange({ db.create(point,type,direction,mph,note,both,junction=group) }) {
+                    revision++;pin=null;junction=group;pinJunction=null
+                }
+            },junctionContext=pinJunction) }
+            camera != null && !moving -> Box(Modifier.align(Alignment.BottomCenter).imePadding()) { CameraMapEditor(camera, editingPosition?.effectiveFor(camera!!) ?: camera!!.point, {
+                camera = null; editingPosition = null
+            }, { point, type, direction, mph, note, both ->
+                val item = camera!!
+                saveChange({ if (item.source == CameraSource.USER) db.upsert(item.copy(point = point, type = type,
+                    direction = direction, enforcedMph = mph, note = note, bidirectional = both))
+                else {
+                    val previous = db.cameraCorrections().firstOrNull { it.id == item.id }
+                    val sourcePoint = previous?.sourcePoint ?: when (item.source) {
+                        CameraSource.LUFOP -> db.importedPoint(item.id)
+                        CameraSource.OSM -> snapshot?.cameras?.firstOrNull { it.id == item.id }?.point
+                        else -> null
+                    }
+                    db.saveCameraCorrection(CameraCorrection(item.id, item.source, point, type,
+                        direction, note, mph, sourcePoint, bidirectional = both))
+                }
+                }) { revision++;camera=null;editingPosition=null }
+            }, onDelete = { item ->
+                pendingRemoval = item
+            }, sourcePoint = camera?.let { item -> when (item.source) {
+                CameraSource.LUFOP -> db.importedPoint(item.id)
+                CameraSource.OSM -> snapshot?.cameras?.firstOrNull { it.id == item.id }?.point
+                CameraSource.USER -> null
+            } }, forceEdit=forceCameraEdit,openJunction={selected->junction=selected;camera=null;editingPosition=null;forceCameraEdit=false}) }
+            road != null && !moving -> Box(Modifier.align(Alignment.BottomCenter)) { RoadMapEditor(road!!, db.roadCorrection(road!!.id), {
+                road = null
+            }, { correction ->
+                val id=road!!.id
+                saveChange({
+                    RoadDb(context).use { it.deleteOwnerCorrections(id) }
+                    if(correction==null) db.deleteRoadLimit(id) else db.saveRoadCorrection(correction)
+                }) { revision++;road=null }
+            }) }
+            else -> Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
+                color = MapPanel, shape = RoundedCornerShape(12.dp)) {
+                Text(if (moving) "Following your drive · tap recenter to resume after panning" else
+                    "Tap a camera, junction or limit · use Add for a junction",
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = MapInk,
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        Text(SpeedBuddyMapProvider.attribution,
+            Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = if (camera != null || road != null || pin != null || junction != null) 220.dp else 72.dp)
+                .background(MapPanel.copy(alpha = .88f))
+                .clickable { uriHandler.openUri("https://www.openstreetmap.org/copyright") }
+                .padding(4.dp), color = MapInk,
+            style = MaterialTheme.typography.labelSmall)
+        pendingRemoval?.let { item -> AlertDialog(onDismissRequest = { pendingRemoval = null },
+            title = { Text(if (item.source == CameraSource.USER) "Delete your camera?" else "Hide this source camera?") },
+            text = { Text(if (item.source == CameraSource.USER) "This pin will be removed from this phone."
+                else "The imported record remains available; Speed Buddy will hide it from the map and alerts.") },
+            confirmButton = { TextButton(onClick = {
+                saveChange({ if(item.source==CameraSource.USER) db.delete(item.id) else db.hideEffectiveCamera(item) }) {
+                    revision++;camera=null;editingPosition=null;pendingRemoval=null
+                }
+            }) { Text(if (item.source == CameraSource.USER) "Delete" else "Hide") } },
+            dismissButton = { TextButton(onClick = { pendingRemoval = null }) { Text("Cancel") } }) }
+    }
+}
+
+private fun mapPin(color: Int, letter: String, direction: Double? = null, both: Boolean = false): Bitmap {
+    val bitmap = Bitmap.createBitmap(72, 72, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
+    if(letter=="M") {
+        canvas.save();canvas.rotate(45f,36f,36f)
+        canvas.drawRoundRect(12f,12f,60f,60f,7f,7f,paint);canvas.restore()
+    } else if(letter.startsWith("J")) canvas.drawRoundRect(8f,8f,64f,64f,14f,14f,paint)
+    else canvas.drawCircle(36f, 36f, 30f, paint)
+    paint.color = android.graphics.Color.BLACK; paint.textSize = if (letter.length > 2) 21f else 34f
+    paint.isFakeBoldText = true
+    paint.textAlign = Paint.Align.CENTER
+    when(letter) {
+        "J4", "J5" -> {
+            val roads=letter.last().digitToInt()
+            paint.strokeWidth=5f;paint.strokeCap=Paint.Cap.ROUND
+            repeat(roads) { index ->
+                val angle=Math.toRadians(-90.0+index*360.0/roads)
+                canvas.drawLine(36f,36f,36f+(23*kotlin.math.cos(angle)).toFloat(),36f+(23*kotlin.math.sin(angle)).toFloat(),paint)
+            }
+            canvas.drawCircle(36f,36f,13f,paint)
+            paint.color=android.graphics.Color.WHITE;paint.textSize=18f;canvas.drawText(roads.toString(),36f,42f,paint)
+        }
+        "S", "A" -> {
+            paint.style=Paint.Style.STROKE;paint.strokeWidth=3f
+            canvas.drawRoundRect(18f,24f,54f,48f,4f,4f,paint);canvas.drawCircle(39f,36f,7f,paint)
+            paint.style=Paint.Style.FILL;canvas.drawRect(22f,20f,31f,25f,paint)
+            if(letter=="A") { paint.textSize=12f;canvas.drawText("AVG",36f,60f,paint) }
+        }
+        "M" -> {
+            paint.style=Paint.Style.STROKE;paint.strokeWidth=3f
+            canvas.drawRoundRect(17f,27f,55f,47f,4f,4f,paint)
+            canvas.drawRect(40f,29f,51f,37f,paint)
+            paint.style=Paint.Style.FILL
+            canvas.drawCircle(24f,49f,4f,paint);canvas.drawCircle(47f,49f,4f,paint)
+            canvas.drawCircle(28f,37f,5f,paint)
+        }
+        "R", "R+" -> {
+            paint.style=Paint.Style.STROKE;paint.strokeWidth=3f
+            canvas.drawRoundRect(26f,16f,46f,56f,5f,5f,paint)
+            paint.style=Paint.Style.FILL
+            for(y in listOf(24f,36f,48f)) canvas.drawCircle(36f,y,4f,paint)
+            if(letter=="R+") { paint.textSize=18f;canvas.drawText("+",53f,50f,paint) }
+        }
+        else -> canvas.drawText(letter,36f,48f,paint)
+    }
+    if (direction != null) {
+        canvas.save()
+        canvas.rotate(direction.toFloat(), 36f, 36f)
+        paint.color = android.graphics.Color.WHITE
+        val arrow = android.graphics.Path().apply {
+            moveTo(36f, 0f); lineTo(29f, 14f); lineTo(43f, 14f); close()
+        }
+        canvas.drawPath(arrow, paint)
+        if (both) { canvas.rotate(180f, 36f, 36f); canvas.drawPath(arrow, paint) }
+        canvas.restore()
+    }
+    return bitmap
+}
+
+private fun mapSpeedSign(label: String): Bitmap {
+    val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    paint.color = android.graphics.Color.WHITE
+    canvas.drawCircle(32f, 32f, 27f, paint)
+    paint.color = android.graphics.Color.rgb(205, 54, 53)
+    paint.style = Paint.Style.STROKE; paint.strokeWidth = 6f
+    canvas.drawCircle(32f, 32f, 27f, paint)
+    paint.style = Paint.Style.FILL; paint.color = android.graphics.Color.BLACK
+    paint.isFakeBoldText = true; paint.textAlign = Paint.Align.CENTER
+    paint.textSize = if (label == "NSL") 19f else 29f
+    canvas.drawText(label, 32f, 42f, paint)
+    return bitmap
+}
+
+@Composable private fun CameraMapEditor(existing: Camera?, initial: GeoPoint, close: () -> Unit,
+    save: (GeoPoint, CameraType, Double?, Int?, String?, Boolean) -> Unit,
+    onDelete: ((Camera) -> Unit)? = null, sourcePoint: GeoPoint? = null,
+    junctionContext: CameraJunction? = existing?.junction, forceEdit: Boolean = false,
+    openJunction: ((CameraJunction)->Unit)? = null) {
+    var editMode by rememberSaveable(existing?.id,forceEdit) { mutableStateOf(existing==null || forceEdit) }
+    if (!editMode && existing!=null) {
+        CameraDetailSheet(existing,sourcePoint,close,{ editMode=true },onDelete,openJunction)
+        return
+    }
+    var advanced by rememberSaveable(existing?.id) { mutableStateOf(false) }
+    var type by rememberSaveable(existing?.id) { mutableStateOf(existing?.type ?: CameraType.SPEED) }
+    var direction by rememberSaveable(existing?.id) { mutableStateOf(existing?.direction?.toInt()?.toString() ?: "") }
+    var both by rememberSaveable(existing?.id) { mutableStateOf(existing?.bidirectional ?: false) }
+    var note by rememberSaveable(existing?.id) { mutableStateOf(existing?.note ?: "") }
+    var mph by rememberSaveable(existing?.id) { mutableStateOf(existing?.enforcedMph?.toString() ?: "") }
+    var lat by rememberSaveable(existing?.id, initial) { mutableStateOf(initial.lat.toString()) }
+    var lon by rememberSaveable(existing?.id, initial) { mutableStateOf(initial.lon.toString()) }
+    val point = lat.toDoubleOrNull()?.let { y -> lon.toDoubleOrNull()?.let { x ->
+        if (y in -90.0..90.0 && x in -180.0..180.0) GeoPoint(y, x) else null
+    } }
+    Surface(Modifier.fillMaxWidth().padding(12.dp), color = MapPanel, shape = RoundedCornerShape(18.dp)) {
+        Column(Modifier.heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.72f).verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Text(if (existing == null) "Drop camera pin" else "Edit ${existing.source.name.lowercase()} camera",
+                color = MapInk, fontWeight = FontWeight.Bold)
+            junctionContext?.let { group ->
+                Text("${group.name} · ${group.ways}-way junction",color=MapInk,fontWeight=FontWeight.SemiBold)
+                Text("Place this camera within 300m of the centre and choose its enforced travel direction.",
+                    color=MapMuted,style=MaterialTheme.typography.bodySmall)
+            }
+            if (existing != null) Text(when (existing.source) {
+                CameraSource.USER -> "USER ADDED · saved on this phone"
+                CameraSource.LUFOP -> "LUFOP · imported · unverified direction"
+                CameraSource.OSM -> "OPENSTREETMAP · community data"
+            }, color = MapMuted, style = MaterialTheme.typography.labelSmall)
+            Text("${if (existing == null) "Drag the map or tap to move the pin · " else "Tap the map to move this camera · "}Direction is enforced travel bearing",
+                color = MapMuted, style = MaterialTheme.typography.labelSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(type == CameraType.SPEED, { type = CameraType.SPEED }, label = { Text("Speed") })
+                FilterChip(type == CameraType.RED_LIGHT, { type = CameraType.RED_LIGHT }, label = { Text("Red light") })
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(type == CameraType.COMBINED, { type = CameraType.COMBINED }, label = { Text("Both") })
+                if(junctionContext==null) FilterChip(type == CameraType.AVERAGE, { type = CameraType.AVERAGE }, label = { Text("Average") })
+            }
+            if(advanced) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(lat, { lat = it.take(14) }, Modifier.weight(1f), label = { Text("Latitude") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                OutlinedTextField(lon, { lon = it.take(14) }, Modifier.weight(1f), label = { Text("Longitude") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(mph, { mph = it.filter(Char::isDigit).take(3) }, Modifier.weight(.38f),
+                    label = { Text("Limit mph") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                if(advanced) OutlinedTextField(direction, { direction = it.filter(Char::isDigit).take(3) }, Modifier.weight(.38f),
+                    label = { Text("Direction °") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            }
+            DirectionDial(direction.toDoubleOrNull()) { direction=it.toInt().toString() }
+            OutlinedTextField(note, { note = it.take(100) }, Modifier.fillMaxWidth(), label = { Text("Note") }, singleLine = true)
+            TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "Hide coordinates" else "More details") }
+            if (advanced) Text("Effective: ${initial.lat}, ${initial.lon}" +
+                (sourcePoint?.let { "\nSource: ${it.lat}, ${it.lon}" } ?: "") +
+                (existing?.updatedAtMs?.takeIf { it > 0 }?.let { " · updated ${java.text.DateFormat.getDateInstance().format(java.util.Date(it))}" } ?: ""),
+                color = MapMuted, style = MaterialTheme.typography.labelSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.fillMaxWidth()) {
+                listOf("N" to 0, "E" to 90, "S" to 180, "W" to 270).forEach { (label, angle) ->
+                    FilterChip(direction == angle.toString(), { direction = angle.toString() },
+                        label = { Text(label) }, modifier = Modifier.weight(1f))
+                }
+                if(junctionContext==null) FilterChip(direction.isBlank(), { direction = ""; both = false }, label = { Text("?") },modifier=Modifier.semantics { contentDescription="Enforcement direction unknown" })
+            }
+            FilterChip(both, { both = !both }, enabled = direction.isNotBlank(),
+                label = { Text("Enforces both directions") })
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = close) { Text("Cancel") }
+                if (existing != null && onDelete != null) TextButton(onClick = { onDelete(existing) }) {
+                    Text(if (existing.source == CameraSource.USER) "Delete pin" else "Hide locally")
+                }
+                Spacer(Modifier.weight(1f))
+                Button(onClick = { point?.let { save(it, type, direction.toDoubleOrNull(), mph.toIntOrNull(), note.ifBlank { null }, both) } },
+                    enabled = point != null && (!both || direction.isNotBlank()) &&
+                        (junctionContext==null || (direction.isNotBlank() && Geo.distance(point,junctionContext.point)<=300)) &&
+                        (direction.isBlank() || direction.toIntOrNull()?.let { it in 0..359 } == true) &&
+                        (mph.isBlank() || mph.toIntOrNull()?.let { it in 5..130 } == true)) { Text("Save") }
+            }
+        }
+    }
+}
+
+@Composable private fun RoadMapEditor(road: Road, correction: RoadLimitCorrection?, close: () -> Unit,
+    save: (RoadLimitCorrection?) -> Unit) {
+    var kind by rememberSaveable(road.id) { mutableStateOf(correction?.kind ?: RoadLimitKind.NUMERIC) }
+    var mph by rememberSaveable(road.id) { mutableStateOf((correction?.mph ?: SpeedLimits.mph(road.tags))?.toString() ?: "") }
+    Surface(Modifier.fillMaxWidth().padding(12.dp), color = MapPanel, shape = RoundedCornerShape(18.dp)) {
+        Column(Modifier.heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.72f).verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(road.name ?: "Unnamed road", color = MapInk, fontWeight = FontWeight.Bold)
+            Text("Selected road section · ${road.points.size} mapped points",color=MapMuted)
+            Text("Source: ${road.tags["maxspeed"] ?: road.tags["maxspeed:type"] ?: "unknown"} · ${road.id}", color = MapMuted)
+            Text("Local correction affects Speed Buddy only. Check the posted sign first; variable limits stay unknown.",
+                color = MapMuted, style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                listOf(20, 30, 40, 50, 60, 70).forEach { value ->
+                    FilterChip(kind == RoadLimitKind.NUMERIC && mph == value.toString(),
+                        { kind = RoadLimitKind.NUMERIC; mph = value.toString() },
+                        label = { Text(value.toString()) })
+                }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                FilterChip(kind == RoadLimitKind.NATIONAL_SINGLE,
+                    { kind = RoadLimitKind.NATIONAL_SINGLE; mph = "60" }, label = { Text("National · single") })
+                FilterChip(kind == RoadLimitKind.NATIONAL_DUAL,
+                    { kind = RoadLimitKind.NATIONAL_DUAL; mph = "70" }, label = { Text("National · dual") })
+                FilterChip(kind == RoadLimitKind.UNKNOWN,
+                    { kind = RoadLimitKind.UNKNOWN; mph = "" }, label = { Text("Unknown") })
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = close) { Text("Cancel") }
+                if (correction != null) TextButton(onClick = { save(null) }) { Text("Reset edit") }
+                Spacer(Modifier.weight(1f))
+                Button(onClick = { save(RoadLimitCorrection(road.id, kind,
+                    if (kind == RoadLimitKind.UNKNOWN) null else mph.toIntOrNull(),
+                    road.tags["maxspeed"] ?: road.tags["maxspeed:type"], System.currentTimeMillis())) },
+                    enabled = kind != RoadLimitKind.NUMERIC || mph.toIntOrNull()?.let { it in listOf(20, 30, 40, 50, 60, 70) } == true) {
+                    Text("Save")
+                }
+            }
+        }
+    }
+}

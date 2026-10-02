@@ -63,11 +63,12 @@ object RoadResponse {
                 else -> error("Unexpected source element")
             }
         }
-        return RoadTileData(tile,fetched,roads,cameras.values.toList())
+        val richer=OsmRecordDecoder.decode(j,fetched,tile.center)
+        return RoadTileData(tile,fetched,roads,richer.cameras,averageSections=richer.averageSections)
     }
     fun query(tile: RoadTile): String {
         val box="${tile.south},${tile.west},${tile.north},${tile.east}"
-        return """[out:json][timeout:25][maxsize:67108864];(way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"]($box);node["highway"="speed_camera"]($box);node["enforcement"~"maxspeed|traffic_signals|red_light_camera"]($box);relation["type"="enforcement"]["enforcement"~"maxspeed|traffic_signals|red_light_camera"]($box););out body geom;out count;"""
+        return """[out:json][timeout:25][maxsize:67108864];(way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"]($box);node["highway"="speed_camera"]($box);node["enforcement"~"maxspeed|traffic_signals|red_light_camera|average_speed"]($box);relation["type"="enforcement"]["enforcement"~"maxspeed|traffic_signals|red_light_camera|average_speed"]($box););out body geom;out count;"""
     }
 }
 private object RoadRequestGate { val mutex=Mutex() }

@@ -9,7 +9,7 @@ import org.json.JSONObject
 import kotlin.math.cos
 
 /** Public tile storage is independent of owner cameras, settings and local corrections. */
-class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,2) {
+class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,3) {
     override fun onConfigure(db: SQLiteDatabase) { db.execSQL("PRAGMA auto_vacuum=INCREMENTAL") }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE tiles(id TEXT PRIMARY KEY,fetched INTEGER NOT NULL,bytes INTEGER NOT NULL,complete INTEGER NOT NULL)")
@@ -21,9 +21,14 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         db.execSQL("CREATE TABLE public_cameras(tile TEXT NOT NULL,id TEXT NOT NULL,lat REAL NOT NULL,lon REAL NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(tile,id))")
         db.execSQL("CREATE INDEX public_camera_location ON public_cameras(lat,lon)")
         db.execSQL("CREATE TABLE overrides(road TEXT NOT NULL,bearing REAL NOT NULL,mph INTEGER NOT NULL,payload TEXT,PRIMARY KEY(road,bearing))")
+        createSections(db)
         db.execSQL("CREATE TABLE boundaries(key TEXT PRIMARY KEY,payload TEXT NOT NULL)")
     }
+    private fun createSections(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE average_sections(tile TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(tile,id))")
+    }
     override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
+        if(oldVersion<3) createSections(db)
         if(oldVersion<2) db.execSQL("ALTER TABLE overrides ADD COLUMN payload TEXT")
     }
     fun coverage(): Map<RoadTile,Long> = readableDatabase.rawQuery("SELECT id,fetched FROM tiles WHERE complete=1",null).use { c ->
@@ -36,8 +41,9 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         require(data.roads.all { r -> r.id.isNotBlank() && r.points.size in 2..20_000 && r.points.all(::validPoint) })
         require(data.cameras.all { it.source == CameraSource.OSM && validPoint(it.point) })
         val payloads = data.roads.map { it to RoadJson.encode(it).toString() }
+        val sectionPayloads=data.averageSections.map { it to RoadJson.section(it).toString() }
         val cameraPayloads = data.cameras.map { it to RoadJson.camera(it).toString() }
-        val bytes = payloads.sumOf { it.second.toByteArray().size.toLong() } + cameraPayloads.sumOf { it.second.toByteArray().size.toLong() }
+        val bytes = sectionPayloads.sumOf { it.second.toByteArray().size.toLong() } + payloads.sumOf { it.second.toByteArray().size.toLong() } + cameraPayloads.sumOf { it.second.toByteArray().size.toLong() }
         require(bytes <= 8_000_000) { "Tile too large to persist" }
         val db = writableDatabase; db.beginTransaction()
         try {
@@ -50,14 +56,17 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
             cameraPayloads.forEach { (c,json) -> db.insertOrThrow("public_cameras",null,ContentValues().apply {
                 put("tile",data.tile.id);put("id",c.id);put("lat",c.point.lat);put("lon",c.point.lon);put("payload",json)
             }) }
+            sectionPayloads.forEach { (section,json) -> db.insertOrThrow("average_sections",null,ContentValues().apply {
+                put("tile",data.tile.id);put("id",section.id);put("payload",json)
+            }) }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
     private fun deleteTile(db: SQLiteDatabase,id: String) {
-        db.delete("roads","tile=?",arrayOf(id)); db.delete("public_cameras","tile=?",arrayOf(id));db.delete("tiles","id=?",arrayOf(id))
+        db.delete("average_sections","tile=?",arrayOf(id));db.delete("roads","tile=?",arrayOf(id)); db.delete("public_cameras","tile=?",arrayOf(id));db.delete("tiles","id=?",arrayOf(id))
     }
-    fun nearby(point: GeoPoint): LocalRoads {
-        val dy=700.0/111195.0; val dx=700.0/(111320.0*cos(Math.toRadians(point.lat)).coerceAtLeast(.1))
+    fun nearby(point: GeoPoint,radiusM: Double=700.0): LocalRoads {
+        val dy=radiusM/111195.0; val dx=radiusM/(111320.0*cos(Math.toRadians(point.lat)).coerceAtLeast(.1))
         val low=RoadCells.at(GeoPoint(point.lat-dy,point.lon-dx));val high=RoadCells.at(GeoPoint(point.lat+dy,point.lon+dx))
         val roads=readableDatabase.rawQuery("SELECT r.road_id,r.payload,t.fetched FROM roads r JOIN tiles t ON t.id=r.tile WHERE r.pk IN (SELECT pk FROM road_cells WHERE y BETWEEN ? AND ? AND x BETWEEN ? AND ?) ORDER BY t.fetched DESC",
             arrayOf(low.first.toString(),high.first.toString(),low.second.toString(),high.second.toString())).use { c ->
@@ -67,7 +76,48 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
             arrayOf((point.lat-dy*2).toString(),(point.lat+dy*2).toString(),(point.lon-dx*2).toString(),(point.lon+dx*2).toString())).use { c ->
             val seen=mutableSetOf<String>();buildList { while(c.moveToNext()) if(seen.add(c.getString(0))) add(RoadJson.decodeCamera(JSONObject(c.getString(1)))) }
         }
-        return LocalRoads(roads,cameras)
+        val sections=readableDatabase.rawQuery("SELECT a.id,a.payload FROM average_sections a JOIN tiles t ON a.tile=t.id ORDER BY t.fetched DESC",null).use { c ->
+            val seen=mutableSetOf<String>();buildList { while(c.moveToNext()) if(seen.add(c.getString(0))) {
+                val section=RoadJson.decodeSection(JSONObject(c.getString(1)))
+                if(section.wayIds.any { id -> roads.any { it.road.id==id } }) add(section)
+            } }
+        }
+        return LocalRoads(roads,cameras,sections)
+    }
+    /** Map extracts are partial coverage. Never erase a complete tile with a small viewport response. */
+    fun mergeMapSnapshot(snapshot: OsmSnapshot) {
+        val centerTile=RoadTile.at(snapshot.center)
+        val tileList=buildList { for(y in centerTile.y-1..centerTile.y+1) for(x in centerTile.x-1..centerTile.x+1) add(RoadTile(y,x)) }
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            for(tile in tileList) {
+                val viewportRoads=snapshot.roads.filter { RoadCells.forRoad(it.points,tile).isNotEmpty() }
+                val viewportCameras=snapshot.cameras.filter { RoadTile.at(it.point)==tile }
+                if(viewportRoads.isEmpty() && viewportCameras.isEmpty()) continue
+                val metadata=db.rawQuery("SELECT fetched,complete FROM tiles WHERE id=?",arrayOf(tile.id)).use { c ->
+                    if(c.moveToFirst()) c.getLong(0) to (c.getInt(1)==1) else null
+                }
+                // Older manual extracts cannot replace newer complete road data.
+                if(metadata?.second==true && metadata.first>=snapshot.fetchedAt) continue
+                val oldRoads=db.rawQuery("SELECT payload FROM roads WHERE tile=?",arrayOf(tile.id)).use { c ->
+                    buildList { while(c.moveToNext()) add(RoadJson.decode(JSONObject(c.getString(0)))) }
+                }
+                val oldCameras=db.rawQuery("SELECT payload FROM public_cameras WHERE tile=?",arrayOf(tile.id)).use { c ->
+                    buildList { while(c.moveToNext()) add(RoadJson.decodeCamera(JSONObject(c.getString(0)))) }
+                }
+                val oldSections=db.rawQuery("SELECT payload FROM average_sections WHERE tile=?",arrayOf(tile.id)).use { c ->
+                    buildList { while(c.moveToNext()) add(RoadJson.decodeSection(JSONObject(c.getString(0)))) }
+                }
+                val oldFirst=metadata!=null && metadata.first>=snapshot.fetchedAt
+                replace(RoadTileData(tile,if(metadata?.second==true) metadata.first else maxOf(metadata?.first ?: 0,snapshot.fetchedAt),
+                    (if(oldFirst) oldRoads+viewportRoads else viewportRoads+oldRoads).distinctBy { it.id },
+                    (if(oldFirst) oldCameras+viewportCameras else viewportCameras+oldCameras).distinctBy { it.id },
+                    complete=metadata?.second==true,
+                    averageSections=(if(oldFirst) oldSections+snapshot.averageSections else snapshot.averageSections+oldSections).distinctBy { it.id }))
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
     /** Evict oldest public tiles only. The caller protects the local 3x3 region, not an unbounded trip. */
     fun cleanup(protected: Set<RoadTile>,maxTiles: Int=160,maxBytes: Long=32_000_000) {
@@ -125,9 +175,21 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
     fun boundaries(): List<BoundaryCorrection> = readableDatabase.rawQuery("SELECT payload FROM boundaries",null).use { c ->
         buildList { while(c.moveToNext()) add(RoadJson.decodeBoundary(JSONObject(c.getString(0)))) }
     }
+    fun deleteOwnerCorrections(road: String) {
+        val db=writableDatabase;db.beginTransaction()
+        try {
+            db.delete("overrides","road=?",arrayOf(road))
+            boundaries().filter { it.fromId==road || it.toId==road }.forEach {
+                db.delete("boundaries","key=?",arrayOf(boundaryKey(it)))
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        OwnerDataRevision.roads++
+    }
     fun resetCorrections() {
         val db=writableDatabase;db.beginTransaction()
         try { db.delete("boundaries",null,null);db.delete("overrides",null,null);db.setTransactionSuccessful() } finally { db.endTransaction() }
+        OwnerDataRevision.roads++
     }
     fun mergeOwnerCorrections(overrides: List<Override>, boundaries: List<BoundaryCorrection>) {
         val db = writableDatabase
@@ -159,9 +221,16 @@ internal object RoadJson {
         val points=j.getJSONArray("points");val tags=j.getJSONObject("tags")
         return Road(j.getString("id"),j.optString("name").takeUnless { j.isNull("name") },(0 until points.length()).map { point(points.getJSONArray(it)) },tags.keys().asSequence().associateWith { tags.getString(it) })
     }
-    fun camera(c: Camera)=JSONObject().put("id",c.id).put("point",point(c.point)).put("type",c.type.name).put("direction",c.direction?:JSONObject.NULL).put("mph",c.enforcedMph?:JSONObject.NULL).put("updated",c.updatedAtMs)
+    fun camera(c: Camera)=JSONObject().put("id",c.id).put("point",point(c.point)).put("type",c.type.name).put("direction",c.direction?:JSONObject.NULL).put("mph",c.enforcedMph?:JSONObject.NULL).put("updated",c.updatedAtMs).put("bidirectional",c.bidirectional)
     fun decodeCamera(j: JSONObject)=Camera(j.getString("id"),point(j.getJSONArray("point")),CameraType.valueOf(j.getString("type")),CameraSource.OSM,
-        if(j.isNull("direction")) null else j.getDouble("direction"),if(j.isNull("mph")) null else j.getInt("mph"),updatedAtMs=j.getLong("updated"))
+        if(j.isNull("direction")) null else j.getDouble("direction"),if(j.isNull("mph")) null else j.getInt("mph"),updatedAtMs=j.getLong("updated"),bidirectional=j.optBoolean("bidirectional",false))
+    fun section(s: AverageSpeedSection)=JSONObject().put("id",s.id).put("points",JSONArray(s.points.map(::point)))
+        .put("ways",JSONArray(s.wayIds.sorted())).put("mph",s.mph?:JSONObject.NULL)
+    fun decodeSection(j: JSONObject): AverageSpeedSection {
+        val p=j.getJSONArray("points");val w=j.getJSONArray("ways")
+        return AverageSpeedSection(j.getString("id"),(0 until p.length()).map { point(p.getJSONArray(it)) },
+            (0 until w.length()).mapTo(hashSetOf()) { w.getString(it) },if(j.isNull("mph")) null else j.getInt("mph"))
+    }
     fun boundary(b: BoundaryCorrection)=JSONObject().put("from",b.fromId).put("to",b.toId).put("old",b.oldMph).put("new",b.newMph).put("predicted",point(b.predicted)).put("observed",point(b.observed))
         .put("bearing",b.bearing).put("pa",b.predictedAccuracy).put("oa",b.observedAccuracy).put("confidence",b.confidence).put("distance",b.matchDistance).put("at",b.recordedAt)
     fun decodeBoundary(j: JSONObject)=BoundaryCorrection(j.getString("from"),j.getString("to"),j.getInt("old"),j.getInt("new"),point(j.getJSONArray("predicted")),point(j.getJSONArray("observed")),

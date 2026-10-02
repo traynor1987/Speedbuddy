@@ -35,10 +35,10 @@ def main():
         run([str(tools / 'apksigner'), 'sign', '--ks', str(key), '--ks-key-alias', 'test-only',
              '--ks-pass', 'env:TEST_SIGNING_PASSWORD', '--key-pass', 'env:TEST_SIGNING_PASSWORD',
              '--out', str(apk), str(unsigned)], env)
-        verify(apk, tools, sha, fingerprint, 10, '0.2.1')
+        verify(apk, tools, sha, fingerprint, 11, '0.2.2')
         for bad_sha, bad_pin in [(sha, '0' * 64), ('0' * 40, fingerprint)]:
             try:
-                verify(apk, tools, bad_sha, bad_pin, 10, '0.2.1')
+                verify(apk, tools, bad_sha, bad_pin, 11, '0.2.2')
             except ValueError:
                 pass
             else:

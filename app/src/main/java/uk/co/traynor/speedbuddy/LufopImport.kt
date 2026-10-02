@@ -13,9 +13,10 @@ object LufopAscImporter {
     private val red = Regex("GBFeuRougeGB\\.asc", RegexOption.IGNORE_CASE)
 
     fun parse(input: InputStream): List<Camera> = inspect(input).cameras
-    fun inspect(input: InputStream): Batch {
+    fun inspect(input: InputStream): Batch = inspectLimited(input,64_000_000)
+    internal fun inspectLimited(input: InputStream,maximumExpandedBytes: Long): Batch {
         val cameras = linkedMapOf<String, Camera>()
-        var bytes = 0L; var entries = 0; var invalid = 0
+        var bytes = 0L; var totalBytes=0L; var entries = 0; var invalid = 0
         var archiveDateMs: Long? = null
         ZipInputStream(input.buffered()).use { zip ->
             while (true) {
@@ -27,18 +28,21 @@ object LufopAscImporter {
                     red.matches(name) -> CameraType.RED_LIGHT
                     else -> null
                 }
-                if (type != null && !entry.isDirectory) {
-                    if (entry.time > 0) archiveDateMs = maxOf(archiveDateMs ?: 0L, entry.time)
-                    // Limit expanded bytes, including unexpectedly large entries.
-                    val data = java.io.ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    while (true) {
-                        val count = zip.read(buffer)
-                        if (count < 0) break
-                        bytes += count
-                        if (bytes > 8_000_000) throw IllegalArgumentException("UK camera data too large")
-                        data.write(buffer, 0, count)
+                val data=java.io.ByteArrayOutputStream()
+                if(!entry.isDirectory) {
+                    val buffer=ByteArray(8192)
+                    while(true) {
+                        val count=zip.read(buffer);if(count<0) break
+                        totalBytes+=count
+                        require(totalBytes<=maximumExpandedBytes) { "Expanded camera archive is too large" }
+                        if(type!=null) {
+                            bytes+=count;require(bytes<=8_000_000) { "UK camera data too large" }
+                            data.write(buffer,0,count)
+                        }
                     }
+                }
+                if (type != null && !entry.isDirectory) {
+                    if(entry.time>0) archiveDateMs=maxOf(archiveDateMs ?: 0L,entry.time)
                     data.toString(Charsets.UTF_8.name()).lineSequence().filter { it.isNotBlank() }.forEach { line ->
                         val match = row.matchEntire(line)
                         val lon = match?.groupValues?.get(1)?.toDoubleOrNull()

@@ -34,9 +34,9 @@ object RoadTiles {
         }
     }
 }
-data class RoadTileData(val tile: RoadTile,val fetchedAt: Long,val roads: List<Road>,val cameras: List<Camera>,val complete: Boolean = true)
+data class RoadTileData(val tile: RoadTile,val fetchedAt: Long,val roads: List<Road>,val cameras: List<Camera>,val complete: Boolean = true,val averageSections: List<AverageSpeedSection> = emptyList())
 data class SavedRoad(val road: Road,val fetchedAt: Long)
-data class LocalRoads(val roads: List<SavedRoad>,val cameras: List<Camera>)
+data class LocalRoads(val roads: List<SavedRoad>,val cameras: List<Camera>,val averageSections: List<AverageSpeedSection> = emptyList())
 
 /** Scheduling only. Cache age determines refresh, never whether a saved row may be matched. */
 class RoadRefreshPlanner {
