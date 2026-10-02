@@ -34,6 +34,7 @@ class RoadDownloadTest {
         job.cancel();release.countDown();job.join()
         assertEquals(0,writes.get())
         context.getSharedPreferences("road-download-budget",0).edit().clear().commit()
+        Unit
     }
     /** Exercise actual download cancellation without depending on a public endpoint or live internet. */
     @Test fun stopClosesInFlightRequestAndRestartCannotOverlap() = runBlocking {
@@ -63,5 +64,6 @@ class RoadDownloadTest {
         // Restart is still waiting for the shared persisted 30-second request slot.
         delay(100);assertEquals(1,opens.get());restarted.cancelAndJoin()
         context.getSharedPreferences("road-download-budget",0).edit().clear().commit()
+        Unit
     }
 }
