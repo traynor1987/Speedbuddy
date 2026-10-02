@@ -25,17 +25,17 @@ class LimitPickerUiTest {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         try {
             instrumentation.waitForIdleSync()
-            tap(awaitNode { it.contentDescription?.toString()=="Correct road speed limit" })
+            tap(actionable(awaitNode { it.contentDescription?.toString()=="Correct road speed limit" }))
             awaitNode { it.text?.toString()=="Choose the real limit" }
             for(label in listOf("20 mph","30 mph","40 mph","50 mph","60 mph","70 mph","National Speed Limit","Unknown")) {
-                val choice=awaitNode { it.contentDescription?.toString()==label }
+                val choice=actionable(awaitNode { it.contentDescription?.toString()==label })
                 assertTrue("$label must be clickable\n${tree()}",choice.isClickable)
                 val bounds=android.graphics.Rect();choice.getBoundsInScreen(bounds)
                 assertTrue("$label touch target is too small: $bounds",bounds.height()>=48*instrumentation.targetContext.resources.displayMetrics.density)
             }
             val root=instrumentation.uiAutomation.rootInActiveWindow
             assertNull(find(root) { it.className?.toString()?.contains("EditText")==true })
-            tap(awaitNode { it.contentDescription?.toString()=="40 mph" && it.isEnabled && it.isClickable })
+            tap(actionable(awaitNode { it.contentDescription?.toString()=="40 mph" }))
             val until=SystemClock.elapsedRealtime()+5000
             while(find(instrumentation.uiAutomation.rootInActiveWindow) { it.text?.toString()=="Choose the real limit" }!=null && SystemClock.elapsedRealtime()<until) Thread.sleep(100)
             assertNull(find(instrumentation.uiAutomation.rootInActiveWindow) { it.text?.toString()=="Choose the real limit" })
@@ -43,6 +43,15 @@ class LimitPickerUiTest {
             instrumentation.runOnMainSync { activity.finish() }
             DriveBus.set(DriveState())
         }
+    }
+    /** Compose can expose a description as a synthetic child of the actual clickable control. */
+    private fun actionable(description: AccessibilityNodeInfo): AccessibilityNodeInfo {
+        var node: AccessibilityNodeInfo?=description
+        while(node!=null) {
+            if(node.isClickable && node.isEnabled && node.actionList.any { it.id==AccessibilityNodeInfo.ACTION_CLICK }) return node
+            node=node.parent
+        }
+        error("Description has no enabled click target: ${description.contentDescription}\n${tree()}")
     }
     /** Exercise the owner's real tap, including touch dispatch, rather than an accessibility shortcut. */
     private fun tap(node: AccessibilityNodeInfo) {
