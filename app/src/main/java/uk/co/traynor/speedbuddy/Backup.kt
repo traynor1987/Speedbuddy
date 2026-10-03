@@ -251,7 +251,7 @@ object OwnerBackupCodec {
             require(array.length() <= 10_000)
             (0 until array.length()).map { i -> val item = array.getJSONObject(i)
                 requireExactInteger(item, "old"); requireExactInteger(item, "new"); requireExactInteger(item, "at")
-                requireKnownKeys(item, setOf("from", "to", "old", "new", "predicted", "observed", "bearing", "pa", "oa", "confidence", "distance", "at") + (if(version>=12) setOf("via","still") else emptySet()))
+                requireKnownKeys(item, setOf("from", "to", "old", "new", "predicted", "observed", "bearing", "pa", "oa", "confidence", "distance", "at") + (if(version>=12) setOf("via","still","shared") else emptySet()))
                 require(item.getJSONArray("predicted").length() == 2 && item.getJSONArray("observed").length() == 2)
                 RoadJson.decodeBoundary(item).also(::validateBoundary)
             }

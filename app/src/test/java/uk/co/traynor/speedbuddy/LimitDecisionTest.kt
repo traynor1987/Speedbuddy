@@ -38,13 +38,12 @@ class LimitDecisionTest {
         assertEquals(30,before.mph); assertTrue(before.boundaryApplied); assertEquals(20,before.upcoming?.mph)
         assertEquals(20,replay.decide(fix(53.0062,3000),match(next),20,null,listOf(boundary),3000).mph)
     }
-    @Test fun ordinaryTwoWayBoundarySharesOnlyItsPhysicalLocation() {
+    @Test fun oppositeDirectionAndOtherRoadAreIsolated() {
         val engine = LimitDecisionEngine(); transitioned(engine); engine.tooEarly(fix(53.0036,4500),4500)
         val boundary = engine.changedNow(fix(53.006,6000),6000)!!
         val opposite = LimitDecisionEngine()
         assertEquals(20,opposite.decide(fix(53.004,1000,180.0),match(next),20,null,listOf(boundary),1000).mph)
-        val reverse=opposite.decide(fix(53.004,2000,180.0),match(next),20,null,listOf(boundary),2000)
-        assertTrue(reverse.boundaryApplied);assertEquals(30,reverse.upcoming?.mph)
+        assertFalse(opposite.decide(fix(53.004,2000,180.0),match(next),20,null,listOf(boundary),2000).boundaryApplied)
         val unrelated = next.copy(id="way/99")
         assertFalse(LimitDecisionEngine().decide(fix(53.004,1000),match(unrelated),20,null,listOf(boundary),1000).boundaryApplied)
     }

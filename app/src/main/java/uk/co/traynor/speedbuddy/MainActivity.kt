@@ -447,7 +447,7 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.fillMaxWidth().height(mainSize), contentAlignment = Alignment.Center) {
                     Box(Modifier.size(mainSize).testTag("current-road-limit")
                         .semantics { contentDescription="Correct road speed limit" }
-                        .clickable(enabled=state.active && state.fix!=null) { pickerFor=state }) {
+                        .clickable(enabled=state.active && (state.fix!=null || state.road!=null)) { pickerFor=state }) {
                         LimitSign(state.limitMph, national, Modifier.fillMaxSize().clearAndSetSemantics {})
                         if(state.limitDecision?.assumed==true) Text("⚠",color=Warning,fontSize=32.sp,fontWeight=FontWeight.Black,
                             modifier=Modifier.align(Alignment.TopEnd).offset(x=14.dp))
@@ -460,7 +460,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 if (state.limitMph == null) Surface(
-                    onClick = { if(state.active && state.fix!=null) pickerFor=state else onUnknownLimit() },
+                    onClick = { if(state.active && (state.fix!=null || state.road!=null)) pickerFor=state else onUnknownLimit() },
                     modifier = Modifier.align(Alignment.BottomCenter).size(48.dp)
                         .semantics { contentDescription = "Set this road's speed limit" },
                     shape = CircleShape, color = Accent, contentColor = Background,
