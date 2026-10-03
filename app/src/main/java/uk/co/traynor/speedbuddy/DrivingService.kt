@@ -348,7 +348,12 @@ class DrivingService : Service(), LocationListener {
             "SET_LIMIT","RESET_CORRECTIONS","RESET_ROAD","SET_OVERRIDE" -> {
                 if(intent.action!="SET_LIMIT" && (state.speedMph ?: Double.MAX_VALUE)>=5) return
                 val road=state.road?.road
-                if(intent.action!="RESET_CORRECTIONS" && (road==null || fix.bearing==null)) return
+                if(intent.action!="RESET_CORRECTIONS" && (road==null || fix.bearing==null)) {
+                    val receipt=LimitDiagnostics.snapshot("unmatched correction",state,intent.getIntExtra("mph",OWNER_UNKNOWN),transition=limitEngine.transitionEvidence())
+                    scope.launch(Dispatchers.IO) { runCatching { roads.recordDiagnostic(receipt) } }
+                    feedback("Road not matched yet. Keep driving and tap the sign again.")
+                    return
+                }
                 val selected=intent.getIntExtra("mph",OWNER_UNKNOWN)
                 val plan=if(intent.action in listOf("SET_LIMIT","SET_OVERRIDE")) limitEngine.planSelection(fix,state.road,state.sourceLimitMph,
                     selected,intent.getStringExtra("road") ?: road!!.id,now,System.currentTimeMillis(),observations) else null

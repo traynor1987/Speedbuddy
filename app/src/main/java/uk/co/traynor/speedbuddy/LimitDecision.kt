@@ -7,6 +7,8 @@ data class BoundaryCorrection(
     val predictedAccuracy: Double,val observedAccuracy: Double,val confidence: Double,
     val matchDistance: Double,val recordedAt: Long,
     val viaIds: List<String> = emptyList(),val stillPoint: GeoPoint? = null,
+    /** True only when the observed transition is an ordinary shared two-way boundary. */
+    val sharedAcrossDirections: Boolean = false,
 )
 data class LimitDecision(val mph: Int?,val upcoming: UpcomingLimit? = null,val ownerApplied: Boolean = false,
     val boundaryApplied: Boolean = false,val reason: String,val assumed: Boolean = false,
@@ -74,7 +76,9 @@ class LimitDecisionEngine {
         if (accepted != null) {
             boundaries.filter { it.fromId==accepted.road.id || it.toId==accepted.road.id && fix.bearing?.let { heading -> Geo.difference(heading,it.bearing)>100 } == true }
                 .forEach { crossed.remove(key(it)) }
-            val boundary = boundaries.sortedByDescending { it.recordedAt }.firstOrNull { b ->
+            val boundary = boundaries.asSequence().flatMap { boundary ->
+                sequenceOf(boundary, boundary.mirroredFor(fix.bearing))
+            }.filterNotNull().sortedByDescending { it.recordedAt }.firstOrNull { b ->
                 accepted.road.id in b.viaIds+listOf(b.fromId,b.toId) && accepted.confidence>=.7 &&
                 (lastMatch == null || lastMatch?.road?.id in b.viaIds+listOf(b.fromId,b.toId)) &&
                 fix.bearing?.let { Geo.difference(it,b.bearing)<40 } == true &&
@@ -151,6 +155,16 @@ class LimitDecisionEngine {
         }
     }
     private fun clearAssumption() { confirmed=null;assumedMatch=null;assumptionDistance=0.0;assumptionPoint=null }
+    private fun BoundaryCorrection.mirroredFor(heading: Double?): BoundaryCorrection? {
+        if(!sharedAcrossDirections || heading==null || Geo.difference(heading,bearing)<=100) return null
+        return copy(fromId=toId,toId=fromId,oldMph=newMph,newMph=oldMph,bearing=(bearing+180.0)%360.0)
+    }
+    private fun shareable(from: Road,to: Road): Boolean {
+        fun ordinary(road: Road) = road.tags["oneway"] !in setOf("yes","1","-1") &&
+            road.tags["highway"]?.endsWith("_link") != true
+        return ordinary(from) && ordinary(to) && from.name!=null && from.name==to.name &&
+            from.tags["highway"]==to.tags["highway"] && connectedRoads(from,to)
+    }
     private fun assume(fix: Fix,match: RoadMatch?,now: Long): LimitDecision? {
         val anchor=confirmed ?: return null
         val previous=assumedMatch ?: anchor.match
@@ -165,11 +179,14 @@ class LimitDecisionEngine {
             } == true && now-anchor.at in 0..15_000
         }
         val roadType=effective?.road?.tags?.get("highway")
+        // Preserve a truthful assumed limit during a brief source gap on the
+        // exact same mapped road; confirmation still requires stronger evidence.
+        val sameConfirmedWay=effective?.road?.id==anchor.match.road.id
         val specialTags=match?.road?.tags?.keys?.any { it.startsWith("maxspeed:") && it !in setOf("maxspeed:type") } == true
         val distance=assumptionDistance+Geo.distance(assumptionPoint ?: anchor.fix.point,fix.point)
         val dropReason=when {
-            effective==null || effective.confidence<.7 -> "Assumption ended: road match lost confidence or previous geometry no longer fits"
-            fix.accuracyM>20 || fix.bearing==null || (effective.headingDifference ?: 90.0)>30 -> "Assumption ended: GPS or heading uncertain"
+            effective==null || effective.confidence < if(sameConfirmedWay) .35 else .7 -> "Assumption ended: road match lost confidence or previous geometry no longer fits"
+            fix.accuracyM > if(sameConfirmedWay) 35 else 20 || fix.bearing==null || (effective.headingDifference ?: 90.0) > if(sameConfirmedWay) 55 else 30 -> "Assumption ended: GPS or heading uncertain"
             Geo.difference(fix.bearing,anchor.fix.bearing!!)>40 -> "Assumption ended: travel direction changed"
             now-anchor.at !in 0..90_000 -> "Assumption expired after 90 seconds"
             distance>750 -> "Assumption expired after 750 metres"
@@ -202,7 +219,8 @@ class LimitDecisionEngine {
             currentRoadId != t.to.road.id || (currentMatch?.confidence ?: 0.0)<.6 || Geo.projection(fix.point,t.to.road.points).first > 35 ||
             !passedBoundary(fix,t.fix.point,t.fix.bearing!!)) return null
         val result = BoundaryCorrection(t.from.road.id,t.to.road.id,t.old,t.new,t.fix.point,fix.point,
-            t.fix.bearing!!,t.fix.accuracyM,fix.accuracyM,t.to.confidence,t.to.distanceM,System.currentTimeMillis())
+            t.fix.bearing!!,t.fix.accuracyM,fix.accuracyM,t.to.confidence,t.to.distanceM,System.currentTimeMillis(),
+            sharedAcrossDirections=shareable(t.from.road,t.to.road))
         // Activation is explicit only after the caller has persisted successfully.
         return result
     }
@@ -226,7 +244,8 @@ class LimitDecisionEngine {
                 Geo.distance(o.stillPoint,fix.point)>kotlin.math.max(8.0,o.accuracy+fix.accuracyM)) {
                 val b=BoundaryCorrection(o.from.id,match.road.id,o.oldMph,selected,o.predicted,fix.point,
                     o.bearing,o.predictedAccuracy,fix.accuracyM,match.confidence,match.distanceM,wallNow,
-                    viaIds=if(match.road.id!=o.to.id) listOf(o.to.id) else emptyList(),stillPoint=o.stillPoint)
+                    viaIds=if(match.road.id!=o.to.id) listOf(o.to.id) else emptyList(),stillPoint=o.stillPoint,
+                    sharedAcrossDirections=match.road.id==o.to.id && shareable(o.from,o.to))
                 return LimitSelectionPlan(boundary=b,consumed=o,kind="boundary correction",message="$selected starts here")
             }
             // Ambiguous second tap is not permission to overwrite the upcoming road.
@@ -263,7 +282,8 @@ class LimitDecisionEngine {
                 listOf(t.to.road.points.first(),t.to.road.points.last()).any { Geo.distance(p,it)<=20 }
             }) return null
         return BoundaryCorrection(t.from.road.id,t.to.road.id,t.old,t.new,t.fix.point,fix.point,
-            t.fix.bearing!!,t.fix.accuracyM,fix.accuracyM,currentMatch!!.confidence,currentMatch!!.distanceM,System.currentTimeMillis())
+            t.fix.bearing!!,t.fix.accuracyM,fix.accuracyM,currentMatch!!.confidence,currentMatch!!.distanceM,System.currentTimeMillis(),
+            sharedAcrossDirections=shareable(t.from.road,t.to.road))
     }
     fun feedbackSaved() { cancelFeedback();clearAssumption(); transition = null; stabilizer.reset(); lastMatch = null; lastMph = null }
     fun cancelFeedback() { pending=null; pendingFeedback=false; transition=null;candidateTransition=null; stabilizer.reset() }

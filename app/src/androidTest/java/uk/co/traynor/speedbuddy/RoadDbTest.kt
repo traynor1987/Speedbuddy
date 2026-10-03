@@ -61,7 +61,8 @@ class RoadDbTest {
     }
     @Test fun ownerOverrideAndBoundaryPersistWithoutModifyingSource() {
         context.deleteDatabase("road-test.db")
-        val boundary = BoundaryCorrection("way/1","way/2",30,20,point,Geo.ahead(point,0.0,150.0),0.0,5.0,6.0,.9,2.0,1000)
+        val boundary = BoundaryCorrection("way/1","way/2",30,20,point,Geo.ahead(point,0.0,150.0),0.0,5.0,6.0,.9,2.0,1000,
+            sharedAcrossDirections=true)
         RoadDb(context,"road-test.db").use {
             it.replace(RoadTileData(tile,1000,listOf(road),emptyList()))
             it.setOverride(road.id,0.0,40); it.saveBoundary(boundary)

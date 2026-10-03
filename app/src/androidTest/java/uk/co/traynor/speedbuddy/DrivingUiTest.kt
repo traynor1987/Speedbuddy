@@ -56,7 +56,7 @@ class DrivingUiTest {
         compose.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{},
             onFeedback={action,mph,id->correction=Triple(action,mph,id)}) } }
         compose.onNodeWithText("Map").assertIsDisplayed()
-        compose.onNodeWithText("!").assertIsDisplayed()
+        compose.onNodeWithText("⚠").assertIsDisplayed()
         compose.onNodeWithText("Assumed • not confirmed").assertIsDisplayed()
         compose.onNodeWithText("Saved roads available").assertIsDisplayed()
         compose.onNodeWithText("Correction saved").assertIsDisplayed()
@@ -68,6 +68,17 @@ class DrivingUiTest {
         compose.onNodeWithContentDescription("Correct road speed limit").performClick()
         compose.onNodeWithContentDescription("40 mph").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(Triple("SET_LIMIT",40,"way/ui-boundary"),correction) }
+    }
+    @Test fun unknownWithoutCurrentRoadStillOpensTheSamePicker() {
+        val elapsed=android.os.SystemClock.elapsedRealtime()
+        val state=DriveState(active=true,fix=Fix(GeoPoint(53.5,-2.8),8.0,0.0,null,0.0,elapsed))
+        var correction: Triple<String,Int?,String?>?=null
+        compose.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{},
+            onFeedback={action,mph,id->correction=Triple(action,mph,id)}) } }
+        compose.onNodeWithContentDescription("Set this road's speed limit").performClick()
+        compose.onNodeWithText("Choose the real limit").assertIsDisplayed()
+        compose.onNodeWithContentDescription("30 mph").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(Triple("SET_LIMIT",30,null),correction) }
     }
     @Test fun mobileWarningShowsMinimalActionsAndKeepsMainSignCentred() {
         var reported=false;var feedback: Boolean?=null

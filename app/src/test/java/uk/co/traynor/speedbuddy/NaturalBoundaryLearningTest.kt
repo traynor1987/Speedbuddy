@@ -37,6 +37,14 @@ class NaturalBoundaryLearningTest {
         assertEquals(60,before.mph);assertEquals(40,before.upcoming?.mph);assertTrue(before.boundaryApplied)
         assertEquals(40,replay.decide(fix(320.0,2000),match(next),40,null,listOf(b),2000).mph)
         val reverse=LimitDecisionEngine().decide(fix(260.0,1000,180.0),match(next),40,null,listOf(b),1000)
+        assertEquals(40,reverse.mph);assertTrue(reverse.boundaryApplied)
+        assertEquals(60,reverse.upcoming?.mph)
+    }
+    @Test fun linkedOrOneWayBoundaryIsNotMirrored() {
+        val link=Road("link","Main",next.points,mapOf("highway" to "primary_link","maxspeed" to "40 mph","oneway" to "yes"))
+        val b=BoundaryCorrection(old.id,link.id,60,40,Geo.ahead(p,0.0,210.0),Geo.ahead(p,0.0,300.0),
+            0.0,5.0,5.0,.95,0.0,12_000)
+        val reverse=LimitDecisionEngine().decide(fix(260.0,1000,180.0),match(link),40,null,listOf(b),1000)
         assertEquals(40,reverse.mph);assertFalse(reverse.boundaryApplied)
     }
     @Test fun falseIntermediateIsOnlyBypassedInsideObservedDirectedBoundaryScope() {

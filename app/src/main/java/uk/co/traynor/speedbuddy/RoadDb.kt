@@ -288,10 +288,11 @@ internal object RoadJson {
     fun boundary(b: BoundaryCorrection)=JSONObject().put("from",b.fromId).put("to",b.toId).put("old",b.oldMph).put("new",b.newMph).put("predicted",point(b.predicted)).put("observed",point(b.observed))
         .put("bearing",b.bearing).put("pa",b.predictedAccuracy).put("oa",b.observedAccuracy).put("confidence",b.confidence).put("distance",b.matchDistance).put("at",b.recordedAt)
         .put("via",JSONArray(b.viaIds)).put("still",b.stillPoint?.let(::point) ?: JSONObject.NULL)
+        .put("shared",b.sharedAcrossDirections)
     fun decodeBoundary(j: JSONObject)=BoundaryCorrection(j.getString("from"),j.getString("to"),j.getInt("old"),j.getInt("new"),point(j.getJSONArray("predicted")),point(j.getJSONArray("observed")),
         j.getDouble("bearing"),j.getDouble("pa"),j.getDouble("oa"),j.getDouble("confidence"),j.getDouble("distance"),j.getLong("at"),
         j.optJSONArray("via")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList(),
-        if(j.isNull("still")) null else point(j.getJSONArray("still")))
+        if(j.isNull("still")) null else point(j.getJSONArray("still")),j.optBoolean("shared",false))
     fun observation(o: BoundaryObservation)=JSONObject().put("from",encode(o.from)).put("to",encode(o.to))
         .put("old",o.oldMph).put("new",o.newMph).put("predicted",point(o.predicted)).put("still",point(o.stillPoint))
         .put("bearing",o.bearing).put("pa",o.predictedAccuracy).put("accuracy",o.accuracy).put("at",o.recordedAt)

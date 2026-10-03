@@ -447,9 +447,9 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.fillMaxWidth().height(mainSize), contentAlignment = Alignment.Center) {
                     Box(Modifier.size(mainSize).testTag("current-road-limit")
                         .semantics { contentDescription="Correct road speed limit" }
-                        .clickable(enabled=state.active && state.road!=null) { pickerFor=state }) {
+                        .clickable(enabled=state.active && state.fix!=null) { pickerFor=state }) {
                         LimitSign(state.limitMph, national, Modifier.fillMaxSize().clearAndSetSemantics {})
-                        if(state.limitDecision?.assumed==true) Text("!",color=Warning,fontSize=40.sp,fontWeight=FontWeight.Black,
+                        if(state.limitDecision?.assumed==true) Text("⚠",color=Warning,fontSize=32.sp,fontWeight=FontWeight.Black,
                             modifier=Modifier.align(Alignment.TopEnd).offset(x=14.dp))
                     }
                     state.turns.firstOrNull { it.direction == TurnDirection.LEFT }?.let {
@@ -460,7 +460,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 if (state.limitMph == null) Surface(
-                    onClick = { if(state.active && state.road!=null) pickerFor=state else onUnknownLimit() },
+                    onClick = { if(state.active && state.fix!=null) pickerFor=state else onUnknownLimit() },
                     modifier = Modifier.align(Alignment.BottomCenter).size(48.dp)
                         .semantics { contentDescription = "Set this road's speed limit" },
                     shape = CircleShape, color = Accent, contentColor = Background,
@@ -474,7 +474,7 @@ class MainActivity : ComponentActivity() {
         state.upcoming?.let { next ->
             Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if(next.uncertain) "UNCERTAIN" else "AHEAD", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("UPCOMING", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 LimitSign(next.mph, next.national, Modifier.size(42.dp))
                 Text("${(next.distanceM * 1.093613).roundToInt()} yd", color = Muted, fontSize = 12.sp)
             }
@@ -519,7 +519,7 @@ class MainActivity : ComponentActivity() {
                         CameraType.AVERAGE -> "AVERAGE-SPEED CAMERA"
                         CameraType.MOBILE -> "MOBILE CAMERA REPORTED"
                     },
-                        color = if (alert == null) Muted else Warning, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        color = if (alert == null) Muted else Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     Spacer(Modifier.height(4.dp))
                     alert?.camera?.junction?.let { group ->
                         Text("${group.name} · ${group.ways}-way junction", color=Ink,

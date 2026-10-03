@@ -62,7 +62,7 @@ internal object LimitDiagnostics {
         val decision=state.limitDecision
         return JSONObject().put("kind",kind).put("at",System.currentTimeMillis())
             .put("displayed",state.limitMph ?: JSONObject.NULL)
-            .put("state",when { decision?.assumed==true -> "assumed";state.limitMph==null -> "unknown";else -> "confirmed" })
+            .put("state",when { decision?.assumed==true -> "assumed";decision?.ownerApplied==true -> "owner";state.limitMph==null -> "unknown";else -> "confirmed" })
             .put("selected",selected ?: JSONObject.NULL).put("location",fix?.point?.let(RoadJson::point) ?: JSONObject.NULL)
             .put("accuracy",fix?.accuracyM ?: JSONObject.NULL).put("heading",fix?.bearing ?: JSONObject.NULL)
             .put("elapsed",fix?.elapsedMs ?: JSONObject.NULL).put("road",state.road?.road?.id ?: JSONObject.NULL)

@@ -11,7 +11,7 @@ class PhysicalRoadRegressionTest {
             (mph?.let { mapOf("maxspeed" to "$it mph") } ?: emptyMap()))
     private val old=road("old",0.0,200.0,60)
     private val next=road("next",200.0,1500.0,40)
-    private fun fix(m: Double,t: Long)=Fix(Geo.ahead(p,0.0,m),5.0,20.0,1.0,0.0,t)
+    private fun fix(m: Double,t: Long,accuracy: Double=5.0)=Fix(Geo.ahead(p,0.0,m),accuracy,20.0,1.0,0.0,t)
     private fun drive(e: LimitDecisionEngine, matcher: RoadMatcher, m: Double,t: Long,roads: List<Road>): LimitDecision {
         val result=DrivingLimitPipeline(e,matcher).evaluate(fix(m,t),roads,emptyList(),emptyMap(),emptyList(),emptyList(),t,10_000+t)
         val state=result.applyTo(DriveState())
@@ -25,6 +25,18 @@ class PhysicalRoadRegressionTest {
         assertEquals(60,gap.mph);assertTrue(gap.assumed)
         val restored=drive(e,matcher,120.0,3000,listOf(old))
         assertEquals(60,restored.mph);assertFalse(restored.assumed)
+    }
+    @Test fun compatibleSameRoadSourceGapAtNormalGpsAccuracyStaysAssumed() {
+        val engine=LimitDecisionEngine();val matcher=RoadMatcher()
+        val confirmed=road("same",0.0,1_000.0,30)
+        val sourceGap=confirmed.copy(tags=mapOf("highway" to "primary"))
+        assertEquals(30,drive(engine,matcher,100.0,1_000,listOf(confirmed)).mph)
+        val gap=DrivingLimitPipeline(engine,matcher).evaluate(fix(120.0,2_000,24.0),listOf(sourceGap),emptyList(),emptyMap(),emptyList(),emptyList(),2_000,12_000).applyTo(DriveState())
+        assertEquals(30,gap.limitMph)
+        assertTrue(gap.limitDecision!!.assumed)
+        assertFalse(gap.status.contains("unknown",ignoreCase=true))
+        val restored=drive(engine,matcher,140.0,3_000,listOf(confirmed))
+        assertEquals(30,restored.mph);assertFalse(restored.assumed)
     }
     @Test fun transitionAfterGapRetainsCurrentAndPreviewsFortyUntilConfirmation() {
         val e=LimitDecisionEngine();val matcher=RoadMatcher()
