@@ -186,7 +186,7 @@ class LimitDecisionEngine {
         val distance=assumptionDistance+Geo.distance(assumptionPoint ?: anchor.fix.point,fix.point)
         val dropReason=when {
             effective==null || effective.confidence < if(sameConfirmedWay) .35 else .7 -> "Assumption ended: road match lost confidence or previous geometry no longer fits"
-            fix.accuracyM > if(sameConfirmedWay) 35 else 20 || fix.bearing==null || (effective.headingDifference ?: 90.0) > if(sameConfirmedWay) 55 else 30 -> "Assumption ended: GPS or heading uncertain"
+            fix.accuracyM > (if(sameConfirmedWay) 35 else 20) || fix.bearing==null || (effective.headingDifference ?: 90.0) > (if(sameConfirmedWay) 55 else 30) -> "Assumption ended: GPS or heading uncertain"
             Geo.difference(fix.bearing,anchor.fix.bearing!!)>40 -> "Assumption ended: travel direction changed"
             now-anchor.at !in 0..90_000 -> "Assumption expired after 90 seconds"
             distance>750 -> "Assumption expired after 750 metres"
