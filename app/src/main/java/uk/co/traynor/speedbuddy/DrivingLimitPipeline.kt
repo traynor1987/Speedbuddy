@@ -9,6 +9,13 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
     private val upcomingDetector=UpcomingLimitDetector()
     private data class Preview(val upcoming: UpcomingLimit,val current: Int?,val roadId: String?,val fix: Fix,val at: Long)
     private var preview: Preview? = null
+    /** Called only after the owner's selection was durably saved. */
+    fun acceptSavedSelection(plan: LimitSelectionPlan?) {
+        if(plan?.observation==null) engine.reset()
+        // This tap is direct current-position evidence for this pass. Persisted
+        // replay still requires crossing the GPS uncertainty margin on future passes.
+        plan?.boundary?.let(engine::confirmSavedBoundary)
+    }
     fun evaluate(fix: Fix,roads: List<Road>,overrides: List<RoadDb.Override>,corrections: Map<String,RoadLimitCorrection>,
         boundaries: List<BoundaryCorrection>,observations: List<BoundaryObservation>,now: Long,wallNow: Long): DriveLimitResult {
         // Reject before either matcher or engine can mutate state after delayed IO.

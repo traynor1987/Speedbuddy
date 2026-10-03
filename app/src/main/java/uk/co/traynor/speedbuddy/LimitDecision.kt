@@ -18,6 +18,8 @@ private data class ConfirmedLimit(val match: RoadMatch,val mph: Int,val fix: Fix
 class LimitDecisionEngine {
     private val stabilizer = RoadLimitStabilizer()
     private val crossed = mutableSetOf<String>()
+    private fun key(b: BoundaryCorrection)="${b.fromId}|${b.toId}|${b.bearing}|${b.recordedAt}"
+    internal fun confirmSavedBoundary(b: BoundaryCorrection) { crossed.add(key(b)) }
     private var lastMatch: RoadMatch? = null
     private var lastMph: Int? = null
     private var transition: Transition? = null
@@ -70,7 +72,6 @@ class LimitDecisionEngine {
             return LimitDecision(it.old,UpcomingLimit(it.new,0.0,false,roadId=it.to.road.id),reason="Owner reported early; waiting for Changed now")
         }
         if (accepted != null) {
-            fun key(b: BoundaryCorrection)="${b.fromId}|${b.toId}|${b.bearing}|${b.recordedAt}"
             boundaries.filter { it.fromId==accepted.road.id || it.toId==accepted.road.id && fix.bearing?.let { heading -> Geo.difference(heading,it.bearing)>100 } == true }
                 .forEach { crossed.remove(key(it)) }
             val boundary = boundaries.sortedByDescending { it.recordedAt }.firstOrNull { b ->

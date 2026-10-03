@@ -106,4 +106,19 @@ class PhysicalRoadRegressionTest {
         val genuine=DrivingLimitPipeline().evaluate(fix(230.0,1000),listOf(old,forty,thirty),emptyList(),emptyMap(),emptyList(),emptyList(),1000,20_000)
         assertEquals(40,genuine.decision.mph)
     }
+    @Test fun ownerSecondTapPromotesCurrentImmediatelyOnThisPass() {
+        val pipeline=DrivingLimitPipeline()
+        for((m,t) in listOf(180.0 to 1000L,225.0 to 2000L,240.0 to 3000L,255.0 to 4000L))
+            pipeline.evaluate(fix(m,t),listOf(old,next),emptyList(),emptyMap(),emptyList(),emptyList(),t,10_000+t)
+        val match=RoadMatch(next,0.0,0.0,.95)
+        val first=pipeline.engine.planSelection(fix(260.0,4500),match,40,60,next.id,4500,14_500,emptyList())!!
+        pipeline.acceptSavedSelection(first)
+        pipeline.evaluate(fix(280.0,5000),listOf(old,next),emptyList(),emptyMap(),emptyList(),listOf(first.observation!!),5000,15_000)
+        val second=pipeline.engine.planSelection(fix(300.0,6000),match,40,40,next.id,6000,16_000,listOf(first.observation!!))!!
+        pipeline.acceptSavedSelection(second)
+        val live=pipeline.evaluate(fix(300.0,6000),listOf(old,next),emptyList(),emptyMap(),listOf(second.boundary!!),emptyList(),6000,16_000).applyTo(DriveState())
+        assertEquals(40,live.limitMph);assertFalse(live.limitDecision!!.assumed)
+        val future=DrivingLimitPipeline().evaluate(fix(285.0,1000),listOf(old,next),emptyList(),emptyMap(),listOf(second.boundary!!),emptyList(),1000,20_000)
+        assertEquals(60,future.decision.mph);assertEquals(40,future.upcoming?.mph)
+    }
 }

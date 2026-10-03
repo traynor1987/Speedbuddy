@@ -48,6 +48,9 @@ class PhysicalRoadPipelineTest {
             val second=restarted.engine.planSelection(fix(300.0,6000),match,40,40,next.id,6000,16_000,observations)!!
             db.saveSelection(second,"{\"kind\":\"boundary correction\"}")
             assertTrue(db.observations().isEmpty());assertTrue(db.overrides().isEmpty())
+            restarted.acceptSavedSelection(second)
+            val live=restarted.evaluate(fix(300.0,6000),listOf(old,next),db.overrides(),emptyMap(),db.boundaries(),db.observations(),6000,16_000).applyTo(DriveState())
+            assertEquals(40,live.limitMph);assertFalse(live.limitDecision!!.assumed)
             val text=OwnerBackupCodec.export(emptyList(),context.getSharedPreferences("physical-pipeline",0),boundaries=db.boundaries(),boundaryObservations=observations)
             val restored=OwnerBackupCodec.parse(text)
             assertEquals(db.boundaries(),restored.boundaries);assertEquals(observations,restored.boundaryObservations)

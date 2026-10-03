@@ -85,6 +85,8 @@ class CombinedRoadCacheTest {
             db.replace(RoadTileData(tile,1000,listOf(road),listOf(camera)))
             db.saveOverride(RoadDb.Override(road.id,0.0,20))
             db.writableDatabase.execSQL("DROP TABLE average_sections")
+            db.writableDatabase.execSQL("DROP TABLE boundary_observations")
+            db.writableDatabase.execSQL("DROP TABLE limit_diagnostics")
             db.writableDatabase.version=2
         }
         RoadDb(context,name).use { db ->
@@ -93,6 +95,40 @@ class CombinedRoadCacheTest {
             assertEquals(20,RoadDb.selectOverride(db.overrides(),road.id,0.0))
             db.replace(RoadTileData(tile,2000,listOf(road),listOf(camera),averageSections=listOf(section)))
             assertEquals(section,db.nearby(p).averageSections.single())
+        }
+        context.deleteDatabase(name)
+    }
+    @Test fun rejectedCandidateVersionThreeUpgradesWithCacheAndOwnerBoundaryIntact() {
+        val name="combined-v3.db";context.deleteDatabase(name)
+        val start=Geo.ahead(p,0.0,300.0)
+        val next=road.copy(id="way/upcoming",points=listOf(start,Geo.ahead(p,0.0,600.0)),tags=mapOf("maxspeed" to "40 mph"))
+        val boundary=BoundaryCorrection(road.id,next.id,30,40,start,Geo.ahead(p,0.0,350.0),0.0,5.0,5.0,.95,0.0,1000)
+        val observation=BoundaryObservation(road,next,30,40,start,Geo.ahead(p,0.0,330.0),0.0,5.0,5.0,2000)
+        RoadDb(context,name).use { db ->
+            db.replace(RoadTileData(tile,1000,listOf(road,next),listOf(camera),averageSections=listOf(section)))
+            db.saveOverride(RoadDb.Override(road.id,0.0,20));db.saveBoundary(boundary)
+            db.writableDatabase.execSQL("UPDATE boundaries SET payload=?",arrayOf(RoadJson.boundary(boundary).apply {
+                remove("via");remove("still")
+            }.toString()))
+            // Version 3 predates both new learning tables; reproduce that actual schema.
+            db.writableDatabase.execSQL("DROP TABLE boundary_observations")
+            db.writableDatabase.execSQL("DROP TABLE limit_diagnostics")
+            db.writableDatabase.version=3
+        }
+        RoadDb(context,name).use { db ->
+            assertEquals(4,db.readableDatabase.version)
+            assertEquals(setOf(road,next),db.nearby(p).roads.map { it.road }.toSet())
+            assertEquals(section,db.nearby(p).averageSections.single())
+            assertEquals(camera,db.nearby(p).cameras.single())
+            assertEquals(20,RoadDb.selectOverride(db.overrides(),road.id,0.0))
+            assertEquals(boundary,db.boundaries().single())
+            assertTrue(db.observations().isEmpty());assertTrue(db.diagnostics().isEmpty())
+            db.saveSelection(LimitSelectionPlan(observation=observation,kind="boundary observation",message="30 confirmed here"),
+                "{\"kind\":\"version 3 upgrade\"}")
+        }
+        RoadDb(context,name).use { db ->
+            assertEquals(boundary,db.boundaries().single());assertEquals(observation,db.observations().single())
+            assertEquals(1,db.diagnostics().size)
         }
         context.deleteDatabase(name)
     }

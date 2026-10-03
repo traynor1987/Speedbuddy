@@ -367,7 +367,7 @@ class DrivingService : Service(), LocationListener {
                         }
                         boundaries=withContext(Dispatchers.IO) { roads.boundaries() };overrides=withContext(Dispatchers.IO) { roads.overrides() }
                         observations=withContext(Dispatchers.IO) { roads.observations() }
-                        if(plan?.observation==null) limitEngine.reset()
+                        limitPipeline.acceptSavedSelection(plan)
                         // Never overwrite a newer road fix with the saved picker target.
                         applyLiveCorrections()
                         feedback(plan?.message ?: "Corrections reset")
