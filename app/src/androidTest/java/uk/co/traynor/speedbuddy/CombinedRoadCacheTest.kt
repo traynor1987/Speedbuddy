@@ -88,7 +88,7 @@ class CombinedRoadCacheTest {
             db.writableDatabase.version=2
         }
         RoadDb(context,name).use { db ->
-            assertEquals(3,db.readableDatabase.version)
+            assertEquals(4,db.readableDatabase.version)
             assertEquals(road,db.nearby(p).roads.single().road)
             assertEquals(20,RoadDb.selectOverride(db.overrides(),road.id,0.0))
             db.replace(RoadTileData(tile,2000,listOf(road),listOf(camera),averageSections=listOf(section)))

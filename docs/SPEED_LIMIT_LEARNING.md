@@ -12,7 +12,7 @@ Tap the main speed-limit sign, then select 20, 30, 40, 50, 60, 70, National Spee
 
 Numeric corrections, Unknown and National are explicit owner selections, stored independently of OSM tiles. Owner feedback takes priority. Unknown deliberately suppresses a numeric source; it is different from resetting the correction. National retains the national sign and uses a numeric value only when existing carriageway tags or motorway classification support one. Lane count or one-way tagging alone does not establish a dual carriageway.
 
-For an early change, the same picker offers **This limit starts here**. This records the live location for a credible old/new directed road transition. The optional **Changed too soon** action holds the old value until the owner reaches the actual sign and uses the same starts-here action. There are no permanent separate feedback buttons. Boundary replay keeps old CURRENT and new UPCOMING until crossing within GPS uncertainty; opposite travel does not inherit that boundary.
+For an early change, choose the old limit in the ordinary picker: this records **still this limit here** as local boundary evidence. Later choose the new limit at the actual signs: this pairs the observations and records **this limit starts here**. No separate boundary buttons are required. Pairing is restricted to fresh, directed, connected evidence within 120 seconds/600 metres. Boundary replay keeps old CURRENT and new UPCOMING until crossing beyond combined GPS uncertainty; opposite travel does not inherit it. Local false intermediate roads are recorded explicitly without any global short-zone rule.
 
 Reset road or all local learning later in parked Diagnostics. No map coordinates or keyboard are required for quick feedback.
 
@@ -28,9 +28,9 @@ Different numeric limits require repeated strong, aligned fixes, at least three 
 
 ## Persistence and backup
 
-Road DB schema 2 adds correction evidence without deleting schema-1 overrides. Records retain road identity, travel heading, original source mph (including missing), explicit selection, location, timestamp and GPS accuracy. Tile replacement and cleanup only mutate public data. Boundaries retain their existing evidence format.
+Road DB schema 4 retains schema-2 correction evidence and adds boundary observations/diagnostic receipts; schema 2 added correction evidence without deleting schema-1 overrides. Records retain road identity, travel heading, original source mph (including missing), explicit selection, location, timestamp and GPS accuracy. Tile replacement and cleanup only mutate public data. Boundaries retain their existing evidence format.
 
-Portable backup version 10 includes full correction evidence, Unknown/National selections and existing boundaries/legacy archives. Versions 1–9 remain readable; v9 overrides retain their numeric meanings. Restore keeps the complete source before writes, and read-back still verifies exports. The earlier preview's archive-only compatibility limits remain as documented in `OWNER_ACCEPTANCE.md`.
+Portable backup version 12 includes observations and local boundary scopes alongside full correction evidence, Unknown/National selections and existing boundaries/legacy archives. Versions 1–11 remain readable; v9 overrides retain their numeric meanings. Restore keeps the complete source before writes, and read-back still verifies exports. The earlier preview's archive-only compatibility limits remain as documented in `OWNER_ACCEPTANCE.md`.
 
 ## Verification and physical gate
 
@@ -38,4 +38,4 @@ Regression tests exercise 30/60 inheritance, expiry, reliable replacement, owner
 
 CI must run both exact-source push and PR validation, including API-35 instrumentation, builds, lint and actual disposable signing verification. That disposable test key is never an owner identity or acceptance artifact.
 
-The permanent owner signer is now established, recoverable and publicly pinned in `owner-signing-certificate.json`; CI signing and setup reject a conflicting certificate. The current candidate can be signed locally from the final exact remote source after validation CI succeeds, using the recovered permanent key and existing APK verifier. CI signing secrets still need setup for automatic future artifacts; no secrets are placed in the repository. A signed artifact must carry the new final source SHA, version 0.2.1/code 10, verified package, nondebuggable release flag, APK digest and pinned permanent certificate. Do not uninstall or install anything until the external old owner backup is verified and a permanently signed candidate exists. No owner physical observations have been recorded for these new changes.
+The permanent owner signer is established and configured in CI, and publicly pinned in `owner-signing-certificate.json`. Do not recreate it. The 0.2.2/code 11 owner road test failed; the 0.2.3/code 12 replacement needs the final exact-source push and PR validation and a verified permanent certificate. See [physical correction audit](PHYSICAL_ROAD_CORRECTIONS.md) and [short retest](PHYSICAL_RETEST.md). Keep PR #2 open, draft and unmerged until owner physical acceptance.

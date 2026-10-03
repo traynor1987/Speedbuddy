@@ -9,7 +9,7 @@ import org.json.JSONObject
 import kotlin.math.cos
 
 /** Public tile storage is independent of owner cameras, settings and local corrections. */
-class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,3) {
+class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,4) {
     override fun onConfigure(db: SQLiteDatabase) { db.execSQL("PRAGMA auto_vacuum=INCREMENTAL") }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE tiles(id TEXT PRIMARY KEY,fetched INTEGER NOT NULL,bytes INTEGER NOT NULL,complete INTEGER NOT NULL)")
@@ -23,11 +23,17 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         db.execSQL("CREATE TABLE overrides(road TEXT NOT NULL,bearing REAL NOT NULL,mph INTEGER NOT NULL,payload TEXT,PRIMARY KEY(road,bearing))")
         createSections(db)
         db.execSQL("CREATE TABLE boundaries(key TEXT PRIMARY KEY,payload TEXT NOT NULL)")
+        createLearning(db)
+    }
+    private fun createLearning(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE boundary_observations(key TEXT PRIMARY KEY,payload TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE limit_diagnostics(id INTEGER PRIMARY KEY AUTOINCREMENT,payload TEXT NOT NULL)")
     }
     private fun createSections(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE average_sections(tile TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(tile,id))")
     }
     override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
+        if(oldVersion<4) createLearning(db)
         if(oldVersion<3) createSections(db)
         if(oldVersion<2) db.execSQL("ALTER TABLE overrides ADD COLUMN payload TEXT")
     }
@@ -175,6 +181,50 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
     fun boundaries(): List<BoundaryCorrection> = readableDatabase.rawQuery("SELECT payload FROM boundaries",null).use { c ->
         buildList { while(c.moveToNext()) add(RoadJson.decodeBoundary(JSONObject(c.getString(0)))) }
     }
+    fun observations(): List<BoundaryObservation> = readableDatabase.rawQuery("SELECT payload FROM boundary_observations",null).use { c ->
+        buildList { while(c.moveToNext()) add(RoadJson.decodeObservation(JSONObject(c.getString(0)))) }
+    }
+    private fun observationKey(o: BoundaryObservation)="${o.from.id}|${o.to.id}|${o.bearing}"
+    private fun saveObservation(o: BoundaryObservation) {
+        o.validate()
+        // Remove expired pending evidence; completed boundaries are never pruned here.
+        observations().filter { o.recordedAt-it.recordedAt>120_000 }.forEach {
+            writableDatabase.delete("boundary_observations","key=?",arrayOf(observationKey(it)))
+        }
+        observations().filter { it.from.id==o.from.id && it.to.id==o.to.id && Geo.difference(it.bearing,o.bearing)<45 }.forEach {
+            writableDatabase.delete("boundary_observations","key=?",arrayOf(observationKey(it)))
+        }
+        writableDatabase.insertOrThrow("boundary_observations",null,ContentValues().apply {
+            put("key",observationKey(o));put("payload",RoadJson.observation(o).toString())
+        })
+    }
+    /** Persist evidence and classification together before activating any live selection. */
+    fun saveSelection(plan: LimitSelectionPlan,diagnostic: String) {
+        val db=writableDatabase;db.beginTransaction()
+        try {
+            plan.override?.let(::saveOverride);plan.observation?.let(::saveObservation)
+            val retired=plan.boundary?.let { b -> overrides().filter {
+                it.road in b.viaIds+b.toId && Geo.difference(it.bearing,b.bearing)<45 &&
+                    (it.point==null || Geo.distance(it.point,b.observed)<=600)
+            } } ?: emptyList()
+            plan.boundary?.let { b ->
+                // The owner's newer local boundary replaces the candidate's whole-segment tap.
+                retired.forEach { setOverride(it.road,it.bearing,null) };saveBoundary(b)
+            }
+            plan.consumed?.let { db.delete("boundary_observations","key=?",arrayOf(observationKey(it))) }
+            recordDiagnostic(JSONObject(diagnostic).put("retiredSegmentOverrides",JSONArray(retired.map(RoadJson::override))).toString())
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+    fun recordDiagnostic(payload: String) {
+        require(payload.length<=32_000);JSONObject(payload)
+        val db=writableDatabase
+        db.insertOrThrow("limit_diagnostics",null,ContentValues().apply { put("payload",payload) })
+        db.execSQL("DELETE FROM limit_diagnostics WHERE id NOT IN (SELECT id FROM limit_diagnostics ORDER BY id DESC LIMIT 500)")
+    }
+    fun diagnostics(): List<String> = readableDatabase.rawQuery("SELECT payload FROM limit_diagnostics ORDER BY id DESC",null).use { c ->
+        buildList { while(c.moveToNext()) add(c.getString(0)) }
+    }
     fun deleteOwnerCorrections(road: String) {
         val db=writableDatabase;db.beginTransaction()
         try {
@@ -182,21 +232,25 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
             boundaries().filter { it.fromId==road || it.toId==road }.forEach {
                 db.delete("boundaries","key=?",arrayOf(boundaryKey(it)))
             }
+            observations().filter { it.from.id==road || it.to.id==road }.forEach {
+                db.delete("boundary_observations","key=?",arrayOf(observationKey(it)))
+            }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         OwnerDataRevision.roads++
     }
     fun resetCorrections() {
         val db=writableDatabase;db.beginTransaction()
-        try { db.delete("boundaries",null,null);db.delete("overrides",null,null);db.setTransactionSuccessful() } finally { db.endTransaction() }
+        try { db.delete("boundary_observations",null,null);db.delete("boundaries",null,null);db.delete("overrides",null,null);db.setTransactionSuccessful() } finally { db.endTransaction() }
         OwnerDataRevision.roads++
     }
-    fun mergeOwnerCorrections(overrides: List<Override>, boundaries: List<BoundaryCorrection>) {
+    fun mergeOwnerCorrections(overrides: List<Override>, boundaries: List<BoundaryCorrection>,observations: List<BoundaryObservation> = emptyList()) {
         val db = writableDatabase
         db.beginTransaction()
         try {
             overrides.forEach(::saveOverride)
             boundaries.forEach(::saveBoundary)
+            observations.forEach(::saveObservation)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -233,8 +287,17 @@ internal object RoadJson {
     }
     fun boundary(b: BoundaryCorrection)=JSONObject().put("from",b.fromId).put("to",b.toId).put("old",b.oldMph).put("new",b.newMph).put("predicted",point(b.predicted)).put("observed",point(b.observed))
         .put("bearing",b.bearing).put("pa",b.predictedAccuracy).put("oa",b.observedAccuracy).put("confidence",b.confidence).put("distance",b.matchDistance).put("at",b.recordedAt)
+        .put("via",JSONArray(b.viaIds)).put("still",b.stillPoint?.let(::point) ?: JSONObject.NULL)
     fun decodeBoundary(j: JSONObject)=BoundaryCorrection(j.getString("from"),j.getString("to"),j.getInt("old"),j.getInt("new"),point(j.getJSONArray("predicted")),point(j.getJSONArray("observed")),
-        j.getDouble("bearing"),j.getDouble("pa"),j.getDouble("oa"),j.getDouble("confidence"),j.getDouble("distance"),j.getLong("at"))
+        j.getDouble("bearing"),j.getDouble("pa"),j.getDouble("oa"),j.getDouble("confidence"),j.getDouble("distance"),j.getLong("at"),
+        j.optJSONArray("via")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList(),
+        if(j.isNull("still")) null else point(j.getJSONArray("still")))
+    fun observation(o: BoundaryObservation)=JSONObject().put("from",encode(o.from)).put("to",encode(o.to))
+        .put("old",o.oldMph).put("new",o.newMph).put("predicted",point(o.predicted)).put("still",point(o.stillPoint))
+        .put("bearing",o.bearing).put("pa",o.predictedAccuracy).put("accuracy",o.accuracy).put("at",o.recordedAt)
+    fun decodeObservation(j: JSONObject)=BoundaryObservation(decode(j.getJSONObject("from")),decode(j.getJSONObject("to")),
+        j.getInt("old"),j.getInt("new"),point(j.getJSONArray("predicted")),point(j.getJSONArray("still")),
+        j.getDouble("bearing"),j.getDouble("pa"),j.getDouble("accuracy"),j.getLong("at"))
 }
 
 /** Load and validate before entering the replacement transaction. Exceptions leave the active rows alone. */

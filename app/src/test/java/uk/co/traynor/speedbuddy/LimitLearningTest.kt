@@ -38,7 +38,11 @@ class LimitLearningTest {
     @Test fun reliableNewDataAndOwnerCorrectionReplaceAssumption() {
         val e = LimitDecisionEngine(); decide(e, old, 180.0, 1000)
         decide(e, next, 220.0, 2000)
-        assertEquals(40, decide(e, next.copy(tags = mapOf("maxspeed" to "40 mph")), 240.0, 3000).mph)
+        val tagged=next.copy(tags = mapOf("maxspeed" to "40 mph"))
+        val candidate=decide(e,tagged,240.0,3000)
+        assertEquals(60,candidate.mph);assertEquals(40,candidate.upcoming?.mph)
+        decide(e,tagged,255.0,4000)
+        assertEquals(40,decide(e,tagged,270.0,5000).mph)
         val owner = LimitDecisionEngine(); decide(owner, old, 180.0, 1000)
         decide(owner, next, 220.0, 2000)
         val result = decide(owner, next, 240.0, 3000, owner = 40)

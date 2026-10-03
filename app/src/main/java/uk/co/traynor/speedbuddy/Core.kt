@@ -178,7 +178,7 @@ class RoadLimitStabilizer {
     fun reset() { lastMatch = null; lastLimit = null; lastSeenMs = 0; candidateId = null; candidateCount = 0 }
 }
 
-data class UpcomingLimit(val mph: Int, val distanceM: Double, val national: Boolean, val uncertain: Boolean = false)
+data class UpcomingLimit(val mph: Int, val distanceM: Double, val national: Boolean, val uncertain: Boolean = false,val roadId: String? = null)
 enum class TurnDirection { LEFT, RIGHT }
 data class TurnLimit(val mph: Int, val distanceM: Double, val direction: TurnDirection,
     val national: Boolean)
@@ -259,7 +259,7 @@ class UpcomingLimitDetector {
                 }
                 val mph = SpeedLimits.mph(next.tags)
                 if (mph == null || mph == currentMph || Geo.difference(heading, nextHeading) > 35) null
-                else UpcomingLimit(mph, distance, next.tags["maxspeed:type"]?.startsWith("GB:nsl") == true)
+                else UpcomingLimit(mph, distance, next.tags["maxspeed:type"]?.startsWith("GB:nsl") == true,roadId=next.id)
             }.toList()
         return candidates.singleOrNull()
     }

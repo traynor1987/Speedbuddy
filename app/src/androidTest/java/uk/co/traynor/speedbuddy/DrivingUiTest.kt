@@ -61,11 +61,13 @@ class DrivingUiTest {
         compose.onNodeWithText("Saved roads available").assertIsDisplayed()
         compose.onNodeWithText("Correction saved").assertIsDisplayed()
         compose.onNodeWithContentDescription("Correct road speed limit").performClick()
-        compose.onNodeWithText("Changed too soon").performScrollTo().performClick()
-        compose.runOnIdle { assertEquals(Triple("TOO_EARLY",null,"way/ui-boundary"),correction) }
+        compose.onNodeWithText("Changed too soon").assertDoesNotExist()
+        compose.onNodeWithText("This limit starts here").assertDoesNotExist()
+        compose.onNodeWithContentDescription("60 mph").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(Triple("SET_LIMIT",60,"way/ui-boundary"),correction) }
         compose.onNodeWithContentDescription("Correct road speed limit").performClick()
-        compose.onNodeWithText("This limit starts here").performScrollTo().performClick()
-        compose.runOnIdle { assertEquals(Triple("STARTS_HERE",40,"way/ui-boundary"),correction) }
+        compose.onNodeWithContentDescription("40 mph").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(Triple("SET_LIMIT",40,"way/ui-boundary"),correction) }
     }
     @Test fun mobileWarningShowsMinimalActionsAndKeepsMainSignCentred() {
         var reported=false;var feedback: Boolean?=null

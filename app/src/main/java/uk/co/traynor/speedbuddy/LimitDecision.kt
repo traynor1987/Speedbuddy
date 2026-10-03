@@ -6,6 +6,7 @@ data class BoundaryCorrection(
     val predicted: GeoPoint,val observed: GeoPoint,val bearing: Double,
     val predictedAccuracy: Double,val observedAccuracy: Double,val confidence: Double,
     val matchDistance: Double,val recordedAt: Long,
+    val viaIds: List<String> = emptyList(),val stillPoint: GeoPoint? = null,
 )
 data class LimitDecision(val mph: Int?,val upcoming: UpcomingLimit? = null,val ownerApplied: Boolean = false,
     val boundaryApplied: Boolean = false,val reason: String,val assumed: Boolean = false,
@@ -32,16 +33,29 @@ class LimitDecisionEngine {
     private var assumptionPoint: GeoPoint? = null
     private var assumptionDropReason = "No recent confirmed limit"
     var pendingFeedback: Boolean = false; private set
-    fun decide(fix: Fix,match: RoadMatch?,source: Int?,owner: Int?,boundaries: List<BoundaryCorrection>,now: Long): LimitDecision {
+    fun decide(fix: Fix,match: RoadMatch?,source: Int?,owner: Int?,boundaries: List<BoundaryCorrection>,now: Long,
+        observations: List<BoundaryObservation> = emptyList(),wallNow: Long = System.currentTimeMillis()): LimitDecision {
         currentRoadId = match?.road?.id
         val accepted = match?.takeIf { it.confidence >= .35 && fix.accuracyM <= 35 }
         currentMatch=accepted;reportable=fix.accuracyM<=25 && (accepted?.confidence ?: 0.0)>=.6
         val raw = owner ?: source
+        observations.filter { it.applies(fix,accepted,wallNow) }.maxByOrNull { it.recordedAt }?.let { o ->
+            // A later source gap must inherit the owner's current limit, not the
+            // premature source value that was confirmed before this assertion.
+            rememberConfirmed(fix,accepted!!,o.oldMph,now)
+            return LimitDecision(o.oldMph,source?.takeIf { it!=o.oldMph }?.let { UpcomingLimit(it,0.0,false,roadId=accepted?.road?.id) }
+                ?: UpcomingLimit(o.newMph,0.0,false,roadId=o.to.id),ownerApplied=true,boundaryApplied=true,
+                reason="Owner confirmed still ${o.oldMph} here; waiting for forward boundary observation")
+        }
         if (owner != null && accepted != null) {
+            val candidate=currentTransition()?.takeIf { it.to.road.id==accepted.road.id && now-it.at in 0..120_000 }
+                ?: lastMatch?.takeIf { prior -> lastMph!=null && source!=null && lastMph!=source &&
+                    prior.road.id!=accepted.road.id && connectedRoads(prior.road,accepted.road) && fix.bearing!=null }
+                    ?.let { prior -> Transition(prior,accepted,lastMph!!,source!!,fix,now) }
             clearAssumption(); cancelFeedback(); stabilizer.reset()
             val ownerMph = if(owner == OWNER_NATIONAL) OwnerLimit.nationalMph(accepted.road) else owner.takeIf { it > 0 }
             if(ownerMph != null) stabilizer.resolve(fix,accepted,ownerMph,now)
-            lastMatch = accepted; lastMph = ownerMph; transition = null;candidateTransition=null
+            lastMatch = accepted; lastMph = ownerMph; transition = candidate;candidateTransition=null
             rememberConfirmed(fix,accepted,ownerMph,now)
             return LimitDecision(ownerMph,ownerApplied=true,reason="Owner road correction",
                 national=owner == OWNER_NATIONAL)
@@ -53,14 +67,15 @@ class LimitDecisionEngine {
         pending?.let {
             if (accepted==null || fix.accuracyM>25 || accepted.road.id !in listOf(it.from.road.id,it.to.road.id))
                 return LimitDecision(null,reason="Unavailable: insufficient GPS/road evidence while recording boundary")
-            return LimitDecision(it.old,UpcomingLimit(it.new,0.0,false),reason="Owner reported early; waiting for Changed now")
+            return LimitDecision(it.old,UpcomingLimit(it.new,0.0,false,roadId=it.to.road.id),reason="Owner reported early; waiting for Changed now")
         }
         if (accepted != null) {
             fun key(b: BoundaryCorrection)="${b.fromId}|${b.toId}|${b.bearing}|${b.recordedAt}"
             boundaries.filter { it.fromId==accepted.road.id || it.toId==accepted.road.id && fix.bearing?.let { heading -> Geo.difference(heading,it.bearing)>100 } == true }
                 .forEach { crossed.remove(key(it)) }
-            val boundary = boundaries.firstOrNull { b -> b.toId == accepted.road.id && accepted.confidence>=.7 &&
-                (lastMatch == null || lastMatch?.road?.id in listOf(b.fromId,b.toId)) &&
+            val boundary = boundaries.sortedByDescending { it.recordedAt }.firstOrNull { b ->
+                accepted.road.id in b.viaIds+listOf(b.fromId,b.toId) && accepted.confidence>=.7 &&
+                (lastMatch == null || lastMatch?.road?.id in b.viaIds+listOf(b.fromId,b.toId)) &&
                 fix.bearing?.let { Geo.difference(it,b.bearing)<40 } == true &&
                 Geo.distance(fix.point,b.observed)<2000 && fix.accuracyM <= 25 &&
                 Geo.projection(fix.point,accepted.road.points).first <= 35 }
@@ -69,13 +84,18 @@ class LimitDecisionEngine {
                 val boundaryFraction=Geo.projection(b.observed,accepted.road.points).third
                 val forward=geometryHeading?.let { h -> Geo.difference(fix.bearing!!,h)<90 } ?: true
                 val pastOnGeometry=if(forward) fraction>boundaryFraction else fraction<boundaryFraction
-                key(b) in crossed || passedBoundary(fix,b.observed,b.bearing) ||
-                    pastOnGeometry && Geo.distance(fix.point,b.observed)>kotlin.math.max(8.0,fix.accuracyM)
+                val forwardDistance=Geo.distance(b.observed,fix.point)*kotlin.math.cos(Math.toRadians(
+                    Geo.difference(b.bearing,Geo.bearing(b.observed,fix.point))))
+                val uncertainty=kotlin.math.max(8.0,fix.accuracyM+b.observedAccuracy)
+                accepted.road.id==b.toId && (key(b) in crossed ||
+                    passedBoundary(fix,b.observed,b.bearing) && forwardDistance>uncertainty ||
+                    pastOnGeometry && Geo.distance(fix.point,b.observed)>kotlin.math.max(8.0,fix.accuracyM+b.observedAccuracy))
             } == true
             if (boundary != null && !crossedNow) {
                 clearAssumption()
                 lastMph = boundary.oldMph
-                return LimitDecision(boundary.oldMph,UpcomingLimit(boundary.newMph,Geo.distance(fix.point,boundary.observed),false),
+                rememberConfirmed(fix,accepted,boundary.oldMph,now)
+                return LimitDecision(boundary.oldMph,UpcomingLimit(boundary.newMph,Geo.distance(fix.point,boundary.observed),false,roadId=boundary.toId),
                     boundaryApplied=true,reason="Saved owner boundary not yet crossed")
             }
             if (boundary != null && crossedNow) {
@@ -87,10 +107,10 @@ class LimitDecisionEngine {
         }
         if (raw == null) {
             val inherited = assume(fix,accepted,now)
-            stabilizer.reset(); transition = null;candidateTransition=null
+            // A lookup gap does not erase the last authoritative stabilizer anchor.
+            if(inherited==null) { stabilizer.reset();transition=null;candidateTransition=null }
             return inherited ?: LimitDecision(null,reason="Unavailable: $assumptionDropReason")
         }
-        if (assumedMatch != null) { clearAssumption(); stabilizer.reset(); lastMatch=null;lastMph=null }
         val previous = lastMph
         if(accepted!=null && previous!=null && previous!=raw && lastMatch!=null && lastMatch!!.road.id!=accepted.road.id && fix.bearing!=null) {
             if(candidateTransition?.to?.road?.id!=accepted.road.id || candidateTransition?.new!=raw)
@@ -105,7 +125,7 @@ class LimitDecisionEngine {
             candidateTransition=null
         }
         val upcoming = raw.takeIf { accepted != null && it != displayed }?.let {
-            UpcomingLimit(it,0.0,false,uncertain=accepted!!.confidence<.8 || fix.accuracyM>20 || (accepted.headingDifference ?: 90.0)>25)
+            UpcomingLimit(it,0.0,false,uncertain=accepted!!.confidence<.8 || fix.accuracyM>20 || (accepted.headingDifference ?: 90.0)>25,roadId=accepted.road.id)
         }
         val reason = when {
             fix.accuracyM > 35 -> "Unavailable: GPS accuracy exceeds 35 m"
@@ -115,11 +135,19 @@ class LimitDecisionEngine {
             accepted == null -> "Brief match ambiguity on previous geometry"
             else -> "Confirmed local road limit"
         }
+        // A large forward GPS step can exceed the stabilizer's narrow prior-road window.
+        // Retain only bounded, connected evidence while the new limit is being confirmed.
+        if(displayed==null && upcoming!=null) {
+            assume(fix,accepted,now)?.let { return it.copy(upcoming=upcoming,reason="${it.reason}; confirming transition to $raw") }
+        }
         return LimitDecision(displayed,upcoming,reason=reason)
     }
     private fun rememberConfirmed(fix: Fix,match: RoadMatch,mph: Int?,now: Long) {
-        confirmed = if(mph != null && match.confidence>=.7 && fix.accuracyM<=20 && fix.bearing != null &&
-            (match.headingDifference ?: 90.0)<=30) ConfirmedLimit(match,mph,fix,now) else null
+        if(mph != null && match.confidence>=.7 && fix.accuracyM<=20 && fix.bearing != null &&
+            (match.headingDifference ?: 90.0)<=30) {
+            assumedMatch=null;assumptionDistance=0.0;assumptionPoint=null
+            confirmed=ConfirmedLimit(match,mph,fix,now)
+        }
     }
     private fun clearAssumption() { confirmed=null;assumedMatch=null;assumptionDistance=0.0;assumptionPoint=null }
     private fun assume(fix: Fix,match: RoadMatch?,now: Long): LimitDecision? {
@@ -128,16 +156,23 @@ class LimitDecisionEngine {
         fun connected(a: Road,b: Road)=a.id==b.id || listOf(a.points.first(),a.points.last()).any { p ->
             listOf(b.points.first(),b.points.last()).any { Geo.distance(p,it)<=20 } }
         val excluded=setOf("motorway","motorway_link","trunk_link","primary_link","secondary_link","tertiary_link","service","living_street")
-        val roadType=match?.road?.tags?.get("highway")
+        // Missing matching data may be bridged only on previously confirmed geometry.
+        val geometry=Geo.projection(fix.point,previous.road.points)
+        val effective=match ?: previous.takeIf {
+            geometry.first<=kotlin.math.max(16.0,fix.accuracyM*1.5) && fix.bearing?.let { b ->
+                geometry.second?.let { h -> kotlin.math.min(Geo.difference(b,h),Geo.difference(b,(h+180)%360))<=30 }
+            } == true && now-anchor.at in 0..15_000
+        }
+        val roadType=effective?.road?.tags?.get("highway")
         val specialTags=match?.road?.tags?.keys?.any { it.startsWith("maxspeed:") && it !in setOf("maxspeed:type") } == true
         val distance=assumptionDistance+Geo.distance(assumptionPoint ?: anchor.fix.point,fix.point)
         val dropReason=when {
-            match==null || match.confidence<.7 -> "Assumption ended: road match lost confidence"
-            fix.accuracyM>20 || fix.bearing==null || (match.headingDifference ?: 90.0)>30 -> "Assumption ended: GPS or heading uncertain"
+            effective==null || effective.confidence<.7 -> "Assumption ended: road match lost confidence or previous geometry no longer fits"
+            fix.accuracyM>20 || fix.bearing==null || (effective.headingDifference ?: 90.0)>30 -> "Assumption ended: GPS or heading uncertain"
             Geo.difference(fix.bearing,anchor.fix.bearing!!)>40 -> "Assumption ended: travel direction changed"
             now-anchor.at !in 0..90_000 -> "Assumption expired after 90 seconds"
             distance>750 -> "Assumption expired after 750 metres"
-            !connected(previous.road,match.road) -> "Assumption ended: road geometry disconnected"
+            !connected(previous.road,effective.road) -> "Assumption ended: road geometry disconnected"
             specialTags -> "Assumption ended: conditional or directional source limit"
             roadType in excluded && roadType != anchor.match.road.tags["highway"] ||
                 anchor.match.road.tags["highway"] in excluded && roadType != anchor.match.road.tags["highway"] -> "Assumption ended: road context changed"
@@ -147,8 +182,8 @@ class LimitDecisionEngine {
             clearAssumption();assumptionDropReason="$dropReason; inherited ${anchor.mph} from ${anchor.match.road.id}"
             lastMatch=null;lastMph=null;return null
         }
-        assumedMatch=match;assumptionDistance=distance;assumptionPoint=fix.point
-        return LimitDecision(anchor.mph,reason="Assumed ${anchor.mph} mph from confirmed ${anchor.match.road.id}; unknown ${match!!.road.id}; ${now-anchor.at} ms, ${distance.toInt()} m",
+        assumedMatch=effective;assumptionDistance=distance;assumptionPoint=fix.point
+        return LimitDecision(anchor.mph,reason="Assumed ${anchor.mph} mph from confirmed ${anchor.match.road.id}; ${match?.road?.id ?: "temporary match gap on prior geometry"}; ${now-anchor.at} ms, ${distance.toInt()} m",
             assumed=true,inheritedFrom=anchor.match.road.id)
     }
     fun canReport(now: Long) = reportable && pending == null && transition?.let { now-it.at in 0..30_000 && currentRoadId == it.to.road.id } == true
@@ -172,6 +207,47 @@ class LimitDecisionEngine {
     }
     private fun currentTransition() = pending ?: candidateTransition?.takeIf { it.to.road.id==currentRoadId }
         ?: transition?.takeIf { it.to.road.id==currentRoadId }
+    fun transitionEvidence(): org.json.JSONObject? = currentTransition()?.let { t ->
+        org.json.JSONObject().put("from",t.from.road.id).put("to",t.to.road.id).put("old",t.old).put("new",t.new)
+            .put("predicted",RoadJson.point(t.fix.point)).put("accuracy",t.fix.accuracyM).put("at",t.at)
+    }
+    fun planSelection(fix: Fix,match: RoadMatch?,source: Int?,selected: Int,targetRoad: String,now: Long,
+        wallNow: Long,observations: List<BoundaryObservation>): LimitSelectionPlan? {
+        val row=QuickLimitCorrection.capture(fix,match,source,selected,targetRoad,now) ?: return null
+        val o=observations.filter { it.applies(fix,match,wallNow) }.maxByOrNull { it.recordedAt }
+        if(o!=null && selected>0) {
+            if(selected==o.oldMph) return LimitSelectionPlan(observation=o.copy(stillPoint=fix.point,
+                accuracy=fix.accuracyM),kind="boundary observation",message="$selected confirmed here")
+            // A distinct observed limit must agree with the local upcoming source and progress
+            // farther than both observations' uncertainty. Same-point taps never invent a boundary.
+            if(selected==source && match!!.road.id!=o.from.id &&
+                passedBoundary(fix,o.stillPoint,o.bearing) &&
+                Geo.distance(o.stillPoint,fix.point)>kotlin.math.max(8.0,o.accuracy+fix.accuracyM)) {
+                val b=BoundaryCorrection(o.from.id,match.road.id,o.oldMph,selected,o.predicted,fix.point,
+                    o.bearing,o.predictedAccuracy,fix.accuracyM,match.confidence,match.distanceM,wallNow,
+                    viaIds=if(match.road.id!=o.to.id) listOf(o.to.id) else emptyList(),stillPoint=o.stillPoint)
+                return LimitSelectionPlan(boundary=b,consumed=o,kind="boundary correction",message="$selected starts here")
+            }
+            // Ambiguous second tap is not permission to overwrite the upcoming road.
+            return null
+        }
+        val t=currentTransition()?.takeIf { now-it.at in 0..120_000 && match!!.road.id==it.to.road.id &&
+            Geo.distance(it.fix.point,fix.point)<=600 && fix.bearing?.let { b -> Geo.difference(b,it.fix.bearing!!)<=35 }==true &&
+            connectedRoads(it.from.road,it.to.road) }
+        if(t!=null && selected==t.old) {
+            val observation=BoundaryObservation(t.from.road,t.to.road,t.old,t.new,t.fix.point,fix.point,
+                fix.bearing!!,t.fix.accuracyM,fix.accuracyM,wallNow)
+            return LimitSelectionPlan(observation=observation,kind="boundary observation",message="$selected confirmed here")
+        }
+        if(t!=null && selected==t.new && selected==source) startsHere(fix,now)?.let {
+            return LimitSelectionPlan(boundary=it.copy(recordedAt=wallNow),kind="boundary correction",message="$selected starts here")
+        }
+        return LimitSelectionPlan(override=row,consumed=o,kind="road limit override",message=when(selected) {
+            OWNER_UNKNOWN -> "Unknown confirmed here"
+            OWNER_NATIONAL -> "National limit confirmed here"
+            else -> "$selected confirmed here"
+        })
+    }
     fun canMarkBoundary(now: Long) = reportable && (currentMatch?.confidence ?: 0.0)>=.7 && currentTransition()?.let {
         now-it.at in 0..120_000 && currentRoadId==it.to.road.id
     } == true

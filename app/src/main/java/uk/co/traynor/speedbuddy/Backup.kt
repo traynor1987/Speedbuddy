@@ -18,7 +18,7 @@ data class OwnerBackup(val cameras: List<Camera>, val settings: Map<String, Any>
     val aliases: List<Pair<String,String>> = emptyList(),
     val junctions: List<CameraJunction> = emptyList(),
     val roadOverrides: List<RoadDb.Override> = emptyList(), val boundaries: List<BoundaryCorrection> = emptyList(),
-    val legacyArchives: List<String> = emptyList(), val archivedOnly: List<String> = emptyList(), val sourceText: String = "")
+    val legacyArchives: List<String> = emptyList(), val archivedOnly: List<String> = emptyList(), val sourceText: String = "", val boundaryObservations: List<BoundaryObservation> = emptyList())
 
 /** A portable, versioned owner export. No route history or public OSM database is included. */
 object OwnerBackupCodec {
@@ -40,7 +40,7 @@ object OwnerBackupCodec {
         roadCorrections: List<RoadLimitCorrection> = emptyList(), aliases: List<Pair<String,String>> = emptyList(),
         junctions: List<CameraJunction> = emptyList(),
         roadOverrides: List<RoadDb.Override> = emptyList(), boundaries: List<BoundaryCorrection> = emptyList(),
-        legacyArchives: List<String> = emptyList()): String {
+        legacyArchives: List<String> = emptyList(), boundaryObservations: List<BoundaryObservation> = emptyList()): String {
         val groups = (junctions + cameras.mapNotNull { it.junction }).distinctBy { it.id }
         groups.forEach(JunctionRules::validate)
         val records = JSONArray()
@@ -70,9 +70,10 @@ object OwnerBackupCodec {
         roadCorrections.forEach { item -> roadRecords.put(JSONObject().put("id", item.id)
             .put("kind", item.kind.name).put("mph", item.mph ?: JSONObject.NULL)
             .put("sourceValue", item.sourceValue ?: JSONObject.NULL).put("updated", item.updatedAtMs)) }
-        val text = JSONObject().put("format", "speed-buddy-owner-backup").put("version", 11)
+        val text = JSONObject().put("format", "speed-buddy-owner-backup").put("version", 12)
             .put("roadOverrides", JSONArray(roadOverrides.map(RoadJson::override)))
             .put("boundaries", JSONArray(boundaries.map(RoadJson::boundary)))
+            .put("boundaryObservations",JSONArray(boundaryObservations.map(RoadJson::observation)))
             .put("legacyArchives", JSONArray(legacyArchives.distinct()))
             .put("cameras", records).put("settings", settings)
             .put("cameraCorrections", overrides).put("roadLimits", limits)
@@ -89,15 +90,15 @@ object OwnerBackupCodec {
         require(text.length <= MAX_CHARS) { "Backup is too large" }
         val root = JSONObject(text)
         val version = root.getInt("version")
-        require(root.getString("format") == "speed-buddy-owner-backup" && version in 1..11) {
+        require(root.getString("format") == "speed-buddy-owner-backup" && version in 1..12) {
             "Unsupported Speed Buddy backup"
         }
-        val mapFields = version <= 8 || version == 11
+        val mapFields = version <= 8 || version >= 11
         val mapKeys = setOf("cameraCorrections", "roadLimits", "suppressedCameraIds", "roadCorrections", "cameraAliases", "junctions")
         val baseKeys = setOf("format", "version", "cameras", "settings")
         val offlineKeys = setOf("roadOverrides", "boundaries", "legacyArchives")
         if (version >= 9) {
-            requireKnownKeys(root, baseKeys + offlineKeys + if (version == 11) mapKeys else emptySet())
+            requireKnownKeys(root, baseKeys + offlineKeys + (if (version >= 11) mapKeys else emptySet()) + (if(version>=12) setOf("boundaryObservations") else emptySet()))
             requireExactInteger(root, "version")
         }
         val archived = linkedSetOf<String>()
@@ -106,7 +107,7 @@ object OwnerBackupCodec {
             require(array.length() <= 500) { "Too many junctions" }
             (0 until array.length()).map { index ->
                 val item = array.getJSONObject(index)
-                if (version == 11) { requireKnownKeys(item, setOf("id", "name", "lat", "lon", "ways")); requireExactInteger(item, "ways") }
+                if (version >= 11) { requireKnownKeys(item, setOf("id", "name", "lat", "lon", "ways")); requireExactInteger(item, "ways") }
                 CameraJunction(item.getString("id"), item.getString("name"),
                     GeoPoint(item.getDouble("lat"), item.getDouble("lon")), item.getInt("ways")).also(JunctionRules::validate)
             }.also { require(it.map { group -> group.id }.distinct().size == it.size) { "Duplicate junction IDs" } }
@@ -118,7 +119,7 @@ object OwnerBackupCodec {
             val item = records.getJSONObject(index)
             if (version >= 9) {
                 requireKnownKeys(item, setOf("id", "lat", "lon", "type", "direction", "mph", "note", "updated") +
-                    if (version == 11) setOf("bidirectional", "junctionId") else emptySet())
+                    if (version >= 11) setOf("bidirectional", "junctionId") else emptySet())
                 requireExactInteger(item, "mph"); requireExactInteger(item, "updated")
                 if (item.has("bidirectional")) require(item.get("bidirectional") is Boolean)
             }
@@ -142,7 +143,7 @@ object OwnerBackupCodec {
         require(cameras.map { it.id }.distinct().size == cameras.size) { "Duplicate camera IDs" }
         val source = root.getJSONObject("settings")
         val settingsKeys = booleans.keys + setOf("mobileLifetime", "theme", "tolerance")
-        if (version >= 9) requireKnownKeys(source, if (version == 11) settingsKeys else
+        if (version >= 9) requireKnownKeys(source, if (version >= 11) settingsKeys else
             setOf("overspeed", "speedCamera", "redCamera", "cameraSound", "vibrate", "tolerance"))
         if (version <= 8 && source.keys().asSequence().any { it !in settingsKeys }) archived.add("additional legacy settings")
         if (version >= 9) { requireExactInteger(source, "tolerance"); requireExactInteger(source, "mobileLifetime") }
@@ -168,7 +169,7 @@ object OwnerBackupCodec {
             require(array.length() <= 10_000) { "Too many camera corrections" }
             (0 until array.length()).map { index ->
                 val item = array.getJSONObject(index)
-                if (version == 11) {
+                if (version >= 11) {
                     requireKnownKeys(item, setOf("id", "source", "lat", "lon", "type", "direction", "note", "mph", "sourceLat", "sourceLon", "updated", "bidirectional"))
                     requireExactInteger(item, "mph"); requireExactInteger(item, "updated")
                     if (item.has("bidirectional")) require(item.get("bidirectional") is Boolean)
@@ -196,7 +197,7 @@ object OwnerBackupCodec {
         val roadLimits = if (!mapFields || version == 1) emptyMap() else root.getJSONObject("roadLimits").let { limits ->
             require(limits.length() <= 10_000) { "Too many road corrections" }
             limits.keys().asSequence().associateWith { id ->
-                if (version == 11) requireExactInteger(limits, id)
+                if (version >= 11) requireExactInteger(limits, id)
                 val mph = limits.getInt(id)
                 require(id.startsWith("way/") && id.length <= 100 && mph in 5..130) { "Invalid road limit correction" }
                 mph
@@ -212,7 +213,7 @@ object OwnerBackupCodec {
             require(array.length() <= 10_000) { "Too many road corrections" }
             (0 until array.length()).map { index ->
                 val item = array.getJSONObject(index)
-                if (version == 11) {
+                if (version >= 11) {
                     requireKnownKeys(item, setOf("id", "kind", "mph", "sourceValue", "updated"))
                     requireExactInteger(item, "mph"); requireExactInteger(item, "updated")
                 }
@@ -250,11 +251,19 @@ object OwnerBackupCodec {
             require(array.length() <= 10_000)
             (0 until array.length()).map { i -> val item = array.getJSONObject(i)
                 requireExactInteger(item, "old"); requireExactInteger(item, "new"); requireExactInteger(item, "at")
-                requireKnownKeys(item, setOf("from", "to", "old", "new", "predicted", "observed", "bearing", "pa", "oa", "confidence", "distance", "at"))
+                requireKnownKeys(item, setOf("from", "to", "old", "new", "predicted", "observed", "bearing", "pa", "oa", "confidence", "distance", "at") + (if(version>=12) setOf("via","still") else emptySet()))
                 require(item.getJSONArray("predicted").length() == 2 && item.getJSONArray("observed").length() == 2)
                 RoadJson.decodeBoundary(item).also(::validateBoundary)
             }
                 .also { require(it.map { row -> Triple(row.fromId, row.toId, row.bearing) }.distinct().size == it.size) }
+        }
+        val observations=if(version<12) emptyList() else root.getJSONArray("boundaryObservations").let { array ->
+            require(array.length()<=1000)
+            (0 until array.length()).map { i -> val item=array.getJSONObject(i)
+                requireKnownKeys(item,setOf("from","to","old","new","predicted","still","bearing","pa","accuracy","at"))
+                requireExactInteger(item,"old");requireExactInteger(item,"new");requireExactInteger(item,"at")
+                RoadJson.decodeObservation(item).also { it.validate() }
+            }
         }
         val archives = if (version <= 8) listOf(text) else root.getJSONArray("legacyArchives").let { array ->
             require(array.length() <= 100) { "Too many retained legacy backups" }
@@ -265,11 +274,11 @@ object OwnerBackupCodec {
             }.distinct()
         }
         val direct = OwnerBackup(cameras, settings, corrections, roadLimits, hidden, roadCorrections, aliases, junctions,
-            roadOverrides, boundaries, archives, archived.toList(), text)
+            roadOverrides, boundaries, archives, archived.toList(), text, observations)
         if (version <= 8 || archives.isEmpty()) return direct
         val legacy = archives.map(::parse)
         // Full-format archives are receipts, not active records: owner deletions must stay deleted.
-        if (version == 11) return direct.copy(archivedOnly = (direct.archivedOnly + legacy.flatMap { it.archivedOnly }).distinct())
+        if (version >= 11) return direct.copy(archivedOnly = (direct.archivedOnly + legacy.flatMap { it.archivedOnly }).distinct())
         return recoverArchivedMapData(direct, legacy)
 
     }
@@ -315,7 +324,7 @@ object OwnerBackupCodec {
             b.bearing.isFinite() && b.bearing in 0.0..<360.0 &&
             b.predictedAccuracy.isFinite() && b.predictedAccuracy >= 0 && b.observedAccuracy.isFinite() && b.observedAccuracy >= 0 &&
             b.confidence.isFinite() && b.confidence in 0.0..1.0 && b.matchDistance.isFinite() && b.matchDistance >= 0 &&
-            b.recordedAt >= 0) { "Invalid learned boundary" }
+            b.recordedAt >= 0 && b.viaIds.size<=4 && b.viaIds.all { it.isNotBlank() && it.length<=100 && it!=b.fromId && it!=b.toId } && (b.stillPoint==null || validPoint(b.stillPoint))) { "Invalid learned boundary" }
     }
     fun applySettings(settings: Map<String, Any>, prefs: SharedPreferences) {
         val editor = prefs.edit()
@@ -348,7 +357,7 @@ class OwnerBackupStore(context: Context) {
     fun restore(backup: OwnerBackup, db: CameraDb, roads: RoadDb, prefs: SharedPreferences) {
         retainBeforeApply(backup)
         db.restoreOwnerData(backup, prefs)
-        roads.mergeOwnerCorrections(backup.roadOverrides, backup.boundaries)
+        roads.mergeOwnerCorrections(backup.roadOverrides, backup.boundaries,backup.boundaryObservations)
         // Interrupted multi-store restore can be retried from the retained complete JSON.
     }
 }

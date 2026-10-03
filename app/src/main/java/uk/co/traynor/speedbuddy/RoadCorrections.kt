@@ -40,9 +40,12 @@ internal data class SelectedOwnerLimit(val mph: Int, val national: Boolean = fal
 /** Both existing edit surfaces supply owner evidence to the same driving decision engine. */
 internal object OwnerRoadLimits {
     fun select(road: Road?, bearing: Double?, directed: List<RoadDb.Override>,
-        mapCorrections: Map<String,RoadLimitCorrection>): SelectedOwnerLimit? {
+        mapCorrections: Map<String,RoadLimitCorrection>,point: GeoPoint? = null): SelectedOwnerLimit? {
         if(road==null) return null
-        RoadDb.selectOverride(directed,road.id,bearing)?.let { return SelectedOwnerLimit(it,it==OWNER_NATIONAL) }
+        // A sign tap is local ground truth. Explicit map edits and older records without
+        // a captured position retain their existing whole-road semantics.
+        val local=directed.filter { point==null || it.point==null || Geo.distance(point,it.point)<=150 }
+        RoadDb.selectOverride(local,road.id,bearing)?.let { return SelectedOwnerLimit(it,it==OWNER_NATIONAL) }
         return mapCorrections[road.id]?.let {
             SelectedOwnerLimit(if(it.kind==RoadLimitKind.UNKNOWN) OWNER_UNKNOWN else it.mph!!,
                 it.kind in listOf(RoadLimitKind.NATIONAL_SINGLE,RoadLimitKind.NATIONAL_DUAL))

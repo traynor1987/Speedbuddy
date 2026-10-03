@@ -26,3 +26,30 @@ object QuickLimitCorrection {
         return RoadDb.Override(match.road.id,fix.bearing,selected,source,fix.point,System.currentTimeMillis(),fix.accuracyM)
     }
 }
+
+/** One owner assertion, separate from road overrides and from downloaded data. */
+data class BoundaryObservation(val from: Road,val to: Road,val oldMph: Int,val newMph: Int,
+    val predicted: GeoPoint,val stillPoint: GeoPoint,val bearing: Double,
+    val predictedAccuracy: Double,val accuracy: Double,val recordedAt: Long)
+data class LimitSelectionPlan(val override: RoadDb.Override? = null,
+    val observation: BoundaryObservation? = null,val boundary: BoundaryCorrection? = null,
+    val consumed: BoundaryObservation? = null,val kind: String,val message: String)
+
+internal fun connectedRoads(a: Road,b: Road)=a.id==b.id ||
+    listOf(a.points.first(),a.points.last()).any { p -> listOf(b.points.first(),b.points.last()).any { Geo.distance(p,it)<=20 } }
+
+internal fun BoundaryObservation.applies(fix: Fix,match: RoadMatch?,wallNow: Long): Boolean {
+    if(match==null || wallNow-recordedAt !in 0..120_000 || Geo.distance(stillPoint,fix.point)>600 ||
+        fix.accuracyM>20 || fix.bearing==null || Geo.difference(fix.bearing,bearing)>35 ||
+        match.confidence<.7 || (match.headingDifference ?: 90.0)>30 ||
+        Geo.projection(fix.point,match.road.points).first>25) return false
+    return match.road.id in listOf(from.id,to.id) || connectedRoads(to,match.road) &&
+        to.name!=null && match.road.name==to.name && match.road.tags["highway"]==to.tags["highway"]
+}
+
+internal fun BoundaryObservation.validate() {
+    require(listOf(from,to).all { r -> r.id.isNotBlank() && r.id.length<=100 && r.points.size in 2..20_000 && r.points.all(::validPoint) })
+    require(from.id!=to.id && connectedRoads(from,to) && oldMph in 5..100 && newMph in 5..100 && oldMph!=newMph &&
+        validPoint(predicted) && validPoint(stillPoint) && bearing.isFinite() && bearing in 0.0..<360.0 &&
+        accuracy.isFinite() && accuracy in 0.0..20.0 && predictedAccuracy.isFinite() && predictedAccuracy in 0.0..25.0 && recordedAt>=0)
+}

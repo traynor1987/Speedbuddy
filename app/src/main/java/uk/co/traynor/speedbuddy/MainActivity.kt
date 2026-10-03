@@ -145,7 +145,7 @@ class MainActivity : ComponentActivity() {
                     val content = RoadDb(this@MainActivity).use { roads ->
                         OwnerBackupCodec.export(db.userCameras(), prefs, db.cameraCorrections(),
                             db.roadLimits(), db.suppressedCameraIds(), db.roadCorrections(), db.aliasLinks(), JunctionStore(db).all(),
-                            roadOverrides = roads.overrides(), boundaries = roads.boundaries(),
+                            roadOverrides = roads.overrides(), boundaries = roads.boundaries(), boundaryObservations = roads.observations(),
                             legacyArchives = OwnerBackupStore(this@MainActivity).legacyArchives())
                     }
                     contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { it.write(content) }
@@ -391,15 +391,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if(state.boundaryAvailable || state.awaitingBoundary) Button(onClick={
-                onFeedback("STARTS_HERE",state.sourceLimitMph,state.road?.road?.id);onDismiss()
-            },modifier=Modifier.fillMaxWidth().heightIn(min=56.dp)) {
-                Text("This limit starts here",fontSize=18.sp)
-            }
-            if(state.tooEarlyAvailable && !state.awaitingBoundary) TextButton(onClick={
-                onFeedback("TOO_EARLY",null,state.road?.road?.id);onDismiss()
-            },modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)) { Text("Changed too soon") }
-            if(state.awaitingBoundary) TextButton(onClick={ onFeedback("CANCEL_BOUNDARY",null,state.road?.road?.id);onDismiss() }) { Text("Cancel boundary correction") }
             Spacer(Modifier.height(20.dp))
         }
     }
