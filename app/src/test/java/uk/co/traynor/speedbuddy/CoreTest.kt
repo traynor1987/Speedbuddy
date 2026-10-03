@@ -48,13 +48,14 @@ class CoreTest {
         val camera = Camera("user-1", GeoPoint(53.005, -2.0), CameraType.SPEED, CameraSource.USER)
         val detector = CameraApproachDetector()
         val match = RoadMatch(road, 0.0, 0.0, .9)
-        val distances = listOf(53.0005, 53.0023, 53.0041).map { latitude ->
+        assertNull(detector.evaluate(fix(53.0005), match, listOf(camera), 28.0).first)
+        val distances = listOf(53.0028, 53.0035, 53.0041).map { latitude ->
             val (alert, decision) = detector.evaluate(fix(latitude), match, listOf(camera), 28.0)
             assertTrue(decision.accepted); assertEquals(CameraType.SPEED, alert?.camera?.type)
             alert!!.distanceM
         }
         assertTrue(distances[0] > distances[1]); assertTrue(distances[1] > distances[2])
-        assertTrue(distances[0] in 450.0..550.0)
+        assertTrue(distances[0] in 230.0..260.0)
         assertNull(detector.evaluate(fix(53.0051), match, listOf(camera), 28.0).first)
         assertNull(detector.evaluate(fix(53.0060), match, listOf(camera), 28.0).first)
     }
@@ -65,30 +66,82 @@ class CoreTest {
         val parallel = camera.copy(id = "parallel", direction = null, point = camera.point.copy(lon = -1.9994))
         assertEquals("Different road", detector.evaluate(fix(53.002), match, listOf(parallel), 28.0).second.reason)
         assertEquals("Camera behind or off heading", detector.evaluate(fix(53.006), match, listOf(camera.copy(direction = null)), 28.0).second.reason)
+        assertEquals(camera.id, CameraApproachDetector().evaluate(fix(53.003), match,
+            listOf(camera.copy(bidirectional = true)), 28.0).first?.camera?.id)
     }
     @Test fun cameraOnFollowingRoadSegmentIsNotDiscarded() {
         val shortRoad = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.002, -2.0)))
         val camera = Camera("next-segment", GeoPoint(53.005, -2.0), CameraType.SPEED, CameraSource.OSM)
         val match = RoadMatch(shortRoad, 0.0, 0.0, .9)
-        assertEquals(camera.id, CameraApproachDetector().evaluate(fix(53.001), match, listOf(camera), 28.0).first?.camera?.id)
+        assertNull(CameraApproachDetector().evaluate(fix(53.001), match, listOf(camera), 28.0).first)
+        assertEquals(camera.id, CameraApproachDetector().evaluate(fix(53.003), match, listOf(camera), 28.0).first?.camera?.id)
     }
     @Test fun upcomingLimitRequiresConnectedSameRoadAndKnownDifferentLimit() {
         val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
         val next = road.copy(id = "way/2", points = listOf(GeoPoint(53.003, -2.0), GeoPoint(53.008, -2.0)), tags = mapOf("maxspeed" to "40 mph"))
         val match = RoadMatch(current, 0.0, 0.0, .9)
-        val result = UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next))
+        val result = UpcomingLimitDetector().detect(fix(53.0015), match, 30, listOf(current, next))
         assertEquals(40, result?.mph)
-        assertTrue(result!!.distanceM in 180.0..260.0)
+        assertTrue(result!!.distanceM in 150.0..180.0)
+        assertNull(UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next)))
         assertNull(UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next.copy(tags = emptyMap()))))
         assertNull(UpcomingLimitDetector().detect(fix(53.001), match, 30, listOf(current, next.copy(name = "Side street"))))
+    }
+    @Test fun junctionPreviewsKnownLeftAndRightChangesWithoutChoosingAPath() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val junction = current.points.last()
+        val left = Road("way/left", "Side Lane", listOf(junction, GeoPoint(53.003, -2.003)),
+            mapOf("maxspeed" to "20 mph"))
+        val right = Road("way/right", "East Road", listOf(junction, GeoPoint(53.003, -1.997)),
+            mapOf("maxspeed" to "40 mph"))
+        val match = RoadMatch(current, 0.0, 0.0, .9)
+        val previews = TurnLimitDetector().detect(fix(53.0015), match, 30, listOf(current, left, right))
+        assertEquals(listOf(TurnDirection.LEFT, TurnDirection.RIGHT), previews.map { it.direction })
+        assertEquals(listOf(20, 40), previews.map { it.mph })
+        assertTrue(previews.all { it.distanceM in 150.0..180.0 })
+        assertTrue(TurnLimitDetector().detect(fix(53.001), match, 30,
+            listOf(current, left, right)).isEmpty())
+        assertEquals(30, SpeedLimits.mph(current.tags))
+        assertTrue(TurnLimitDetector().detect(fix(53.0015).copy(accuracyM = 40.0), match, 30,
+            listOf(current, left, right)).isEmpty())
+        assertEquals(listOf(TurnDirection.LEFT), TurnLimitDetector().detect(fix(53.0015), match, 30,
+            listOf(current, left, right.copy(tags = emptyMap()))).map { it.direction })
+        assertTrue(TurnLimitDetector().detect(fix(53.0015), match, 30,
+            listOf(current, left, left.copy(id = "way/ambiguous"), right)).none { it.direction == TurnDirection.LEFT })
     }
     @Test fun redLightAndDuplicateAlerts() {
         val camera = Camera("red", GeoPoint(53.005, -2.0), CameraType.RED_LIGHT, CameraSource.USER)
         val detector = CameraApproachDetector(); val match = RoadMatch(road, 0.0, 0.0, .9)
-        assertEquals(CameraType.RED_LIGHT, detector.evaluate(fix(53.002), match, listOf(camera), 28.0).first?.camera?.type)
-        assertEquals("Approach active", detector.evaluate(fix(53.003), match, listOf(camera), 28.0).second.reason)
+        assertEquals(CameraType.RED_LIGHT, detector.evaluate(fix(53.003), match, listOf(camera), 28.0).first?.camera?.type)
+        assertEquals("Approach active", detector.evaluate(fix(53.0035), match, listOf(camera), 28.0).second.reason)
         detector.evaluate(fix(53.0051), match, listOf(camera), 28.0)
         assertEquals("Already passed", detector.evaluate(fix(53.0049), match, listOf(camera), 28.0).second.reason)
+    }
+    @Test fun announcedCameraRemainsVisibleAtAStopUntilPassing() {
+        val camera = Camera("stop", GeoPoint(53.005, -2.0), CameraType.SPEED, CameraSource.USER)
+        val detector = CameraApproachDetector()
+        val match = RoadMatch(road, 0.0, 0.0, .9)
+        assertNull(detector.evaluate(fix(53.003), match, listOf(camera), 0.0).first)
+        assertEquals(camera.id, detector.evaluate(fix(53.003), match, listOf(camera), 28.0).first?.camera?.id)
+        val stopped = fix(53.0034).copy(speedMps = 0.0, bearing = null)
+        assertEquals(camera.id, detector.evaluate(stopped, match, listOf(camera), 0.0).first?.camera?.id)
+        assertEquals("Approach active", detector.evaluate(stopped, match, listOf(camera), 0.0).second.reason)
+        assertEquals(camera.id, detector.evaluate(fix(53.0036), match, listOf(camera), 27.0).first?.camera?.id)
+        assertNull(detector.evaluate(fix(53.0051), match, listOf(camera), 28.0).first)
+    }
+    @Test fun hiddenCameraDoesNotStayVisibleWhileStopped() {
+        val camera = Camera("hidden", GeoPoint(53.005, -2.0), CameraType.SPEED, CameraSource.USER)
+        val detector = CameraApproachDetector()
+        detector.evaluate(fix(53.003), null, listOf(camera), 28.0)
+        assertNull(detector.evaluate(fix(53.003).copy(speedMps = 0.0), null, emptyList(), 0.0).first)
+    }
+    @Test fun driveCorrectionRequiresAConfidentRoadAtTheActualFix() {
+        val near = RoadMatch(road, 2.0, 0.0, .9)
+        assertEquals(road.id, DriveRoadEditTarget.select(fix(53.005), near)?.id)
+        assertNull(DriveRoadEditTarget.select(fix(53.005), near.copy(confidence = .25)))
+        assertNull(DriveRoadEditTarget.select(fix(53.005).copy(accuracyM = 35.0), near))
+        assertNull(DriveRoadEditTarget.select(fix(53.005).copy(point = GeoPoint(53.005, -1.999)), near))
+        assertNull(DriveRoadEditTarget.select(null, near))
     }
     @Test fun overspeedGateRearms() {
         val gate = OverspeedGate()
@@ -134,5 +187,62 @@ class CoreTest {
         assertEquals(30, stable.resolve(start, match, 30, 46_000))
         val sideRoad = road.copy(id = "way/2", tags = emptyMap())
         assertNull(stable.resolve(start, RoadMatch(sideRoad, 2.0, 0.0, .9), null, 47_000))
+    }
+
+    @Test fun connectedSameLimitRoadStaysKnownDuringAmbiguousMatch() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val next = current.copy(id = "way/next", points = listOf(current.points.last(), GeoPoint(53.006, -2.0)))
+        val stable = RoadLimitStabilizer()
+        assertEquals(30, stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000))
+        assertEquals(30, stable.resolve(fix(53.0034), null, null, 2000, listOf(current, next)))
+    }
+
+    @Test fun differentKnownLimitBecomesCurrentOnlyAfterTheJunction() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val next = current.copy(id = "way/next", points = listOf(current.points.last(), GeoPoint(53.006, -2.0)),
+            tags = mapOf("maxspeed" to "20 mph"))
+        val stable = RoadLimitStabilizer()
+        stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000)
+        assertEquals(30, stable.resolve(fix(53.0029), null, null, 1500, listOf(current, next)))
+        assertEquals(20, stable.resolve(fix(53.0034), null, null, 2000, listOf(current, next)))
+    }
+
+    @Test fun actualTurnUsesKnownSideRoadLimitWithoutChangingBeforeTurn() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val left = Road("way/left", "Side Lane", listOf(current.points.last(), GeoPoint(53.003, -2.003)),
+            mapOf("maxspeed" to "20 mph"))
+        val stable = RoadLimitStabilizer()
+        assertEquals(30, stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000))
+        assertEquals(30, stable.resolve(fix(53.0029), null, null, 1500, listOf(current, left)))
+        assertEquals(20, stable.resolve(fix(53.003).copy(point = GeoPoint(53.003, -2.0005),
+            bearing = 270.0), null, null, 2000, listOf(current, left)))
+    }
+
+    @Test fun untaggedOrUnconnectedRoadNeverInheritsAnOldLimit() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val unknown = Road("way/unknown", "Other Road", listOf(current.points.last(), GeoPoint(53.006, -2.0)), emptyMap())
+        val remote = current.copy(id = "way/remote", points = listOf(GeoPoint(53.0032, -2.0), GeoPoint(53.006, -2.0)))
+        val stable = RoadLimitStabilizer()
+        stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000)
+        assertNull(stable.resolve(fix(53.0034), null, null, 2000, listOf(current, unknown)))
+        stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 3000)
+        assertNull(stable.resolve(fix(53.0034), null, null, 4000, listOf(current, remote)))
+    }
+
+    @Test fun overlappingKnownAndUnknownContinuationsStayUnknown() {
+        val current = road.copy(points = listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)))
+        val next = current.copy(id = "way/known", points = listOf(current.points.last(), GeoPoint(53.006, -2.0)))
+        val unknown = next.copy(id = "way/untagged", tags = emptyMap())
+        val stable = RoadLimitStabilizer()
+        stable.resolve(fix(53.0028), RoadMatch(current, 0.0, 0.0, .9), 30, 1000)
+        assertNull(stable.resolve(fix(53.0034), null, null, 2000, listOf(current, next, unknown)))
+    }
+
+    @Test fun lowConfidenceMatchToTaggedRoadDoesNotEraseTheRecentLimit() {
+        val stable = RoadLimitStabilizer()
+        val start = fix(53.005)
+        stable.resolve(start, RoadMatch(road, 2.0, 0.0, .9), 30, 1000)
+        assertEquals(30, stable.resolve(start, RoadMatch(road, 18.0, 55.0, .2), null, 2000,
+            listOf(road)))
     }
 }
