@@ -13,7 +13,7 @@ class FullReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('needs: [build, database-tests]', workflow)
         self.assertIn("docs/owner-signing-certificate.json", workflow)
         self.assertIn('scripts/verify_owner_apk.py', workflow)
-        self.assertIn('--version-code 14 --version-name 0.2.5', workflow)
+        self.assertIn('--version-code 15 --version-name 0.2.6', workflow)
         self.assertIn('Remove temporary private key', workflow)
 
 if __name__ == '__main__':
