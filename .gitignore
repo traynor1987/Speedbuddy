@@ -6,3 +6,13 @@
 .idea/
 *.keystore
 *.jks
+*.p12
+*.pfx
+*.key
+__pycache__/
+*.py[cod]
+
+.kotlin/
+
+# Obsolete alternate signing pipeline must never be staged again.
+.github/workflows/signed-release.yml

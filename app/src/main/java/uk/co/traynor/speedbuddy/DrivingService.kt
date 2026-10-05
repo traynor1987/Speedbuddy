@@ -27,6 +27,12 @@ data class DriveState(
     val mapStatus: String = "No map request yet",
     val upcoming: UpcomingLimit? = null, val publicCameraCount: Int = 0, val userCameraCount: Int = 0,
     val importedCameraCount: Int = 0, val importedNearbyCount: Int = 0,
+    val roadDataStatus: String = "", val limitDecision: LimitDecision? = null,
+    val sourceLimitMph: Int? = null, val tooEarlyAvailable: Boolean = false,
+    val awaitingBoundary: Boolean = false, val coverageTiles: Int = 0, val targetTiles: Int = 0,
+    val turns: List<TurnLimit> = emptyList(), val alertPositionFresh: Boolean = true,
+    val averageSection: ActiveAverageSection? = null,
+    val roadCacheRevision: Long = 0L,val boundaryAvailable: Boolean = false,val correctionMessage: String = "",
 )
 object DriveBus { private val mutable = MutableStateFlow(DriveState()); val state = mutable.asStateFlow(); fun set(state: DriveState) { mutable.value = state } }
 
@@ -34,35 +40,102 @@ class DrivingService : Service(), LocationListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var locationManager: LocationManager
     private lateinit var db: CameraDb
-    private lateinit var osm: OsmDataSource
-    private val speedFilter = SpeedFilter(); private val matcher = RoadMatcher()
-    private val limitStabilizer = RoadLimitStabilizer()
-    private val upcomingDetector = UpcomingLimitDetector()
+    private lateinit var roads: RoadDb
+    private lateinit var downloader: RoadDownload
+    private lateinit var roadRepository: DrivingRoadRepository
+    private val speedFilter = SpeedFilter()
+    private val limitPipeline=DrivingLimitPipeline()
+    private val matcher get()=limitPipeline.matcher
+    private val limitEngine get()=limitPipeline.engine
+    private lateinit var cameraVoice: CameraVoice
+    private val limitVoiceGate = DeferredLimitVoice()
+    private val sectionTracker = AverageSectionTracker()
+    private val turnDetector = TurnLimitDetector()
+    private var cameraRevision = -1L
+    private var roadRevision = -1L
+    private var mapCorrections: Map<String,RoadLimitCorrection> = emptyMap()
+    private var effectiveCameras = emptyList<Camera>()
+    private var lastMobilePrune = 0L
     private val detector = CameraApproachDetector(); private val overspeed = OverspeedGate()
-    private val limits: SpeedLimitProvider = OsmSpeedLimitProvider()
-    private var snapshot: OsmSnapshot? = null
-    private var previousSnapshot: OsmSnapshot? = null
-    private var fetching = false; private var lastAttempt = 0L
-    private var mapStatus = "Cached map data"
+    private val planner = RoadRefreshPlanner()
+    private var coverage: Map<RoadTile,Long> = emptyMap()
+    private var boundaries: List<BoundaryCorrection> = emptyList()
+    private var overrides: List<RoadDb.Override> = emptyList()
+    private var observations: List<BoundaryObservation> = emptyList()
+    private var ready = false
+    private var stopped = false
+    private var fetching = false
+    private var offline = false
+    private var refreshDelayed = false
+    private var budgetReached = false
+    private var budgetUntil = 0L
+    private var updatedAt = 0L
+    private var generation = 0L
+    private var localGeneration = -1L
+    private var localAt = 0L
+    private var localPoint: GeoPoint? = null
+    private var local = LocalRoads(emptyList(),emptyList())
+    private var userCameras = emptyList<Camera>()
+    private var imported = emptyList<Camera>()
+    private var importedCount = 0
+    private var mapStatus = "Loading saved road data"
     private var lastAlertId: String? = null
     private var tick: Job? = null
+    private var processing: Job? = null
+    private var feedbackJob: Job? = null
+    private var feedbackMessage = ""
+    private var feedbackAt = 0L
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
         super.onCreate(); locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
-        db = CameraDb(this); osm = OsmDataSource(this); snapshot = osm.cached()
+        db = CameraDb(this); roads = RoadDb(this); downloader = RoadDownload(this)
+        roadRepository=DrivingRoadRepository(roads,OsmDataSource(this)::cachedRegional)
+        cameraVoice = CameraVoice(this) { signal(true,false) }
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    // Preserve the old extract as partial coverage. Never claim its 3 km box covers a full tile.
+                    if (roads.readableDatabase.rawQuery("SELECT COUNT(*) FROM tiles",null).use { it.moveToFirst();it.getInt(0) } == 0) {
+                        LegacyOsmCache(this@DrivingService).cached()?.let { old ->
+                            if (old.roads.any { Geo.projection(old.center,it.points).first < 1500 })
+                                roads.replace(RoadTileData(RoadTile.at(old.center),old.fetchedAt,old.roads,old.cameras,complete=false))
+                        }
+                    }
+                }
+                coverage = withContext(Dispatchers.IO) { roads.coverage() }
+                boundaries = withContext(Dispatchers.IO) { roads.boundaries() }
+                overrides = withContext(Dispatchers.IO) { roads.overrides() }
+                observations=withContext(Dispatchers.IO) { roads.observations() }
+                ready = true; mapStatus = "Saved road data ready"
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                mapStatus = "Local road store unavailable: ${e.message}"
+                Log.e("SpeedBuddy","Road cache initialization failed",e)
+            }
+        }
         val channel = NotificationChannel("drive", "Driving mode", NotificationManager.IMPORTANCE_LOW)
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") { stopSelf(); return START_NOT_STICKY }
+        if (intent?.action in listOf("TOO_EARLY","CHANGED_NOW","STARTS_HERE","CANCEL_BOUNDARY","RESET_CORRECTIONS","RESET_ROAD","SET_LIMIT","SET_OVERRIDE")) {
+            if (tick == null || !ready) { if (tick == null) stopSelf(); return START_NOT_STICKY }
+            handleFeedback(intent!!)
+            return START_NOT_STICKY
+        }
         val stop = Intent(this, DrivingService::class.java).setAction("STOP")
         val pending = PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = Notification.Builder(this, "drive").setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("Speed Buddy is active").setContentText("GPS speed and camera alerts")
+            .setOngoing(true).setContentTitle("Speed Buddy is active").setContentText("GPS speed and camera alerts")
             .addAction(Notification.Action.Builder(null, "Stop", pending).build())
             .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
-        if (Build.VERSION.SDK_INT >= 29) startForeground(42, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        else startForeground(42, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= 29) startForeground(42, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            else startForeground(42, notification)
+        } catch (_: RuntimeException) {
+            DriveBus.set(DriveState(status="Driving mode needs location permission while the app is open"))
+            stopSelf(); return START_NOT_STICKY
+        }
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             DriveBus.set(DriveState(status = "Precise location required")); stopSelf(); return START_NOT_STICKY
         }
@@ -71,9 +144,37 @@ class DrivingService : Service(), LocationListener {
             catch (_: Exception) { DriveBus.set(DriveState(status = "GPS unavailable")); stopSelf(); return START_NOT_STICKY }
             tick = scope.launch { while (isActive) { delay(1000); val state = DriveBus.state.value
                 if (state.fix != null && SystemClock.elapsedRealtime() - state.fix.elapsedMs > 5000) {
-                    speedFilter.current(SystemClock.elapsedRealtime()); matcher.reset(); limitStabilizer.reset()
-                    DriveBus.set(state.copy(speedMph = null, limitMph = null, road = null, alert = null, status = "GPS signal lost"))
+                    speedFilter.current(SystemClock.elapsedRealtime()); matcher.reset(); limitEngine.reset()
+                    DriveBus.set(state.copy(speedMph = null, limitMph = null, road = null, alert = null, upcoming = null, limitDecision=null, turns=emptyList(), alertPositionFresh=false, averageSection=state.averageSection?.copy(remainingM=Double.NaN), tooEarlyAvailable = false, boundaryAvailable=false, awaitingBoundary = false, status = "GPS signal lost"))
+                    if(state.status!="GPS signal lost") {
+                        val receipt=LimitDiagnostics.snapshot("GPS signal lost",DriveBus.state.value)
+                        withContext(Dispatchers.IO) { runCatching { roads.recordDiagnostic(receipt) }
+                            .onFailure { Log.w("SpeedBuddy","GPS diagnostic could not be saved",it) } }
+                    }
                 }
+                val settings=getSharedPreferences("settings",Context.MODE_PRIVATE)
+                val wallNow=System.currentTimeMillis()
+                if(wallNow-lastMobilePrune>=60_000) {
+                    withContext(Dispatchers.IO) { MobileReportStore(db).prune(wallNow) };lastMobilePrune=wallNow
+                }
+                val visible=DriveBus.state.value
+                visible.alert?.let { alert ->
+                    val present=if(alert.camera.type==CameraType.MOBILE) withContext(Dispatchers.IO) {
+                        val report=alert.camera.mobileReport!!
+                        MobileReportStore(db).activeInBounds(report.point.lat-.00001,report.point.lon-.00001,
+                            report.point.lat+.00001,report.point.lon+.00001,wallNow).any { it.id==report.id }
+                    } else true
+                    if(!present || !cameraEnabled(alert.camera,settings)) DriveBus.set(DriveBus.state.value.copy(
+                        alert=null,decision=CameraDecision(null,null,false,"Camera warning ended")))
+                }
+                if(!fixedSpeedEnabled(settings) && DriveBus.state.value.averageSection!=null)
+                    DriveBus.set(DriveBus.state.value.copy(averageSection=null))
+                cameraVoice.revalidate();announceLimitIfReady(settings)
+                val current = DriveBus.state.value
+                val now = SystemClock.elapsedRealtime()
+                DriveBus.set(current.copy(roadDataStatus = roadStatus(now), tooEarlyAvailable = limitEngine.canReport(now),boundaryAvailable=limitEngine.canMarkBoundary(now),
+                    correctionMessage=feedbackMessage.takeIf { now-feedbackAt in 0..6000 } ?: ""))
+                current.fix?.takeIf { now-it.elapsedMs in 0..5000 }?.let { refresh(it) }
             } }
         }
         DriveBus.set(DriveBus.state.value.copy(active = true, status = "Waiting for GPS"))
@@ -87,51 +188,242 @@ class DrivingService : Service(), LocationListener {
             if (location.hasBearing()) location.bearing.toDouble() else null, location.elapsedRealtimeNanos / 1_000_000)
         if (now - fix.elapsedMs !in 0..5000) return
         val speed = speedFilter.update(fix, now)
-        val wallNow = System.currentTimeMillis()
-        val cached = listOfNotNull(snapshot, previousSnapshot)
-            .filter { it.usable(fix.point, wallNow) }
-            .minByOrNull { Geo.distance(it.center, fix.point) }
-        val road = if (cached != null && fix.accuracyM <= 35) matcher.match(fix, cached.roads) else null
-        val limit = if (cached != null) limitStabilizer.resolve(fix, road, limits.limit(road), now)
-            else { limitStabilizer.reset(); null }
-        val upcoming = cached?.let { upcomingDetector.detect(fix, road, limit, it.roads) }
-        val settings = getSharedPreferences("settings", Context.MODE_PRIVATE)
-        val publicCameras = listOfNotNull(snapshot, previousSnapshot).filter { it.usable(fix.point, wallNow) }
-            .flatMap { it.cameras }.distinctBy { it.id }
-        val userCameras = db.userCameras()
-        val imported = db.importedNearby(fix.point).filterNot { candidate ->
-            publicCameras.any { it.type == candidate.type && Geo.distance(it.point, candidate.point) < 25 }
+        if (!ready) {
+            DriveBus.set(DriveBus.state.value.copy(active=true,speedMph=speed,fix=fix,status="Loading saved road data",mapStatus=mapStatus))
+            return
         }
-        val cameras = publicCameras + userCameras + imported
-        val enabled = cameras.filter { (it.type == CameraType.SPEED && settings.getBoolean("speedCamera", true)) ||
-            (it.type == CameraType.RED_LIGHT && settings.getBoolean("redCamera", true)) }
-        val (alert, decision) = detector.evaluate(fix, road, enabled, speed)
-        if (alert != null && alert.camera.id != lastAlertId) {
-            lastAlertId = alert.camera.id; signal(settings.getBoolean("cameraSound", true), settings.getBoolean("vibrate", true))
-        }
-        val tolerance = settings.getInt("tolerance", 2)
-        if (settings.getBoolean("overspeed", false) && overspeed.update(speed, limit, tolerance)) signal(false, settings.getBoolean("vibrate", true))
-        DriveBus.set(DriveState(true, speed, limit, fix, road, alert, decision,
-            cached?.let { wallNow - it.fetchedAt },
-            when { speed == null -> "GPS speed unavailable"; cached == null -> "Road and public camera data unavailable"; limit == null -> "Road limit unknown"; else -> "" },
-            settings.getBoolean("overspeed", false) && overspeed.isOver(speed, limit, tolerance), mapStatus,
-            upcoming, publicCameras.size, userCameras.size, db.importedInfo()?.count ?: 0, imported.size))
-        val target = OsmCoverage.refreshTarget(snapshot, fix, wallNow, lastAttempt)
-        if (target != null && !fetching) {
-            fetching = true; lastAttempt = wallNow; mapStatus = "Fetching road data"
-            scope.launch {
-                try {
-                    val fresh = withContext(Dispatchers.IO) { osm.fetch(target) }
-                    previousSnapshot = snapshot
-                    snapshot = fresh
-                    mapStatus = "Map data ready"
-                } catch (error: Exception) {
-                    mapStatus = "Map request failed: ${error.message?.take(70) ?: error.javaClass.simpleName}"
+        if (processing?.isActive == true) return // Conflate fixes; never queue a growing list of location work.
+        processing = scope.launch {
+            try {
+                val wallNow = System.currentTimeMillis()
+                if (localGeneration != generation || cameraRevision!=OwnerDataRevision.cameras || now-localAt > 5000 || localPoint?.let { Geo.distance(it,fix.point)>150 } != false) {
+                    val result = withContext(Dispatchers.IO) {
+                        val nearby=roadRepository.nearby(fix.point,RoadTile.at(fix.point) in coverage)
+                        val personal = db.userCameras()
+                        val lufop = db.importedNearby(fix.point)
+                        val count = db.importedInfo()?.count ?: 0
+                        val effective=db.effectiveInBounds(fix.point.lat-.015,fix.point.lon-.025,
+                            fix.point.lat+.015,fix.point.lon+.025,nearby.cameras)
+                        listOf(nearby,personal,lufop,count,effective)
+                    }
+                    @Suppress("UNCHECKED_CAST")
+                    run { local = result[0] as LocalRoads;userCameras = result[1] as List<Camera>;imported = result[2] as List<Camera>;importedCount = result[3] as Int;effectiveCameras=result[4] as List<Camera> }
+                    localPoint=fix.point;localAt=now;localGeneration=generation;cameraRevision=OwnerDataRevision.cameras
                 }
-                finally { fetching = false }
+                if(roadRevision!=OwnerDataRevision.roads) {
+                    val ownerData=withContext(Dispatchers.IO) { Triple(db.roadCorrections().associateBy { it.id },roads.overrides(),roads.boundaries()) }
+                    mapCorrections=ownerData.first;overrides=ownerData.second;boundaries=ownerData.third
+                    observations=withContext(Dispatchers.IO) { roads.observations() }
+                    if(roadRevision>=0) limitEngine.reset()
+                    roadRevision=OwnerDataRevision.roads
+                }
+                val correctedRoads=local.roads.map { mapCorrections[it.road.id]?.apply(it.road) ?: it.road }
+                val decisionAt=SystemClock.elapsedRealtime()
+                if (decisionAt-fix.elapsedMs !in 0..5000) return@launch
+                // State transitions and picker plans share the service's main-thread owner.
+                val result=limitPipeline.evaluate(fix,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,decisionAt,wallNow)
+                val road=result.road;val source=result.source;val decision=result.decision;val limit=decision.mph
+                val upcoming=result.upcoming
+                val settings = getSharedPreferences("settings",Context.MODE_PRIVATE)
+                val publicCameras=local.cameras
+                val importedNearby=imported.filterNot { candidate -> publicCameras.any { it.type==candidate.type && Geo.distance(it.point,candidate.point)<25 } }
+                val enabled=effectiveCameras.filter { cameraEnabled(it,settings) }
+                val tolerance=settings.getInt("tolerance",2)
+                val alertLimit=limit.takeUnless { decision.assumed }
+                val (alert,cameraDecision)=detector.evaluate(fix,road,enabled,speed,correctedRoads,wallNow,
+                    matchedRoadLimitMph=alertLimit,toleranceMph=tolerance)
+                val section=if(fixedSpeedEnabled(settings)) sectionTracker.update(fix,road,local.averageSections) else null
+                val turns=turnDetector.detect(fix,road,limit,correctedRoads)
+                val overspeedSignal=settings.getBoolean("overspeed",false) && overspeed.update(speed,alertLimit,tolerance)
+                val age=local.roads.firstOrNull { it.road.id==road?.road?.id }?.let { (wallNow-it.fetchedAt).coerceAtLeast(0) }
+                val wanted=RoadTiles.covering(fix.point)
+                DriveBus.set(DriveState(active=true,speedMph=speed,limitMph=limit,fix=fix,road=road,alert=alert,decision=cameraDecision,
+                    dataAgeMs=age,status=when { speed==null -> "GPS speed unavailable";limit==null -> "Road limit unknown";else -> "" },
+                    overspeed=settings.getBoolean("overspeed",false) && overspeed.isOver(speed,alertLimit,tolerance),mapStatus=mapStatus,
+                    upcoming=upcoming,publicCameraCount=publicCameras.size,userCameraCount=userCameras.size,importedCameraCount=importedCount,importedNearbyCount=importedNearby.size,
+                    turns=turns,alertPositionFresh=fix.accuracyM<=35,averageSection=section,roadDataStatus=roadStatus(now),limitDecision=decision,sourceLimitMph=source,tooEarlyAvailable=limitEngine.canReport(now),awaitingBoundary=limitEngine.pendingFeedback,
+                    coverageTiles=wanted.count { it in coverage },targetTiles=wanted.size,roadCacheRevision=generation,boundaryAvailable=limitEngine.canMarkBoundary(now),
+                    correctionMessage=feedbackMessage.takeIf { now-feedbackAt in 0..6000 } ?: "").let(result::applyTo))
+                val diagnostic=LimitDiagnostics.snapshot("decision",DriveBus.state.value,transition=limitEngine.transitionEvidence())
+                withContext(Dispatchers.IO) { runCatching { roads.recordDiagnostic(diagnostic) }.onFailure { Log.w("SpeedBuddy","Decision diagnostic could not be saved",it) } }
+                cameraVoice.revalidate()
+                val warning=alert?.warning
+                if(alert!=null && warning!=null) {
+                    cameraVoice.play(CameraAudioCue.from(alert.camera,warning,settings.getBoolean("cameraSound",true)),
+                        relevant={ cameraCueRelevant(CameraEncounters.key(alert.camera),false,warning.limitMph) },
+                        voiceAllowed={ settings.getBoolean("cameraSound",true) && currentCameraLimit()==warning.limitMph &&
+                            (!warning.speeding || cameraCueRelevant(CameraEncounters.key(alert.camera),true,warning.limitMph)) })
+                    signal(false,settings.getBoolean("vibrate",true))
+                }
+                announceLimitIfReady(settings)
+                val cameraLimit=alert?.let { CameraLimits.resolve(it.camera,road,alertLimit) }
+                val cameraCoversSpeeding=cameraLimit!=null && speed!=null && speed>cameraLimit+tolerance.coerceAtLeast(0)
+                if(overspeedSignal && !cameraCoversSpeeding && warning?.doubleBeep!=true) signal(true,settings.getBoolean("vibrate",true))
+                refresh(fix)
+            } catch(e: Exception) {
+                if(e is CancellationException) throw e
+                Log.e("SpeedBuddy","Local road decision failed",e)
+                // Lookup failures use the same bounded geometry/heading continuity as
+                // an empty match; never publish Unknown merely as the catch default.
+                val fallback=runCatching {
+                    limitPipeline.evaluate(fix,emptyList(),overrides,mapCorrections,boundaries,observations,
+                        SystemClock.elapsedRealtime(),System.currentTimeMillis())
+                }.getOrElse {
+                    DriveLimitResult(fix,null,null,LimitDecision(null,reason="Unavailable: local decision failure; continuity could not be evaluated"),null)
+                }.let { it.copy(decision=it.decision.copy(reason=it.decision.reason+"; local road lookup failed")) }
+                DriveBus.set(fallback.applyTo(DriveBus.state.value).copy(speedMph=speed,alert=null,
+                    decision=CameraDecision(null,null,false,"Local road lookup failed"),
+                    overspeed=false,alertPositionFresh=false,turns=emptyList(),mapStatus="Local decision failure: ${e.message}"))
+                val receipt=LimitDiagnostics.snapshot("lookup failure",DriveBus.state.value,transition=limitEngine.transitionEvidence())
+                withContext(Dispatchers.IO) { runCatching { roads.recordDiagnostic(receipt) }
+                    .onFailure { Log.w("SpeedBuddy","Failure diagnostic could not be saved",it) } }
             }
         }
     }
+    private fun roadStatus(now: Long): String = when {
+        fetching -> "Updating road data…"
+        offline -> if(local.roads.isEmpty()) "Offline • no saved roads here" else "Offline • using saved road data"
+        refreshDelayed -> "Using saved road data"
+        now-updatedAt in 0..5000 && updatedAt>0 -> "Road data updated"
+        budgetReached -> "Saved road data • coverage update paused"
+        else -> ""
+    }
+    private fun refresh(fix: Fix) {
+        if(budgetReached && System.currentTimeMillis() >= budgetUntil) budgetReached=false
+        if(!ready || fetching || stopped || budgetReached) return
+        val target=planner.next(fix,coverage,System.currentTimeMillis()) ?: return
+        fetching=true;planner.attempted(System.currentTimeMillis());mapStatus="Updating tile ${target.id}"
+        scope.launch {
+            try {
+                val result=withContext(Dispatchers.IO) {
+                    if(!downloader.permitted()) return@withContext null
+                    val fresh=downloader.fetch(target);ensureActive()
+                    RoadCacheUpdater(roads).refresh(target) { fresh }
+                    val here=RoadTile.at(fix.point)
+                    val protected=buildSet { for(y in here.y-1..here.y+1) for(x in here.x-1..here.x+1) add(RoadTile(y,x)) }
+                    val before=roads.coverage()
+                    roads.cleanup(protected)
+                    roads.coverage() to (before.keys-roads.coverage().keys)
+                }
+                if(result==null) { budgetReached=true;budgetUntil=(System.currentTimeMillis()/86_400_000+1)*86_400_000;mapStatus="Daily public-provider allowance reached; saved data retained" }
+                else { coverage=result.first
+                    if(result.second.isNotEmpty()) planner.retentionLimited(fix.point)
+                    generation++;offline=false;refreshDelayed=false;updatedAt=SystemClock.elapsedRealtime();planner.succeeded();mapStatus="Saved tile ${target.id}; ${coverage.size} tiles available" }
+            } catch(e: Exception) {
+                if(e is CancellationException) throw e
+                offline=e is java.net.UnknownHostException || e is java.net.ConnectException || e is java.net.NoRouteToHostException
+                refreshDelayed=true;planner.failed(System.currentTimeMillis());mapStatus="Refresh failed; retained saved data: ${e.message?.take(100)}"
+                Log.w("SpeedBuddy",mapStatus,e)
+            } finally { fetching=false }
+        }
+    }
+    private fun handleFeedback(intent: Intent) {
+        val state=DriveBus.state.value
+        val fix=state.fix ?: return
+        val now=SystemClock.elapsedRealtime()
+        if(now-fix.elapsedMs !in 0..5000 || feedbackJob?.isActive==true) return
+        if(intent.action in listOf("SET_LIMIT","STARTS_HERE","TOO_EARLY") &&
+            intent.getStringExtra("road")!=state.road?.road?.id) { feedback("Road changed. Tap the sign again.");return }
+        when(intent.action) {
+            "TOO_EARLY" -> if(limitEngine.tooEarly(fix,now)) {
+                val d=limitEngine.decide(fix,state.road,state.sourceLimitMph,null,boundaries,now)
+                DriveBus.set(state.copy(limitMph=d.mph,limitDecision=d,tooEarlyAvailable=false,awaitingBoundary=true,upcoming=d.upcoming))
+            }
+            "CANCEL_BOUNDARY" -> { limitEngine.cancelFeedback();DriveBus.set(state.copy(awaitingBoundary=false,tooEarlyAvailable=false)) }
+            "CHANGED_NOW","STARTS_HERE" -> {
+                if(intent.getStringExtra("road")?.let { it!=state.road?.road?.id } == true) { feedback("Road changed. Tap the sign again.");return }
+                if(intent.action=="STARTS_HERE" && intent.getIntExtra("mph",OWNER_UNKNOWN)!=state.sourceLimitMph) {
+                    feedback("Limit changed. Tap the sign again.");return
+                }
+                val correction=limitEngine.startsHere(fix,now) ?: run { feedback("Wait for a clear road and GPS match.");return }
+                feedbackJob=scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) { roads.saveBoundary(correction) }
+                        boundaries=withContext(Dispatchers.IO) { roads.boundaries() };limitEngine.feedbackSaved()
+                        applyLiveCorrections()
+                        feedback("Limit starts here • saved")
+                    } catch(e: Exception) { if(e is CancellationException) throw e;Log.w("SpeedBuddy","Boundary could not be saved",e);feedback("Could not save. Try again when stopped.") }
+                }
+            }
+            "SET_LIMIT","RESET_CORRECTIONS","RESET_ROAD","SET_OVERRIDE" -> {
+                if(intent.action!="SET_LIMIT" && (state.speedMph ?: Double.MAX_VALUE)>=5) return
+                val road=state.road?.road
+                if(intent.action!="RESET_CORRECTIONS" && (road==null || fix.bearing==null)) {
+                    val receipt=LimitDiagnostics.snapshot("unmatched correction",state,intent.getIntExtra("mph",OWNER_UNKNOWN),transition=limitEngine.transitionEvidence())
+                    scope.launch(Dispatchers.IO) { runCatching { roads.recordDiagnostic(receipt) } }
+                    feedback("Road not matched yet. Keep driving and tap the sign again.")
+                    return
+                }
+                val selected=intent.getIntExtra("mph",OWNER_UNKNOWN)
+                val plan=if(intent.action in listOf("SET_LIMIT","SET_OVERRIDE")) limitEngine.planSelection(fix,state.road,state.sourceLimitMph,
+                    selected,intent.getStringExtra("road") ?: road!!.id,now,System.currentTimeMillis(),observations) else null
+                if(intent.action in listOf("SET_LIMIT","SET_OVERRIDE") && plan==null) {
+                    val receipt=LimitDiagnostics.snapshot("rejected correction",state,selected,transition=limitEngine.transitionEvidence())
+                    scope.launch(Dispatchers.IO) { runCatching { roads.recordDiagnostic(receipt) } }
+                    feedback("Road or GPS changed. Tap the sign again.");return
+                }
+                val receipt=LimitDiagnostics.snapshot("correction",state,selected,plan,limitEngine.transitionEvidence())
+                feedbackJob=scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            if(intent.action=="RESET_CORRECTIONS") roads.resetCorrections()
+                            else if(intent.action=="RESET_ROAD") roads.setOverride(road!!.id,fix.bearing!!,null)
+                            else roads.saveSelection(plan!!,receipt)
+                        }
+                        boundaries=withContext(Dispatchers.IO) { roads.boundaries() };overrides=withContext(Dispatchers.IO) { roads.overrides() }
+                        observations=withContext(Dispatchers.IO) { roads.observations() }
+                        limitPipeline.acceptSavedSelection(plan)
+                        // Never overwrite a newer road fix with the saved picker target.
+                        applyLiveCorrections()
+                        feedback(plan?.message ?: "Corrections reset")
+                    } catch(e: Exception) { if(e is CancellationException) throw e;Log.w("SpeedBuddy","Correction update failed",e);feedback("Could not save. Try again when stopped.") }
+                }
+            }
+        }
+    }
+    private fun feedback(message: String) {
+        feedbackMessage=message;feedbackAt=SystemClock.elapsedRealtime()
+        DriveBus.set(DriveBus.state.value.copy(correctionMessage=message))
+    }
+    private fun applyLiveCorrections() {
+        val live=DriveBus.state.value
+        val current=live.fix
+        val now=SystemClock.elapsedRealtime()
+        if(current==null || now-current.elapsedMs !in 0..5000) {
+            DriveBus.set(live.copy(limitMph=null,limitDecision=null,upcoming=null,awaitingBoundary=false,boundaryAvailable=false,tooEarlyAvailable=false))
+            return
+        }
+        val result=limitPipeline.evaluate(current,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,now,System.currentTimeMillis())
+        DriveBus.set(result.applyTo(live).copy(awaitingBoundary=false,boundaryAvailable=false,tooEarlyAvailable=false))
+    }
+    private fun fixedSpeedEnabled(settings: android.content.SharedPreferences) = CameraAlertPolicy.enabled(
+        CameraType.AVERAGE,settings.getBoolean("fixedCamera",true),settings.getBoolean("mobileCamera",true),
+        settings.getBoolean("speedCamera",true),settings.getBoolean("redCamera",true))
+    private fun cameraCueRelevant(id: String, speeding: Boolean, limit: Int?): Boolean {
+        val live = DriveBus.state.value
+        val settings = getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val fresh = live.active && live.alertPositionFresh && live.fix?.let {
+            SystemClock.elapsedRealtime() - it.elapsedMs in 0..5_000
+        } == true
+        return CameraCueValidity.relevant(live.alert, live.speedMph, fresh,
+            live.alert?.let { cameraEnabled(it.camera, settings) } == true,
+            id, speeding, limit, settings.getInt("tolerance", 2), System.currentTimeMillis(),
+            currentLimit = currentCameraLimit())
+    }
+    private fun currentCameraLimit(): Int? {
+        val live = DriveBus.state.value
+        return live.alert?.let { CameraLimits.resolve(it.camera, live.road, live.limitMph.takeUnless { live.limitDecision?.assumed==true }) }
+    }
+    private fun announceLimitIfReady(settings: android.content.SharedPreferences) {
+        val current = DriveBus.state.value
+        val limit = limitVoiceGate.update(current.limitMph.takeUnless { current.limitDecision?.assumed==true }, cameraVoice.busy, settings.getBoolean("limitVoice", true))
+        if (limit != null) cameraVoice.play(CameraAudioCue("Speed limit $limit miles per hour.", false),
+            relevant = { DriveBus.state.value.active && DriveBus.state.value.limitMph == limit && DriveBus.state.value.limitDecision?.assumed!=true },
+            voiceAllowed = { settings.getBoolean("limitVoice", true) })
+    }
+    private fun cameraEnabled(camera: Camera, settings: android.content.SharedPreferences) = CameraAlertPolicy.enabled(
+        camera.type,settings.getBoolean("fixedCamera",true),settings.getBoolean("mobileCamera",true),
+        settings.getBoolean("speedCamera",true),settings.getBoolean("redCamera",true))
     private fun signal(sound: Boolean, vibration: Boolean) {
         if (sound) runCatching {
             ToneGenerator(AudioManager.STREAM_NOTIFICATION, 75).also { tone ->
@@ -147,7 +439,9 @@ class DrivingService : Service(), LocationListener {
         }.onFailure { Log.w("SpeedBuddy", "Vibration alert unavailable", it) }
     }
     override fun onDestroy() {
-        tick?.cancel(); scope.cancel(); locationManager.removeUpdates(this); db.close()
+        stopped=true;tick?.cancel();cameraVoice.close();scope.cancel();locationManager.removeUpdates(this)
+        // Blocking HTTP/database work may still be unwinding. Close after all children finish.
+        CoroutineScope(Dispatchers.IO).launch { scope.coroutineContext[Job]?.join();db.close();roads.close() }
         DriveBus.set(DriveState(status = "Driving mode stopped")); super.onDestroy()
     }
 }

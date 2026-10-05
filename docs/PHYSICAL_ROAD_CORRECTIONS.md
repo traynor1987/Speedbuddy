@@ -1,0 +1,35 @@
+# Physical-road correction audit
+
+## Recovered state and rejected candidate
+
+Recovered remote `feat/offline-road-limits` at `968dc732f9cf5b49b107a599e479b1c645a37aad`. PR #2 was open, draft and unmerged. The owner physically rejected 0.2.2/code 11 after observing `60 → Unknown → 60`, unnecessary Unknown during `60 → 40`, and picker corrections that did not naturally teach transition position. Existing feature/camera/cache work is retained. No merge or physical-pass claim is permitted.
+
+## Production trace and causes
+
+`DrivingService.onLocationChanged` reads saved road coverage, calls `RoadMatcher`, obtains the source via `OsmSpeedLimitProvider`, selects directed/global owner evidence, calls the decision engine, and publishes `DriveState` consumed by the main sign. The replacement consolidates that path in `DrivingLimitPipeline`; the service and road-style regression tests invoke the same matching, source selection, decision and UI-state mapping.
+
+The rejected candidate's assumption helper required a non-null road match, so even a brief lookup gap on confirmed geometry returned Unknown. It reset stabilizer history during unknown input and again when source tags returned, permitting either Unknown or an unconfirmed promotion. The stabilizer also dropped the old limit beyond its 150 m prior-road window, even on a connected strong new-road candidate. Normal `SET_LIMIT` picker actions always saved a directed whole-road override; boundary learning required separate buttons. Tests had exercised the helper's connected unknown-tag case and explicit boundary actions, without reproducing the complete missing-match path or normal picker sequence.
+
+## Corrected decision and selection rules
+
+* Known source recovery preserves transition history. A temporary match gap inherits only while fresh GPS fits prior confirmed geometry and heading; its maximum is 15 seconds. Connected matched unknown roads retain the existing 90-second/750-metre bound. Assumed evidence never renews its own anchor and does not authorize overspeed audio.
+* A strong current candidate still requires three aligned updates over two seconds before promotion. Connected evidence can retain the previous current limit as assumed when a larger GPS step exceeds the stabilizer's narrower geometry window. Disconnected geometry, poor GPS, heading changes and expired evidence remain Unknown.
+* Upcoming warnings remain separate from current authority. During a matching gap, an already established warning may survive at most 15 seconds/150 metres with compatible heading and unchanged assumed current limit; its preview is marked uncertain and is not renewed from inherited preview evidence. A match to a different branch drops the abandoned road's preview.
+* A normal old-limit picker tap during a credible directed transition records a durable local `BoundaryObservation`. It does not overwrite the upcoming road. A later selected source limit pairs only within 120 seconds/600 metres, with fresh accurate GPS, matching directed connected context and forward progression exceeding both observation accuracies. Unknown/National retain explicit owner meanings. Unrelated wrong-limit selections are directed local overrides within 150 metres of the captured position; a single tap cannot alter a long OSM way everywhere. Explicit map edits and legacy overrides without a captured point preserve their existing whole-road semantics.
+* `60 still here` followed by `30 starts here` can locally bypass the identified intermediate 40 road. The learned boundary records its explicit via-road IDs; reverse travel and unrelated short zones do not inherit this decision.
+* Owner observations and learned boundaries also supply the confirmed continuity anchor. A brief source/match gap after the owner's 60 assertion inherits 60, rather than the rejected premature source 40. Approaching a learned bypass previews its actual next limit, including on the original approach road.
+* After the second tap is durably saved, the new limit becomes CURRENT immediately for this pass. This live owner assertion arms only the saved directed boundary's in-memory crossing state; future passes/restarts still use the normal boundary and GPS uncertainty checks. Production pipeline and Android storage/UI-state regressions cover both behaviours.
+* SQLite saves the observation/boundary, classification receipt and retired conflicting segment overrides transactionally before live activation. Unpaired observations resume after restart only inside their original bounds. Public tile replacement never mutates owner tables. Portable backup v12 retains observations and boundary scopes, while v1–11 remain readable.
+* The sheet contains only the eight large UK-sign choices. Selecting the old limit can confirm it here; selecting the new limit can mark its start here. No separate boundary wizard or keyboard is required.
+
+## Diagnostics and verification gates
+
+The bounded diagnostic table keeps 500 receipts containing displayed state/value, selection, location, accuracy, heading, elapsed time, matched road/confidence/distance, original source limit, upcoming road/value/distance, transition evidence, classification, boundary/observation details and decision/drop reason. Diagnostic observation receipts omit full road geometry. Stored owner evidence retains the geometry needed for conservative pairing.
+
+Regression suites cover actual matcher/provider/engine/UI mapping, gaps, real transitions, large GPS steps, ordinary two-tap boundaries, restart/refresh/backup, reverse direction, assumption expiry, genuine short zones, false local intermediate zones and legacy override retirement. Independent review additionally identified delayed/stale GPS mutation, recorded-boundary accuracy bypass and preview road scope; dedicated regressions reproduce each failure before its fix.
+
+Local and remote validation must include all JVM and signing pipeline tests, API-35 instrumentation, debug/test/release builds and debug/release lint. The final exact-source push and independent PR CI must be green. The replacement is 0.2.3/code 12, pinned to the existing certificate `ddcf05c06ca3442774ea24273ea9a31c213bbc78520032cfa2994c2118d2f947`. The acceptance APK is never a debug/disposable-key build.
+
+Initial remote head `a40cc5a998286c23043f6f2fac0895b61e161298` passed both build jobs and the new physical-road instrumentation cases, but push #104/PR #105 exposed an inaccurate legacy version-2 fixture: it retained the version-4 learning tables before manually lowering the schema version. The fixture now reproduces the actual old schema. An additional version-3 → 4 instrumentation case checks retained roads, cameras, average sections, overrides and learned boundaries, plus writable/reopenable new observation/diagnostic tables. Final candidate publication still requires fresh green push and PR runs on the superseding exact head.
+
+The remaining exit gate is the owner retest in `PHYSICAL_RETEST.md`. Stop for owner physical acceptance with PR #2 draft and unmerged.
