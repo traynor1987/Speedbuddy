@@ -11,8 +11,8 @@ android {
         applicationId = "uk.co.traynor.speedbuddy"
         minSdk = 28
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.2.4"
+        versionCode = 14
+        versionName = "0.2.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes { release { isMinifyEnabled = false } }
@@ -26,14 +26,14 @@ val ownerSourceSha = providers.environmentVariable("SPEED_BUDDY_SOURCE_SHA").orE
 val ownerAssets = layout.buildDirectory.dir("generated/owner-assets")
 val generateOwnerBuildIdentity = tasks.register("generateOwnerBuildIdentity") {
     inputs.property("sourceSha", ownerSourceSha)
-    inputs.property("versionCode", 13)
-    inputs.property("versionName", "0.2.4")
+    inputs.property("versionCode", 14)
+    inputs.property("versionName", "0.2.5")
     outputs.dir(ownerAssets)
     doLast {
         val sha = ownerSourceSha.get()
         require(sha == "development" || sha.matches(Regex("[0-9a-f]{40}")))
         val folder = ownerAssets.get().asFile.apply { mkdirs() }
-        folder.resolve("owner-build.json").writeText("""{"sourceSha":"$sha","versionCode":13,"versionName":"0.2.4"}""")
+        folder.resolve("owner-build.json").writeText("""{"sourceSha":"$sha","versionCode":14,"versionName":"0.2.5"}""")
     }
 }
 android.sourceSets.getByName("main").assets.srcDir(ownerAssets)
@@ -49,6 +49,9 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.5")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
+    // Passive Android Auto surface. It only observes the existing DriveBus; it
+    // must never become another GPS, database or warning-service owner.
+    implementation("androidx.car.app:app:1.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.maplibre.gl:android-sdk-opengl:13.6.0")
     testImplementation("junit:junit:4.13.2")
