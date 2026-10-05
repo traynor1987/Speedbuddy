@@ -1,8 +1,10 @@
 package uk.co.traynor.speedbuddy
 
+
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
 import org.junit.Test
+
 
 class PhysicalRoadPipelineTest {
     private val context get()=InstrumentationRegistry.getInstrumentation().targetContext
@@ -64,7 +66,11 @@ class PhysicalRoadPipelineTest {
             val after=replay.evaluate(fix(320.0,2000),listOf(old,next),db.overrides(),emptyMap(),db.boundaries(),db.observations(),2000,21_000)
             assertEquals(40,after.decision.mph)
             val reverse=DrivingLimitPipeline().evaluate(fix(270.0,1000,180.0),listOf(old,next),db.overrides(),emptyMap(),db.boundaries(),db.observations(),1000,22_000)
-            assertEquals(40,reverse.decision.mph);assertFalse(reverse.decision.boundaryApplied)
+            // The learned boundary is an ordinary, evidenced two-way UK boundary.
+            // In reverse it must retain the current 60 until the same physical
+            // sign location, rather than incorrectly applying 40 everywhere.
+            assertEquals(60,reverse.decision.mph);assertTrue(reverse.decision.boundaryApplied)
+            assertEquals(40,reverse.upcoming?.mph)
         }
     }
 }
