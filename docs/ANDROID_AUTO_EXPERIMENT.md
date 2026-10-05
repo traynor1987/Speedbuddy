@@ -12,7 +12,7 @@ Google Maps remains responsible for navigation.
 
 ## Install and test
 
-1. Install the signed `SpeedBuddy-0.2.5-owner-acceptance.apk` over the existing
+1. Install the signed `SpeedBuddy-0.2.6-owner-acceptance.apk` over the existing
    Speed Buddy install. Do not uninstall: the permanent signing certificate and
    increased version code permit an ordinary in-place update.
 2. On the phone, open Android Auto settings and tap the version entry repeatedly
