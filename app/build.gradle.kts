@@ -11,8 +11,8 @@ android {
         applicationId = "uk.co.traynor.speedbuddy"
         minSdk = 28
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.2.5"
+        versionCode = 15
+        versionName = "0.2.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes { release { isMinifyEnabled = false } }
@@ -26,14 +26,14 @@ val ownerSourceSha = providers.environmentVariable("SPEED_BUDDY_SOURCE_SHA").orE
 val ownerAssets = layout.buildDirectory.dir("generated/owner-assets")
 val generateOwnerBuildIdentity = tasks.register("generateOwnerBuildIdentity") {
     inputs.property("sourceSha", ownerSourceSha)
-    inputs.property("versionCode", 14)
-    inputs.property("versionName", "0.2.5")
+    inputs.property("versionCode", 15)
+    inputs.property("versionName", "0.2.6"
     outputs.dir(ownerAssets)
     doLast {
         val sha = ownerSourceSha.get()
         require(sha == "development" || sha.matches(Regex("[0-9a-f]{40}")))
         val folder = ownerAssets.get().asFile.apply { mkdirs() }
-        folder.resolve("owner-build.json").writeText("""{"sourceSha":"$sha","versionCode":14,"versionName":"0.2.5"}""")
+        folder.resolve("owner-build.json").writeText("""{"sourceSha":"$sha","versionCode":15,"versionName":"0.2.6"}""")
     }
 }
 android.sourceSets.getByName("main").assets.srcDir(ownerAssets)
