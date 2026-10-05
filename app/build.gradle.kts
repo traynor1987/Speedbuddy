@@ -27,7 +27,7 @@ val ownerAssets = layout.buildDirectory.dir("generated/owner-assets")
 val generateOwnerBuildIdentity = tasks.register("generateOwnerBuildIdentity") {
     inputs.property("sourceSha", ownerSourceSha)
     inputs.property("versionCode", 15)
-    inputs.property("versionName", "0.2.6"
+    inputs.property("versionName", "0.2.6")
     outputs.dir(ownerAssets)
     doLast {
         val sha = ownerSourceSha.get()
