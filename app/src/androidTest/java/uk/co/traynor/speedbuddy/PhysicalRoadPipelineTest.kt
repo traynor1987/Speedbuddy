@@ -67,10 +67,10 @@ class PhysicalRoadPipelineTest {
             assertEquals(40,after.decision.mph)
             val reverse=DrivingLimitPipeline().evaluate(fix(270.0,1000,180.0),listOf(old,next),db.overrides(),emptyMap(),db.boundaries(),db.observations(),1000,22_000)
             // The learned boundary is an ordinary, evidenced two-way UK boundary.
-            // In reverse it must retain the current 60 until the same physical
-            // sign location, rather than incorrectly applying 40 everywhere.
-            assertEquals(60,reverse.decision.mph);assertTrue(reverse.decision.boundaryApplied)
-            assertEquals(40,reverse.upcoming?.mph)
+            // In reverse, the vehicle is still on the 40 side and the same
+            // physical boundary must be active for the opposite approach.
+            assertEquals(40,reverse.decision.mph);assertTrue(reverse.decision.boundaryApplied)
+            assertEquals(60,reverse.upcoming?.mph)
         }
     }
 }
