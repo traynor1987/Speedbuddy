@@ -44,3 +44,12 @@ guidance, a destination or an active navigation session. The Android Auto host
 owns template typography and exact layout, so a UK circular speed-sign graphic
 cannot be forced. This APK is an empirical host-compatibility test and is not a
 claim of Play-distribution eligibility.
+
+
+## 0.2.6 launcher-discovery repair
+
+0.2.5 correctly declared the `CarAppService`, but omitted Android Auto's
+application descriptor (`com.google.android.gms.car.application`) and the
+required `template` capability resource. Android Auto reads that descriptor
+when deciding whether to list a templated app; 0.2.6 adds it without adding a
+destination, route, navigation session or any second driving engine.
