@@ -1,62 +1,30 @@
-package uk.co.traynor.speedbuddy
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×wN‹Z–‹­¦ëeŠw¬ÕÁ…­…”Õ¬¹¼¹ÑÉ…å¹½È¹ÍÁ••‘‰Õ‘‘ä()¥µÁ½ÉÐ…¹‘É½¥¹½¹Ñ•¹Ð¹%¹Ñ•¹Ð)¥µÁ½ÉÐ…¹‘É½¥¹É…Á¡¥Ì¹	¥Ñµ…À)¥µÁ½ÉÐ…¹‘É½¥¹É…Á¡¥Ì¹…¹Ù…Ì)¥µÁ½ÉÐ…¹‘É½¥¹É…Á¡¥Ì¹½±½È)¥µÁ½ÉÐ…¹‘É½¥¹É…Á¡¥Ì¹A…¥¹Ð)¥µÁ½ÉÐ…¹‘É½¥¹É…Á¡¥Ì¹QåÁ•™…”)¥µÁ½ÉÐ…¹‘É½¥‘à¹…È¹…ÁÀ¹…ÉÁÁM•ÉÙ¥”)¥µÁ½ÉÐ…¹‘É½¥‘à¹…È¹…ÁÀ¹MÉ••¸)¥µÁ½ÉÐ…¹‘É½¥‘à¹…È¹…ÁÀ¹M•ÍÍ¥½¸)¥µÁ½ÉÐ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹…É%½¸)¥µÁ½ÉÐ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹!•…‘•È)¥µÁ½ÉÐ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹A…¹”)¥µÁ½ÉÐ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹A…¹•Q•µÁ±…Ñ”)¥µÁ½ÉÐ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹I½Ü)¥µÁ½ÉÐ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹Q•µÁ±…Ñ”)¥µÁ½ÉÐ…¹‘É½¥‘à¹…È¹…ÁÀ¹Ù…±¥‘…Ñ¥½¸¹!½ÍÑY…±¥‘…Ñ½È)¥µÁ½ÉÐ…¹‘É½¥‘à¹½É”¹É…Á¡¥Ì¹‘É…Ý…‰±”¹%½¹½µÁ…Ð)¥µÁ½ÉÐ…¹‘É½¥‘à¹±¥™•å±”¹•™…Õ±Ñ1¥™•å±•=‰Í•ÉÙ•È)¥µÁ½ÉÐ…¹‘É½¥‘à¹±¥™•å±”¹1¥™•å±•=Ý¹•È)¥µÁ½ÉÐ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹½É½ÕÑ¥¹•M½Á”)¥µÁ½ÉÐ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹¥ÍÁ…Ñ¡•ÉÌ)¥µÁ½ÉÐ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹MÕÁ•ÉÙ¥Í½É)½ˆ)¥µÁ½ÉÐ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹…¹•°)¥µÁ½ÉÐ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹™±½Ü¹½±±•Ð)¥µÁ½ÉÐ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹±…Õ¹ ()±…ÍÌMÁ••‘	Õ‘‘å…ÉÁÁM•ÉÙ¥”€è…ÉÁÁM•ÉÙ¥” ¤ì(€€€½Ù•ÉÉ¥‘”™Õ¸É•…Ñ•!½ÍÑY…±¥‘…Ñ½È ¤è!½ÍÑY…±¥‘…Ñ½È€ô!½ÍÑY…±¥‘…Ñ½È¹11=]}11}!=MQM}Y1%Q=H(€€€½Ù•ÉÉ¥‘”™Õ¸½¹É•…Ñ•M•ÍÍ¥½¸ ¤èM•ÍÍ¥½¸€ôMÁ••‘	Õ‘‘å…ÉM•ÍÍ¥½¸ ¤)ô)ÁÉ¥Ù…Ñ”±…ÍÌMÁ••‘	Õ‘‘å…ÉM•ÍÍ¥½¸€èM•ÍÍ¥½¸ ¤ì(€€€½Ù•ÉÉ¥‘”™Õ¸½¹É•…Ñ•MÉ••¸¡¥¹Ñ•¹Ðè%¹Ñ•¹Ð¤èMÉ••¸€ôMÁ••‘	Õ‘‘å…ÉMÉ••¸¡…É½¹Ñ•áÐ¤)ô)ÁÉ¥Ù…Ñ”±…ÍÌMÁ••‘	Õ‘‘å…ÉMÉ••¸¡…É½¹Ñ•áÐè…¹‘É½¥‘à¹…È¹…ÁÀ¹…É½¹Ñ•áÐ¤€èMÉ••¸¡…É½¹Ñ•áÐ¤ì(€€€ÁÉ¥Ù…Ñ”Ù…°ÕÁ‘…Ñ•Ì€ô½É½ÕÑ¥¹•M½Á”¡MÕÁ•ÉÙ¥Í½É)½ˆ ¤€¬¥ÍÁ…Ñ¡•ÉÌ¹5…¥¸¹¥µµ•‘§w¶‰žËkºwµç]J]
+K˜Z[
 
-import android.content.Intent
-import androidx.car.app.CarAppService
-import androidx.car.app.Screen
-import androidx.car.app.Session
-import androidx.car.app.model.CarIcon
-import androidx.car.app.model.Header
-import androidx.car.app.model.Pane
-import androidx.car.app.model.PaneTemplate
-import androidx.car.app.model.Row
-import androidx.car.app.model.Template
-import androidx.car.app.validation.HostValidator
-import androidx.core.graphics.drawable.IconCompat
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.LifecycleOwner
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
+JHBˆ™]\›ˆ[™U[\]KZ[\Š[™K˜Z[
 
-class SpeedBuddyCarAppService : CarAppService() {
-    override fun createHostValidator(): HostValidator = HostValidator.ALLOW_ALL_HOSTS_VALIDATOR
-    override fun onCreateSession(): Session = SpeedBuddyCarSession()
-}
-private class SpeedBuddyCarSession : Session() {
-    override fun onCreateScreen(intent: Intent): Screen = SpeedBuddyCarScreen(carContext)
-}
-private class SpeedBuddyCarScreen(carContext: androidx.car.app.CarContext) : Screen(carContext) {
-    private val updates = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    init {
-        lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onDestroy(owner: LifecycleOwner) { updates.cancel() }
-        })
-        updates.launch { DriveBus.state.collectLatest { invalidate() } }
-    }
-    override fun onGetTemplate(): Template {
-        val view = AndroidAutoPresenter.present(DriveBus.state.value)
-        // The host scales this large sign for a wide surface or a dashboard
-        // split. Two concise rows preserve a deliberately limit-first layout.
-        val pane = Pane.Builder().setImage(signIcon(view.limitSign))
-        pane.addRow(Row.Builder().setTitle(view.speed).apply {
-            view.confidence?.let(::addText)
-            view.status?.let(::addText)
-        }.build())
-        (view.camera ?: view.upcoming)?.let { pane.addRow(Row.Builder().setTitle(it).build()) }
-        return PaneTemplate.Builder(pane.build()).setHeader(Header.Builder().setTitle("Speed Buddy").build()).build()
-    }
-    private fun signIcon(sign: AndroidAutoLimitSign): CarIcon = CarIcon.Builder(
-        IconCompat.createWithResource(carContext, when (sign) {
-            AndroidAutoLimitSign.MPH_20 -> R.drawable.aa_limit_20
-            AndroidAutoLimitSign.MPH_30 -> R.drawable.aa_limit_30
-            AndroidAutoLimitSign.MPH_40 -> R.drawable.aa_limit_40
-            AndroidAutoLimitSign.MPH_50 -> R.drawable.aa_limit_50
-            AndroidAutoLimitSign.MPH_60 -> R.drawable.aa_limit_60
-            AndroidAutoLimitSign.MPH_70 -> R.drawable.aa_limit_70
-            AndroidAutoLimitSign.UNKNOWN -> R.drawable.aa_limit_unknown
-        })
-    ).build()
-}
+JKœÙ]XY\ŠXY\‹Z[\Š
+KœÙ]]J”ÜYYYHŠK˜Z[
+
+JK˜Z[
+
+BˆBˆš]˜]H[ˆÚYÛ’XÛÛŠÚYÛŽˆ[™›ÚY]]Ó[Z]ÚYÛŠNˆØ\’XÛÛˆHØ\’XÛÛ‹Z[\ŠˆXÛÛÛÛ\]˜Ü™X]UÚ]™\ÛÝ\˜ÙJØ\ÛÛ^Ú[ˆ
+ÚYÛŠHÂˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÌŒOˆ‹™˜]ØX›K˜XWÛ[Z]ÌŒˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÌÌOˆ‹™˜]ØX›K˜XWÛ[Z]ÌÌˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÍOˆ‹™˜]ØX›K˜XWÛ[Z]Íˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÍLOˆ‹™˜]ØX›K˜XWÛ[Z]ÍLˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÍŒOˆ‹™˜]ØX›K˜XWÛ[Z]ÍŒˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÍÌOˆ‹™˜]ØX›K˜XWÛ[Z]ÍÌˆ[™›ÚY]]Ó[Z]ÚYÛ‹•S’Ó“ÕÓˆOˆ‹™˜]ØX›K˜XWÛ[Z]Ý[šÛ›ÝÛ‚ˆJBˆ
+K˜Z[
+
+B‚ˆš]˜]H[ˆÜYYXÛÛŠÜYYˆÝš[™ÊNˆØ\’XÛÛˆÂˆ˜[š]X\Hš]X\˜Ü™X]Pš]X\
+ŒŒš]X\ÛÛ™šYËT‘Ð—Î
+Bˆ˜[Ø[˜\ÈHØ[˜\Êš]X\
+Bˆ˜[˜[YHHÜYYœÝXœÝš[™Ð™Y›Ü™J	È	ÊBˆ˜[˜[YTZ[HZ[
+Z[S•WÐSPT×Ñ“QÊK˜\HÂˆÛÛÜˆHÛÛÜ‹•ÒUNÈ\Y˜XÙHH\Y˜XÙK˜Ü™X]J\Y˜XÙK‘QUS\Y˜XÙK“Ó
+Bˆ^[YÛˆHZ[[YÛ‹ÑS•TŽÈ^Ú^™HHLL™‚ˆBˆ˜[[š]Z[HZ[
+˜[YTZ[
+K˜\HÈ^Ú^™HHÍÙŽÈ]\”ÜXÚ[™ÈHŒˆBˆØ[˜\Ë™˜]Õ^
+˜[YKLL™‹LN‹˜[YTZ[
+BˆØ[˜\Ë™˜]Õ^
+“T‹LL™‹MÌ‹[š]Z[
+Bˆ™]\›ˆØ\’XÛÛ‹Z[\ŠXÛÛÛÛ\]˜Ü™X]UÚ]š]X\
+š]X\
+JK˜Z[
+
+BˆBŸB

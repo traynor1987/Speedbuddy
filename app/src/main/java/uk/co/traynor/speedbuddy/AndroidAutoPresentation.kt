@@ -19,7 +19,7 @@ object AndroidAutoPresenter {
         return AndroidAutoPresentation(
             limitSign = signFor(limit),
             limitLabel = limit?.let { "$it mph" } ?: "—",
-            speed = state.speedMph?.let { "${it.toInt()} mph" } ?: "GPS speed unavailable",
+            speed = state.speedMph?.let { "${it.toInt()} MPH" } ?: "— MPH",
             confidence = if (state.limitDecision?.assumed == true && limit != null) "⚠ Assumed — not confirmed" else null,
             upcoming = state.upcoming?.takeIf { it.isCredibleUpcoming(limit) }?.let { "NEXT ${it.mph} mph · ${yards(it.distanceM)}" },
             camera = state.alert?.let(::cameraText),

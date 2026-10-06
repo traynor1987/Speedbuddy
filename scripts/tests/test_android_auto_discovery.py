@@ -1,17 +1,26 @@
-"""Fail closed if the Android Auto launcher-discovery contract is removed."""
-from pathlib import Path
-import unittest
-import xml.etree.ElementTree as ET
-ROOT=Path(__file__).resolve().parents[2]
-MANIFEST=ROOT/"app/src/main/AndroidManifest.xml"; DESCRIPTOR=ROOT/"app/src/main/res/xml/automotive_app_desc.xml"
-class AndroidAutoDiscoveryTest(unittest.TestCase):
-    def test_template_descriptor_and_service_are_declared(self):
-        manifest=ET.parse(MANIFEST).getroot(); android="{http://schemas.android.com/apk/res/android}"; application=manifest.find("application")
-        descriptor=next((x for x in application.findall("meta-data") if x.get(android+"name")=="com.google.android.gms.car.application"),None)
-        self.assertIsNotNone(descriptor); self.assertEqual("@xml/automotive_app_desc",descriptor.get(android+"resource"))
-        service=next((x for x in application.findall("service") if x.get(android+"name")==".SpeedBuddyCarAppService"),None)
-        self.assertIsNotNone(service); self.assertEqual("true",service.get(android+"exported"))
-        f=service.find("intent-filter"); self.assertEqual("androidx.car.app.CarAppService",f.find("action").get(android+"name")); self.assertEqual("androidx.car.app.category.NAVIGATION",f.find("category").get(android+"name"))
-    def test_descriptor_declares_car_app_library_templates(self):
-        descriptor=ET.parse(DESCRIPTOR).getroot(); self.assertEqual(["template"],[x.get("name") for x in descriptor.findall("uses")])
-if __name__=="__main__": unittest.main()
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×~8N‹Z–‹­¦ëeŠw¬Ôˆˆ‰…¥°±½Í•¥˜Ñ¡”¹‘É½¥ÕÑ¼±…Õ¹¡•Èµ‘¥Í½Ù•Éä½¹ÑÉ…Ğ¥ÌÉ•µ½Ù•¸ˆˆˆ)™É½´Á…Ñ¡±¥ˆ¥µÁ½ÉĞA…Ñ )¥µÁ½ÉĞÍÑÉÕĞ)¥µÁ½ÉĞé±¥ˆ)¥µÁ½ÉĞÕ¹¥ÑÑ•ÍĞ)¥µÁ½ÉĞáµ°¹•ÑÉ•”¹±•µ•¹ÑQÉ•”…ÌP)I==PõA…Ñ ¡}}™¥±•}|¤¹É•Í½±Ù” ¤¹Á…É•¹ÑÍlÉt)59%MPõI==P¼‰…ÁÀ½ÍÉŒ½µ…¥¸½¹‘É½¥‘5…¹¥™•ÍĞ¹áµ°ˆìMI%AQ=HõI==P¼‰…ÁÀ½ÍÉŒ½µ…¥¸½É•Ì½áµ°½…ÕÑ½µ½Ñ¥Ù•}…ÁÁ}‘•ÍŒ¹áµ°ˆ)MIY%õI==P¼‰…ÁÀ½ÍÉŒ½µ…¥¸½©…Ù„½Õ¬½¼½ÑÉ…å¹½È½ÍÁ••‘‰Õ‘‘ä½MÁ••‘	Õ‘‘å…ÉÁÁM•ÉÙ¥”¹­Ğˆ)±…ÍÌ¹‘É½¥‘ÕÑ½¥Í½Ù•ÉåQ•ÍĞ¡Õ¹¥ÑÑ•ÍĞ¹Q•ÍÑ…Í”¤è(€€€‘•˜Ñ•ÍÑ}Ñ•µÁ±…Ñ•}‘•ÍÉ¥ÁÑ½É}…¹‘}Í•ÉÙ¥•}…É•}‘•±…É•¡Í•±˜¤è(€€€€€€€µ…¹¥™•ÍĞõP¹Á…ÉÍ”¡59%MP¤¹•ÑÉ½½Ğ ¤ì…¹‘É½¥ô‰í¡ÑÑÀè¼½Í¡•µ…Ì¹…¹‘É½¥¹½´½…Á¬½É•Ì½…¹‘É½¥‘ôˆì…ÁÁ±¥…Ñ¥½¸õµ…¹¥™•ÍĞ¹™¥¹ ‰…ÁÁ±¥…Ñ¥½¸ˆ¤(€€€€€€€‘•ÍÉ¥ÁÑ½Èõ¹•áĞ ¡à™½Èà¥¸…ÁÁ±¥…Ñ¥½¸¹™¥¹‘…±° ‰µ•Ñ„µ‘…Ñ„ˆ¤¥˜à¹•Ğ¡…¹‘É½¥¬‰¹…µ”ˆ¤ôô‰½´¹½½±”¹…¹‘É½¥¹µÌ¹…È¹…ÁÁ±¥…Ñ¥½¸ˆ¤±9½¹”¤(€€€€€€€Í•±˜¹…ÍÍ•ÉÑ%Í9½Ñ9½¹”¡‘•ÍÉ¥ÁÑ½È¤ìÍ•±˜¹…ÍÍ•ÉÑÅÕ…° ‰áµ°½…ÕÑ½µ½Ñ¥Ù•}…ÁÁ}‘•ÍŒˆ±‘•ÍÉ¥ÁÑ½È¹•Ğ¡…¹‘É½¥¬‰É•Í½ÕÉ”ˆ¤¤(€€€€€€€Í•ÉÙ¥”õ¹•áĞ ¡à™½Èà¥¸…ÁÁ±¥…Ñ¥½¸¹™¥¹‘…±° ‰Í•ÉÙ¥”ˆ¤¥˜à¹•Ğ¡…¹‘É½¥¬‰¹…µ”ˆ¤ôôˆ¹MÁ••‘	Õ‘‘å…ÉÁÁM•ÉÙ¥”ˆ¤±9½¹”¤(€€€€€€€Í•±˜¹…ÍÍ•ÉÑ%Í9½Ñ9½¹”¡Í•ÉÙ¥”¤ìÍ•±˜¹…ÍÍ•ÉÑÅÕ…° ‰ÑÉÕ”ˆ±Í•ÉÙ¥”¹•Ğ¡…¹‘É½¥¬‰•áÁ½ÉÑ•ˆ¤¤(€€€€€€€˜õÍ•ÉÙ¥”¹™¥¹ ‰¥¹Ñ•¹Ğµ™¥±Ñ•Èˆ¤ìÍ•±˜¹…ÍÍ•ÉÑÅÕ…° ‰…¹‘É½¥‘à¹…È¹…ÁÀ¹…ÉÁÁM•ÉÙ¥”ˆ±˜¹™¥¹ ‰…Ñ¥½¸ˆ¤¹•Ğ¡…¹‘É½¥¬‰¹…µ”ˆ¤¤ìÍ•±˜¹…ÍÍ•ÉÑÅÕ…° ‰…¹‘É½¥‘à¹…È¹…ÁÀ¹…Ñ•½Éä¹9Y%Q%=8ˆ±˜¹™¥¹ ‰…Ñ•½Éäˆ¤¹•Ğ¡…¹‘É½¥¬‰¹…µ”ˆ¤¤(€€€‘•˜Ñ•ÍÑ}‘•ÍÉ¥ÁÑ½É}‘•±…É•Í}…É}…ÁÁ}±¥‰É…Éå}Ñ•µÁ±…Ñ•Ì¡Í•±˜¤è(€€€€€€€‘•ÍÉ¥ÁÑ½ÈõP¹Á…ÉÍ”¡MI%AQ=H¤¹•ÑË~8¶‰ËkºwµçNÈš[ÜX]X\œ˜^JİšYJNÈ]Lˆ›ÜˆÈ[ˆ˜[™ÙJZYÚ
+N‚ˆÚ[™\˜]ÖØ]NÈ]
+ÏLNÈ›İÏX]X\œ˜^J˜]ÖØ]˜]
+ÜİšYWJNÈ]
+Ï\İšYBˆ›ÜˆH[ˆ˜[™ÙJİšYJN‚ˆY\›İÖÚKMHYˆOM[ÙHÈ\\š[Ü–ÚWBˆYˆÚ[™OLNˆ›İÖÚWOJ›İÖÚWJÛY
+IŒMBˆ[YˆÚ[™OLˆ›İÖÚWOJ›İÖÚWJİ\
+IŒMBˆ[YˆÚ[™OLÎˆ›İÖÚWOJ›İÖÚWJÊ
+Y
+İ\
+KËÌŠJIŒMBˆ[YˆÚ[™OM‚ˆ\\—ÛY\š[Ü–ÚKMHYˆOM[ÙHÈ[Y
+İ\]\\—ÛYˆÚÚXÙ\ÏJXœÊ[Y
+KY
+K
+XœÊ]\
+K\
+K
+XœÊ]\\—ÛY
+K\\—ÛY
+Bˆ›İÖÚWOJ›İÖÚWJÛZ[ŠÚÚXÙ\ËÙ^O[[X™HÚÚXÙN˜ÚÚXÙVÌJVÌWJIŒMBˆ›İÜË˜\[™
+›İÊNÈš[Ü\›İÂˆÙ[‹˜\ÜÙ\\]X[
+›İÜÖÌVÌ×KˆÛ˜[Y_H\È[ˆÜ\]YHÜ[YØ[˜\ÈÛÜ›™\ˆŠBˆÙ[‹˜\ÜÙ\\]X[
+›İÜÖËLWVËLWKˆÛ˜[Y_H\È[ˆÜ\]YH›İÛK\šYÚØ[˜\ÈÛÜ›™\ˆŠBˆYˆ\İØØ\—Üİ\™˜XÙWÚ\×ØWÜ\ÜÚ]™WÜ›Û\Ùš]™X\×Ü›Ú™Xİ[ÛŠÙ[ŠN‚ˆÛİ\˜ÙOTÑT•’PÑKœ™XYİ^
+
+BˆÙ[‹˜\ÜÙ\[Š‘š]™P\Ëœİ]K˜ÛÛXİÈ[˜[Y]J
+HH‹Ûİ\˜ÙJBˆÙ[‹˜\ÜÙ\[Š”›İË’SPQÑWÕTWÓT‘ÑH‹Ûİ\˜ÙJBˆÙ[‹˜\ÜÙ\[ŠšY]Ë˜Ø[Y\˜OË›]‹Ûİ\˜ÙJBˆÙ[‹˜\ÜÙ\[ŠšY]Ë\ÛÛZ[™ÏË›]‹Ûİ\˜ÙJBˆÙ[‹˜\ÜÙ\›İ[Š“ØØ][Û“X[˜YÙ\ˆ‹Ûİ\˜ÙJBˆÙ[‹˜\ÜÙ\›İ[Šœ™\]Y\İØØ][Û•\]\È‹Ûİ\˜ÙJBˆÙ[‹˜\ÜÙ\›İ[Š‘š]š[™ÔÙ\šXÙJ‹Ûİ\˜ÙJBšYˆ×Û˜[YW×ÏOH—×ÛXZ[—×Èˆ[š]\İ›XZ[Š
+B
