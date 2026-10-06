@@ -471,7 +471,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        state.upcoming?.let { next ->
+        state.upcoming?.takeIf { it.isCredibleUpcoming(state.limitMph) }?.let { next ->
             Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("UPCOMING", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)

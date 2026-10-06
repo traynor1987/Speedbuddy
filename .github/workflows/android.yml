@@ -116,8 +116,8 @@ jobs:
           Path(os.environ['RUNNER_TEMP'], 'speedbuddy-owner.jks').write_bytes(base64.b64decode(os.environ['OWNER_KEY'], validate=True))
           PY
           mkdir -p acceptance
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$RUNNER_TEMP/speedbuddy-owner.jks" --ks-key-alias "$OWNER_ALIAS" --ks-pass env:OWNER_STORE_PASSWORD --key-pass env:OWNER_KEY_PASSWORD --out acceptance/SpeedBuddy-0.2.9-owner-acceptance.apk app/build/outputs/apk/release/app-release-unsigned.apk
-          python3 scripts/verify_owner_apk.py --apk acceptance/SpeedBuddy-0.2.9-owner-acceptance.apk --build-tools "$ANDROID_HOME/build-tools/36.0.0" --source-sha "$SPEED_BUDDY_SOURCE_SHA" --certificate "$OWNER_CERTIFICATE" --version-code 18 --version-name 0.2.9 --output acceptance/owner-build.json
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$RUNNER_TEMP/speedbuddy-owner.jks" --ks-key-alias "$OWNER_ALIAS" --ks-pass env:OWNER_STORE_PASSWORD --key-pass env:OWNER_KEY_PASSWORD --out acceptance/SpeedBuddy-0.3.0-owner-acceptance.apk app/build/outputs/apk/release/app-release-unsigned.apk
+          python3 scripts/verify_owner_apk.py --apk acceptance/SpeedBuddy-0.3.0-owner-acceptance.apk --build-tools "$ANDROID_HOME/build-tools/36.0.0" --source-sha "$SPEED_BUDDY_SOURCE_SHA" --certificate "$OWNER_CERTIFICATE" --version-code 19 --version-name 0.3.0 --output acceptance/owner-build.json
       - name: Remove temporary private key
         if: always()
         run: rm -f "$RUNNER_TEMP/speedbuddy-owner.jks"
@@ -128,7 +128,7 @@ jobs:
           path: acceptance/
           if-no-files-found: error
       - name: Publish exact-source physical retest candidate after independent PR validation
-        if: success() && steps.signer.outputs.ready == 'true' && github.ref == 'refs/heads/feat/road-cache-android-auto-0.2.9'
+        if: success() && steps.signer.outputs.ready == 'true' && github.ref == 'refs/heads/feat/android-auto-ui-0.3.0'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -141,9 +141,9 @@ jobs:
             sleep 15
           done
           test "$conclusion" = success
-          test "$(gh api "repos/$GH_REPO/git/ref/heads/feat/road-cache-android-auto-0.2.9" --jq .object.sha)" = "$SPEED_BUDDY_SOURCE_SHA"
-          tag="v0.2.9-road-cache-android-auto-${SPEED_BUDDY_SOURCE_SHA:0:12}"
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/feat/android-auto-ui-0.3.0" --jq .object.sha)" = "$SPEED_BUDDY_SOURCE_SHA"
+          tag="v0.3.0-android-auto-ui-${SPEED_BUDDY_SOURCE_SHA:0:12}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --target "$SPEED_BUDDY_SOURCE_SHA" --prerelease --title 'Speed Buddy 0.2.9 — road-cache efficiency + Android Auto integration' --notes-file docs/ROAD_CACHE_ANDROID_AUTO_0.2.9_RETEST.md
+            gh release create "$tag" --target "$SPEED_BUDDY_SOURCE_SHA" --prerelease --title 'Speed Buddy 0.3.0 — Android Auto visual and road-state overhaul' --notes-file docs/ANDROID_AUTO_0.3.0_RETEST.md
           fi
-          gh release upload "$tag" acceptance/SpeedBuddy-0.2.9-owner-acceptance.apk acceptance/owner-build.json --clobber
+          gh release upload "$tag" acceptance/SpeedBuddy-0.3.0-owner-acceptance.apk acceptance/owner-build.json --clobber
