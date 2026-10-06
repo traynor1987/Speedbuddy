@@ -859,7 +859,7 @@ class MainActivity : ComponentActivity() {
             "Learned boundary" to state.limitDecision?.boundaryApplied?.toString(),
             "Decision reason" to state.limitDecision?.reason,
             "Coverage tiles" to "${state.coverageTiles} / ${state.targetTiles} in 20-mile target",
-            "Data mode" to if ((state.dataAgeMs ?: 0) > ROAD_FRESH_MS) "Older saved road data" else "Saved road data",
+            "Data mode" to "Saved road data",
             "Map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
             "Map request" to state.mapStatus))
         val parked = state.active && (state.speedMph ?: Double.MAX_VALUE) < 5.0

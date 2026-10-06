@@ -13,7 +13,10 @@ class FullReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('needs: [build, database-tests]', workflow)
         self.assertIn("docs/owner-signing-certificate.json", workflow)
         self.assertIn('scripts/verify_owner_apk.py', workflow)
-        self.assertIn('--version-code 13 --version-name 0.2.4', workflow)
+        self.assertIn('--version-code 18 --version-name 0.2.9', workflow)
+        self.assertIn("github.ref == 'refs/heads/feat/road-cache-android-auto-0.2.9'", workflow)
+        self.assertIn('v0.2.9-road-cache-android-auto-', workflow)
+        self.assertIn('docs/ROAD_CACHE_ANDROID_AUTO_0.2.9_RETEST.md', workflow)
         self.assertIn('Remove temporary private key', workflow)
 
 if __name__ == '__main__':

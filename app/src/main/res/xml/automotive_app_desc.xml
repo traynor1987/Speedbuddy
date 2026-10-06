@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Required Android Auto discovery capability for Android for Cars template apps. -->
+<automotiveApp>
+    <uses name="template" />
+</automotiveApp>
