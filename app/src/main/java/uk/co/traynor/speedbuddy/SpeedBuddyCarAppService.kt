@@ -1,30 +1,84 @@
-YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×wN‹Z–‹­¦ëeŠw¬ÕÁ…­…”Õ¬¹¼¹ÑÉ…å¹½È¹ÍÁ••‘‰Õ‘‘ä()¥µÁ½ÉĞ…¹‘É½¥¹½¹Ñ•¹Ğ¹%¹Ñ•¹Ğ)¥µÁ½ÉĞ…¹‘É½¥¹É…Á¡¥Ì¹	¥Ñµ…À)¥µÁ½ÉĞ…¹‘É½¥¹É…Á¡¥Ì¹…¹Ù…Ì)¥µÁ½ÉĞ…¹‘É½¥¹É…Á¡¥Ì¹½±½È)¥µÁ½ÉĞ…¹‘É½¥¹É…Á¡¥Ì¹A…¥¹Ğ)¥µÁ½ÉĞ…¹‘É½¥¹É…Á¡¥Ì¹QåÁ•™…”)¥µÁ½ÉĞ…¹‘É½¥‘à¹…È¹…ÁÀ¹…ÉÁÁM•ÉÙ¥”)¥µÁ½ÉĞ…¹‘É½¥‘à¹…È¹…ÁÀ¹MÉ••¸)¥µÁ½ÉĞ…¹‘É½¥‘à¹…È¹…ÁÀ¹M•ÍÍ¥½¸)¥µÁ½ÉĞ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹…É%½¸)¥µÁ½ÉĞ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹!•…‘•È)¥µÁ½ÉĞ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹A…¹”)¥µÁ½ÉĞ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹A…¹•Q•µÁ±…Ñ”)¥µÁ½ÉĞ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹I½Ü)¥µÁ½ÉĞ…¹‘É½¥‘à¹…È¹…ÁÀ¹µ½‘•°¹Q•µÁ±…Ñ”)¥µÁ½ÉĞ…¹‘É½¥‘à¹…È¹…ÁÀ¹Ù…±¥‘…Ñ¥½¸¹!½ÍÑY…±¥‘…Ñ½È)¥µÁ½ÉĞ…¹‘É½¥‘à¹½É”¹É…Á¡¥Ì¹‘É…İ…‰±”¹%½¹½µÁ…Ğ)¥µÁ½ÉĞ…¹‘É½¥‘à¹±¥™•å±”¹•™…Õ±Ñ1¥™•å±•=‰Í•ÉÙ•È)¥µÁ½ÉĞ…¹‘É½¥‘à¹±¥™•å±”¹1¥™•å±•=İ¹•È)¥µÁ½ÉĞ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹½É½ÕÑ¥¹•M½Á”)¥µÁ½ÉĞ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹¥ÍÁ…Ñ¡•ÉÌ)¥µÁ½ÉĞ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹MÕÁ•ÉÙ¥Í½É)½ˆ)¥µÁ½ÉĞ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹…¹•°)¥µÁ½ÉĞ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹™±½Ü¹½±±•Ğ)¥µÁ½ÉĞ­½Ñ±¥¹à¹½É½ÕÑ¥¹•Ì¹±…Õ¹ ()±…ÍÌMÁ••‘	Õ‘‘å…ÉÁÁM•ÉÙ¥”€è…ÉÁÁM•ÉÙ¥” ¤ì(€€€½Ù•ÉÉ¥‘”™Õ¸É•…Ñ•!½ÍÑY…±¥‘…Ñ½È ¤è!½ÍÑY…±¥‘…Ñ½È€ô!½ÍÑY…±¥‘…Ñ½È¹11=]}11}!=MQM}Y1%Q=H(€€€½Ù•ÉÉ¥‘”™Õ¸½¹É•…Ñ•M•ÍÍ¥½¸ ¤èM•ÍÍ¥½¸€ôMÁ••‘	Õ‘‘å…ÉM•ÍÍ¥½¸ ¤)ô)ÁÉ¥Ù…Ñ”±…ÍÌMÁ••‘	Õ‘‘å…ÉM•ÍÍ¥½¸€èM•ÍÍ¥½¸ ¤ì(€€€½Ù•ÉÉ¥‘”™Õ¸½¹É•…Ñ•MÉ••¸¡¥¹Ñ•¹Ğè%¹Ñ•¹Ğ¤èMÉ••¸€ôMÁ••‘	Õ‘‘å…ÉMÉ••¸¡…É½¹Ñ•áĞ¤)ô)ÁÉ¥Ù…Ñ”±…ÍÌMÁ••‘	Õ‘‘å…ÉMÉ••¸¡…É½¹Ñ•áĞè…¹‘É½¥‘à¹…È¹…ÁÀ¹…É½¹Ñ•áĞ¤€èMÉ••¸¡…É½¹Ñ•áĞ¤ì(€€€ÁÉ¥Ù…Ñ”Ù…°ÕÁ‘…Ñ•Ì€ô½É½ÕÑ¥¹•M½Á”¡MÕÁ•ÉÙ¥Í½É)½ˆ ¤€¬¥ÍÁ…Ñ¡•ÉÌ¹5…¥¸¹¥µµ•‘§w¶‰Ëkºwµç]J]
-K˜Z[
+package uk.co.traynor.speedbuddy
 
-JHBˆ™]\›ˆ[™U[\]KZ[\Š[™K˜Z[
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
+import androidx.car.app.CarAppService
+import androidx.car.app.Screen
+import androidx.car.app.Session
+import androidx.car.app.model.CarIcon
+import androidx.car.app.model.Header
+import androidx.car.app.model.Pane
+import androidx.car.app.model.PaneTemplate
+import androidx.car.app.model.Row
+import androidx.car.app.model.Template
+import androidx.car.app.validation.HostValidator
+import androidx.core.graphics.drawable.IconCompat
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
-JKœÙ]XY\ŠXY\‹Z[\Š
-KœÙ]]J”ÜYYYHŠK˜Z[
+class SpeedBuddyCarAppService : CarAppService() {
+    override fun createHostValidator(): HostValidator = HostValidator.ALLOW_ALL_HOSTS_VALIDATOR
+    override fun onCreateSession(): Session = SpeedBuddyCarSession()
+}
+private class SpeedBuddyCarSession : Session() {
+    override fun onCreateScreen(intent: Intent): Screen = SpeedBuddyCarScreen(carContext)
+}
+private class SpeedBuddyCarScreen(carContext: androidx.car.app.CarContext) : Screen(carContext) {
+    private val updates = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    init {
+        lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onDestroy(owner: LifecycleOwner) { updates.cancel() }
+        })
+        // The host controls final rendering cadence. Every distinct authoritative DriveBus update
+        // invalidates promptly; there is no car-owned polling, debounce, or location collection.
+        updates.launch { DriveBus.state.collect { invalidate() } }
+    }
+    override fun onGetTemplate(): Template {
+        val view = AndroidAutoPresenter.present(DriveBus.state.value)
+        // PaneTemplate's supported large images place the speed and sign in the host's own
+        // two-column layout. On a dashboard split the host reflows them without a phone UI clone.
+        val pane = Pane.Builder().setImage(signIcon(view.limitSign))
+        pane.addRow(Row.Builder().setTitle("CURRENT SPEED").setImage(speedIcon(view.speed), Row.IMAGE_TYPE_LARGE).apply {
+            view.confidence?.let(::addText)
+            view.status?.let(::addText)
+        }.build())
+        view.camera?.let { pane.addRow(Row.Builder().setTitle(it).build()) }
+        view.upcoming?.let { pane.addRow(Row.Builder().setTitle(it).build()) }
+        return PaneTemplate.Builder(pane.build()).setHeader(Header.Builder().setTitle("Speed Buddy").build()).build()
+    }
+    private fun signIcon(sign: AndroidAutoLimitSign): CarIcon = CarIcon.Builder(
+        IconCompat.createWithResource(carContext, when (sign) {
+            AndroidAutoLimitSign.MPH_20 -> R.drawable.aa_limit_20
+            AndroidAutoLimitSign.MPH_30 -> R.drawable.aa_limit_30
+            AndroidAutoLimitSign.MPH_40 -> R.drawable.aa_limit_40
+            AndroidAutoLimitSign.MPH_50 -> R.drawable.aa_limit_50
+            AndroidAutoLimitSign.MPH_60 -> R.drawable.aa_limit_60
+            AndroidAutoLimitSign.MPH_70 -> R.drawable.aa_limit_70
+            AndroidAutoLimitSign.UNKNOWN -> R.drawable.aa_limit_unknown
+        })
+    ).build()
 
-JK˜Z[
-
-BˆBˆš]˜]H[ˆÚYÛ’XÛÛŠÚYÛˆ[™›ÚY]]Ó[Z]ÚYÛŠNˆØ\’XÛÛˆHØ\’XÛÛ‹Z[\ŠˆXÛÛÛÛ\]˜Ü™X]UÚ]™\Ûİ\˜ÙJØ\ÛÛ^Ú[ˆ
-ÚYÛŠHÂˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÌŒOˆ‹™˜]ØX›K˜XWÛ[Z]ÌŒˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÌÌOˆ‹™˜]ØX›K˜XWÛ[Z]ÌÌˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÍOˆ‹™˜]ØX›K˜XWÛ[Z]Íˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÍLOˆ‹™˜]ØX›K˜XWÛ[Z]ÍLˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÍŒOˆ‹™˜]ØX›K˜XWÛ[Z]ÍŒˆ[™›ÚY]]Ó[Z]ÚYÛ‹“TÍÌOˆ‹™˜]ØX›K˜XWÛ[Z]ÍÌˆ[™›ÚY]]Ó[Z]ÚYÛ‹•S’Ó“ÕÓˆOˆ‹™˜]ØX›K˜XWÛ[Z]İ[šÛ›İÛ‚ˆJBˆ
-K˜Z[
-
-B‚ˆš]˜]H[ˆÜYYXÛÛŠÜYYˆİš[™ÊNˆØ\’XÛÛˆÂˆ˜[š]X\Hš]X\˜Ü™X]Pš]X\
-ŒŒš]X\ÛÛ™šYËT‘Ğ—Î
-Bˆ˜[Ø[˜\ÈHØ[˜\Êš]X\
-Bˆ˜[˜[YHHÜYYœİXœİš[™Ğ™Y›Ü™J	È	ÊBˆ˜[˜[YTZ[HZ[
-Z[S•WĞSPT×Ñ“QÊK˜\HÂˆÛÛÜˆHÛÛÜ‹•ÒUNÈ\Y˜XÙHH\Y˜XÙK˜Ü™X]J\Y˜XÙK‘QUS\Y˜XÙK“Ó
-Bˆ^[YÛˆHZ[[YÛ‹ÑS•TÈ^Ú^™HHLL™‚ˆBˆ˜[[š]Z[HZ[
-˜[YTZ[
-K˜\HÈ^Ú^™HHÍÙÈ]\”ÜXÚ[™ÈHŒˆBˆØ[˜\Ë™˜]Õ^
-˜[YKLL™‹LN‹˜[YTZ[
-BˆØ[˜\Ë™˜]Õ^
-“T‹LL™‹MÌ‹[š]Z[
-Bˆ™]\›ˆØ\’XÛÛ‹Z[\ŠXÛÛÛÛ\]˜Ü™X]UÚ]š]X\
-š]X\
-JK˜Z[
-
-BˆBŸB
+    private fun speedIcon(speed: String): CarIcon {
+        val bitmap = Bitmap.createBitmap(224, 224, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val value = speed.substringBefore(' ')
+        val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER; textSize = 112f
+        }
+        val unitPaint = Paint(valuePaint).apply { textSize = 37f; letterSpacing = .08f }
+        canvas.drawText(value, 112f, 118f, valuePaint)
+        canvas.drawText("MPH", 112f, 170f, unitPaint)
+        return CarIcon.Builder(IconCompat.createWithBitmap(bitmap)).build()
+    }
+}

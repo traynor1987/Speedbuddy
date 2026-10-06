@@ -1,27 +1,69 @@
-YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×7N‹Z–‹­¦ëeŠw¬ÕÁ…­…”Õ¬¹¼¹ÑÉ…å¹½È¹ÍÁ••‘‰Õ‘‘ä()¥µÁ½ÉÐ½Éœ¹©Õ¹¥Ð¹ÍÍ•ÉÐ¹…ÍÍ•ÉÑÅÕ…±Ì)¥µÁ½ÉÐ½Éœ¹©Õ¹¥Ð¹ÍÍ•ÉÐ¹…ÍÍ•ÉÑ…±Í”)¥µÁ½ÉÐ½Éœ¹©Õ¹¥Ð¹ÍÍ•ÉÐ¹…ÍÍ•ÉÑ9Õ±°)¥µÁ½ÉÐ½Éœ¹©Õ¹¥Ð¹ÍÍ•ÉÐ¹…ÍÍ•ÉÑQÉÕ”)¥µÁ½ÉÐ½Éœ¹©Õ¹¥Ð¹Q•ÍÐ()±…ÍÌ¹‘É½¥‘ÕÑ½AÉ•Í•¹Ñ…Ñ¥½¹Q•ÍÐì(€€€Q•ÍÐ™Õ¸•Ù•ÉäÍÕÁÁ½ÉÑ•U,±¥µ¥ÐÍ•±•ÑÌ¥ÑÌµ…Ñ¡¥¹œÍ¥¹€ ¤ì(€€€€€€€µ…Á=˜ (€€€€€€€€€€€€ÈÀÑ¼¹‘É½¥‘ÕÑ½1¥µ¥ÑM¥¸¹5A!|ÈÀ°€ÌÀÑ¼¹‘É½¥‘ÕÑ½1¥µ¥ÑM¥¸¹5A!|ÌÀ°(€€€€€€€€€€€€ÐÀÑ¼¹‘É½¥‘ÕÑ½1¥µ¥ÑM¥¸¹5A!|ÐÀ°€ÔÀÑ¼¹‘É½¥‘ÕÑ½1¥µ¥ÑM¥¸¹5A!|ÔÀ°(€€€€€€€€€€€€ØÀÑ¼¹‘É½¥‘ÕÑ½1¥µ¥ÑM¥¸¹5A!|ØÀ°€ÜÀÑ¼¹‘É½¥‘ÕÑ½1¥µ¥ÑM¥¸¹5A!|ÜÀ°(€€€€€€€€¤¹™½É… ì€¡±¥µ¥Ð°Í¥¸¤€´ø…ÍÍ•ÉÑÅÕ…±Ì¡Í¥¸°¹‘É½¥‘ÕÑ½AÉ•Í•¹Ñ•È¹Í¥¹½È¡±¥µ¥Ð¤¤ô(€€€ô(€€€Q•ÍÐ™Õ¸½¹™¥Éµ•É½…±¥µ¥ÐÍ•±•ÑÌ¥ÑÌU,Í¥¸…¹­••ÁÌALÍÁ••Í•½¹‘…Éå€ ¤ì(€€€€€€€Ù…°Ù¥•Ü€ô¹‘É½¥‘ÕÑ½AÉ•Í•¹Ñ•È¹ÁÉ•Í•¹Ð¡É¥Ù•MÑ…Ñ”¡…Ñ¥Ù”õÑÉÕ”°ÍÁ••‘5Á ôÈÜ¸à°±¥µ¥Ñ5Á ôÌÀ¤¤(€€€€€€€…ÍÍ•ÉÑÅÕ…±Ì¡¹‘É½¥‘ÕÑ½1¥µ¥ÑM¥¸¹5A!|ÌÀ°Ù¥•Ü¹±¥µ¥ÑM¥¸¤(€€€€€€€…ÍÍ•ÉÑÅÕ…±Ì ˆÌÀµÁ ˆ°Ù¥•Ü¹±¥µ¥Ñ1…‰•°¤(€€€€€€€…ÍÍ•ÉÑÅÕ…±Ì ˆÈÜ5A ˆ°Ù¥•Ü¹ÍÁ••¤(€€€€€€€…ÍÍ•ÉÑ9Õ±°¡Ù¥•Ü¹½¹™¥‘•¹”¤(€€€ô(€€€Q•ÍÐ™Õ¸…ÍÍÕµ•±¥µ¥Ð¥Ì…±Ý…åÌÙ¥Í¥‰±äµ…É­•‘€ ¤ì(€€€€€€€Ù…°Ù¥•Ü€ô¹‘É½¥‘ÕÑ½AÉ•Í•¹Ñ•È¹ÁÉ•Í•¹Ð¡É¥Ù•MÑ…Ñ”¡…Ñ¥Ù”õÑÉÕ”°ÍÁ••‘5Á ôÈÜ¸À°±¥µ¥Ñ5Á ôÌÀ°±¥µ¥Ñ•¥Í¥½¸õ1¥µ¥Ñ•¥Í¥½¸ ÌÀ°É•…Í½¸ô‰½¹Ñ¥¹Õ¥Ñäˆ°…ÍÍÕµ•õÑÉÕ”¤¤¤(€€€€€€€…ÍÍ•ÉÑÅÕ…±Ì¡¹‘É½¥‘ÕÑ½1¥µ¥ÑM¥¸¹5A!|ÌÀ°Ù¥•Ü¹±¥µ¥ÑM¥¸¤(€€€€€€€…ÍÍ•ÉÑÅÕ…±Ì ‹Šj€ÍÍÕµ•ƒŠP¹½Ð½¹™¥Éµ•ˆ°Ù¥•Ü¹½¹™¥‘•¹”¤(€€€ô(€€€Q•ÍÐ™Õ¸Õ¹­¹½Ý¸±¥µ¥ÐÕÍ•Ì¹•ÕÑÉ…°Í¥¸¥¹ÍÑ•…½˜…¸Õ¹…Ù…¥±‡7¶‰žËkºwµçQš]™TÝ]JXÝ]™O]YK[Z]\LÌ[\P[\
-Ø[Y\˜KÌŒŒ
-JJBˆ\ÜÙ\\]X[Ê¸¦¨ÔQQ
-È‘QSQÒÐSQTH0­ÈÌ\0­ÈÍHY‹šY]Ë˜Ø[Y\˜JBˆ\ÜÙ\YJšY]Ë˜Ø[Y\˜HHKœÝ\ÕÚ]
-¸¦¨ŠJBˆBˆ\Ý[ˆØ[Y\˜H[™HÜ™YX›H\ÛÛZ[™È[Z]ÛÙ^\Ý
+package uk.co.traynor.speedbuddy
 
-HÂˆ˜[Ø[Y\˜OPØ[Y\˜J˜Ø[Y\˜H‹Ù[ÔÚ[
-LËŒL‹Œ
-KØ[Y\˜U\K”ÔQQØ[Y\˜TÛÝ\˜ÙK“ÔÓK[™›Ü˜ÙY\LÌ
-Bˆ˜[šY]ÏP[™›ÚY]]Ô™\Ù[\‹œ™\Ù[
-š]™TÝ]JXÝ]™O]YKÜYY\LËŒ[Z]\LÌˆ[\P[\
-Ø[Y\˜KÌŒŒ
-K\ÛÛZ[™ÏU\ÛÛZ[™Ó[Z]
-M‹˜[ÙJJJBˆ\ÜÙ\\]X[Ê¸¦¨ÔQQÐSQTH0­ÈÌ\0­ÈÍHY‹šY]Ë˜Ø[Y\˜JBˆ\ÜÙ\\]X[Ê“‘V\0­ÈNY‹šY]Ë\ÛÛZ[™ÊBˆBˆ\Ý[ˆÚ[™Ú[™È]]Üš]]]™HÔÈÜYYÈ™[XZ[ˆ\Ý[˜ÝØ\ˆ™\Ù[][ÛœØ
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
-HÂˆ˜[š\œÝP[™›ÚY]]Ô™\Ù[\‹œ™\Ù[
-š]™TÝ]JXÝ]™O]YKÜYY\LŒKŒ‹[Z]\LÌ
-JBˆ˜[ÙXÛÛ™P[™›ÚY]]Ô™\Ù[\‹œ™\Ù[
-š]™TÝ]JXÝ]™O]YKÜYY\LŽŽK[Z]\LÌ
-JBˆ\ÜÙ\\]X[ÊŒŒHT‹š\œÝœÜYY
-Bˆ\ÜÙ\\]X[ÊŒŽT‹ÙXÛÛ™œÜYY
-Bˆ\ÜÙ\˜[ÙJš\œÝœÜYYOHÙXÛÛ™œÜYY
-BˆBˆ\Ý[ˆØ\ˆÝ\™˜XÙHÙ\È›Ý[™[H[Z]Ú[ˆÛ™H\ÈYX
-
-HÂˆ˜[šY]ÈH[™›ÚY]]Ô™\Ù[\‹œ™\Ù[
-š]™TÝ]J
-JBˆ\ÜÙ\\]X[Ê[™›ÚY]]Ó[Z]ÚYÛ‹•S’Ó“ÕÓ‹šY]Ë›[Z]ÚYÛŠBˆ\ÜÙ\\]X[Ê“Ü[ˆÜYYYHÛˆ[Ý\ˆÛ™H[™Ý\š]š[™È‹šY]ËœÝ]\ÊBˆ\ÜÙ\˜[ÙJšY]Ë›[Z]X™[˜ÛÛZ[œÊ[˜]˜Z[X›H‹YÛ›Ü™PØ\ÙO]YJJBˆBŸB
+class AndroidAutoPresentationTest {
+    @Test fun `every supported UK limit selects its matching sign`() {
+        mapOf(
+            20 to AndroidAutoLimitSign.MPH_20, 30 to AndroidAutoLimitSign.MPH_30,
+            40 to AndroidAutoLimitSign.MPH_40, 50 to AndroidAutoLimitSign.MPH_50,
+            60 to AndroidAutoLimitSign.MPH_60, 70 to AndroidAutoLimitSign.MPH_70,
+        ).forEach { (limit, sign) -> assertEquals(sign, AndroidAutoPresenter.signFor(limit)) }
+    }
+    @Test fun `confirmed road limit selects its UK sign and keeps GPS speed secondary`() {
+        val view = AndroidAutoPresenter.present(DriveState(active=true, speedMph=27.8, limitMph=30))
+        assertEquals(AndroidAutoLimitSign.MPH_30, view.limitSign)
+        assertEquals("30 mph", view.limitLabel)
+        assertEquals("27 MPH", view.speed)
+        assertNull(view.confidence)
+    }
+    @Test fun `assumed limit is always visibly marked`() {
+        val view = AndroidAutoPresenter.present(DriveState(active=true, speedMph=27.0, limitMph=30, limitDecision=LimitDecision(30, reason="continuity", assumed=true)))
+        assertEquals(AndroidAutoLimitSign.MPH_30, view.limitSign)
+        assertEquals("âš  Assumed â€” not confirmed", view.confidence)
+    }
+    @Test fun `unknown limit uses neutral sign instead of an unavailable hero`() {
+        val view = AndroidAutoPresenter.present(DriveState(active=true, speedMph=22.0))
+        assertEquals(AndroidAutoLimitSign.UNKNOWN, view.limitSign)
+        assertEquals("â€”", view.limitLabel)
+        assertEquals("22 MPH", view.speed)
+    }
+    @Test fun `only a different genuinely ahead limit is displayed`() {
+        val state = DriveState(active=true, speedMph=27.0, limitMph=30,
+            upcoming=UpcomingLimit(40, 164.6, false))
+        assertEquals("NEXT 40 mph Â· 180 yd", AndroidAutoPresenter.present(state).upcoming)
+        assertNull(AndroidAutoPresenter.present(state.copy(upcoming=UpcomingLimit(30, 164.6, false))).upcoming)
+        assertNull(AndroidAutoPresenter.present(state.copy(upcoming=UpcomingLimit(40, 0.0, false))).upcoming)
+        assertNull(AndroidAutoPresenter.present(state.copy(upcoming=UpcomingLimit(40, -4.0, false))).upcoming)
+    }
+    @Test fun `camera warning takes priority and identifies the camera type and enforcement limit`() {
+        val camera=Camera("camera",GeoPoint(53.0,-2.0),CameraType.COMBINED,CameraSource.OSM,enforcedMph=30)
+        val view=AndroidAutoPresenter.present(DriveState(active=true,limitMph=30,alert=Alert(camera,320.0)))
+        assertEquals("âš  SPEED + RED-LIGHT CAMERA Â· 30 mph Â· 349 yd", view.camera)
+        assertTrue(view.camera!!.startsWith("âš "))
+    }
+    @Test fun `camera and a credible upcoming limit coexist`() {
+        val camera=Camera("camera",GeoPoint(53.0,-2.0),CameraType.SPEED,CameraSource.OSM,enforcedMph=30)
+        val view=AndroidAutoPresenter.present(DriveState(active=true, speedMph=27.0, limitMph=30,
+            alert=Alert(camera,320.0), upcoming=UpcomingLimit(40,164.6,false)))
+        assertEquals("âš  SPEED CAMERA Â· 30 mph Â· 349 yd", view.camera)
+        assertEquals("NEXT 40 mph Â· 180 yd", view.upcoming)
+    }
+    @Test fun `changing authoritative GPS speeds remain distinct car presentations`() {
+        val first=AndroidAutoPresenter.present(DriveState(active=true,speedMph=21.2,limitMph=30))
+        val second=AndroidAutoPresenter.present(DriveState(active=true,speedMph=28.9,limitMph=30))
+        assertEquals("21 MPH",first.speed)
+        assertEquals("28 MPH",second.speed)
+        assertFalse(first.speed == second.speed)
+    }
+    @Test fun `car surface does not invent a limit when phone is idle`() {
+        val view = AndroidAutoPresenter.present(DriveState())
+        assertEquals(AndroidAutoLimitSign.UNKNOWN, view.limitSign)
+        assertEquals("Open Speed Buddy on your phone and start driving", view.status)
+        assertFalse(view.limitLabel.contains("unavailable", ignoreCase=true))
+    }
+}
