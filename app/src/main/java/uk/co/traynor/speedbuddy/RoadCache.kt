@@ -38,7 +38,12 @@ data class RoadTileData(val tile: RoadTile,val fetchedAt: Long,val roads: List<R
 data class SavedRoad(val road: Road,val fetchedAt: Long)
 data class LocalRoads(val roads: List<SavedRoad>,val cameras: List<Camera>,val averageSections: List<AverageSpeedSection> = emptyList())
 
-/** Scheduling only. Cache age determines refresh, never whether a saved row may be matched. */
+/**
+ * Scheduling only. Once a tile has been completed, its road limits are Speed Buddy's
+ * saved knowledge: driving must not spend the public-provider allowance downloading it
+ * again just because time has passed. New driving areas are fetched current-tile first,
+ * with one small look-ahead tile while moving.
+ */
 class RoadRefreshPlanner {
     var lastCheckMs = 0L; private set
     private var lastAttemptMs = Long.MIN_VALUE
@@ -56,13 +61,13 @@ class RoadRefreshPlanner {
             Geo.distance(plannedAt!!,fix.point) > 1500) {
             desired = RoadTiles.covering(fix.point); plannedAt = fix.point; lastCheckMs = now
         }
-        fun needed(tile: RoadTile) = coverage[tile]?.let { now-it !in 0..ROAD_FRESH_MS } ?: true
+        fun needed(tile: RoadTile) = tile !in coverage
         if (needed(local)) return local
         if (ahead != null && needed(ahead)) return ahead
-        if(retentionAt?.let { Geo.distance(it,fix.point)<5000 } == true)
-            return desired.filter { it in coverage && needed(it) }.minByOrNull { Geo.distance(fix.point,it.center) }
         retentionAt=null
-        return desired.filter(::needed).minByOrNull { Geo.distance(fix.point,it.center) }
+        // Do not pre-fill every tile in the 20-mile diagnostic circle. That spends the
+        // limited public data allowance before the driver reaches those roads.
+        return null
     }
     fun attempted(now: Long) { lastAttemptMs = now }
     fun succeeded() { failures = 0; retryAt = 0 }
