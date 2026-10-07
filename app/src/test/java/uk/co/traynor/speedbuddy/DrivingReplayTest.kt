@@ -14,6 +14,18 @@ class DrivingReplayTest {
         val state=replay.play(frame(r,1_000,RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,RoadMatch(r,0.0,0.0,.95))))
         assertEquals(20,state.limitMph);assertEquals(state,DriveBus.state.value)
     }
+    @Test fun replayCrossesFromLancashireToMerseysideUsingTheNewRegionalMatch() {
+        val replay=DrivingReplay();val lancashire=road("lancashire-way",30);val merseyside=road("merseyside-way",20)
+        replay.play(frame(lancashire,1_000,RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,RoadMatch(lancashire,0.0,0.0,.95))))
+        val state=replay.play(frame(merseyside,2_000,RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,RoadMatch(merseyside,0.0,0.0,.95))))
+        assertEquals("merseyside-way",state.road?.road?.id);assertEquals(20,state.sourceLimitMph)
+    }
+    @Test fun replayCrossesFromMerseysideToLancashireUsingTheNewRegionalMatch() {
+        val replay=DrivingReplay();val merseyside=road("merseyside-way",40);val lancashire=road("lancashire-way",60)
+        replay.play(frame(merseyside,1_000,RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,RoadMatch(merseyside,0.0,0.0,.95))))
+        val state=replay.play(frame(lancashire,2_000,RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,RoadMatch(lancashire,0.0,0.0,.95))))
+        assertEquals("lancashire-way",state.road?.road?.id);assertEquals(60,state.sourceLimitMph)
+    }
     @Test fun regionalUnknownIsTerminalEvenWhenLiveHasANumber() {
         val r=road("merseyside-way",null);val replay=DrivingReplay()
         val state=replay.play(frame(r,1_000,RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN,RoadMatch(r,0.0,0.0,.95)),LiveRoadState(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,true,20,false)))
