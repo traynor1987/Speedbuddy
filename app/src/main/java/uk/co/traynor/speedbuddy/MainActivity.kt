@@ -275,7 +275,8 @@ class MainActivity : ComponentActivity() {
                             { if (!backupBusy && !state.active) importBackup.launch(arrayOf("application/json", "text/plain")) else message = "Stop Driving and wait for backup work to finish." }, importedInfo,
                             { if (moving) message = "Import cameras while parked."
                               else importLufop.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
-                            { page = "map" }, { page = "mapData" }, { page = "updates" }) }
+                            { page = "map" }, { page = "mapData" }, { page = "updates" }, { page = "offlineRoadData" }) }
+                        "offlineRoadData" -> OfflineRoadDataScreen(this@MainActivity) { page = "settings" }
                         "updates" -> UpdateCenterScreen(this@MainActivity, moving) { page = "settings" }
                         "map" -> CameraMapScreen(db, state.fix?.point, moving,
                             (importedInfo?.importedAtMs ?: 0L) xor state.roadCacheRevision, importedInfo?.count ?: 0) { page = "drive" }
@@ -576,7 +577,7 @@ class MainActivity : ComponentActivity() {
 @Composable private fun SettingsScreen(prefs: android.content.SharedPreferences, back: () -> Unit,
     cameras: () -> Unit, diagnostics: () -> Unit, exportBackup: () -> Unit, importBackup: () -> Unit,
     imported: CameraDb.ImportedInfo?, importLufop: () -> Unit, openMap: () -> Unit,
-    openMapData: () -> Unit, openUpdates: () -> Unit) {
+    openMapData: () -> Unit, openUpdates: () -> Unit, openOfflineRoadData: () -> Unit) {
     var version by remember { mutableIntStateOf(0) }
     Page("Settings", back) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
@@ -635,6 +636,8 @@ class MainActivity : ComponentActivity() {
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     MenuRow("Map & road data", "Camera database, cache and local corrections", openMapData)
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
+                    MenuRow("Offline Road Data", "Download verified Lancashire and Merseyside road packs", openOfflineRoadData)
+                    HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     MenuRow("Manage my cameras", "View, edit or delete saved cameras", cameras)
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     MenuRow("Back up owner data", "Cameras, settings, road corrections and retained archives", exportBackup)
@@ -676,6 +679,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+@Composable private fun OfflineRoadDataScreen(context: Context, back: () -> Unit) {
+    val scope=rememberCoroutineScope(); val lifecycle=remember { RegionalPackLifecycle(context) { context.getSharedPreferences("settings",Context.MODE_PRIVATE).getString("speedBuddyCredential",null) } }
+    var catalogue by remember { mutableStateOf<List<RegionalPackDescriptor>>(emptyList()) }
+    var installed by remember { mutableStateOf(lifecycle.installed()) }; var message by remember { mutableStateOf("Checking the production catalogue…") }
+    LaunchedEffect(Unit) { runCatching { withContext(Dispatchers.IO) { lifecycle.catalogue() } }.onSuccess { catalogue=it;message="" }.onFailure { message=it.message ?: "Catalogue unavailable" } }
+    Page("Offline Road Data",back) { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom=24.dp)) {
+        Text("Verified regional packs",color=Muted,modifier=Modifier.padding(16.dp),fontSize=14.sp)
+        if(message.isNotBlank()) Text(message,color=Muted,modifier=Modifier.padding(horizontal=16.dp,vertical=8.dp))
+        catalogue.forEach { pack ->
+            val current=installed.firstOrNull { it.descriptor.id==pack.id }
+            Surface(shape=RoundedCornerShape(20.dp),color=Panel,modifier=Modifier.padding(horizontal=16.dp,vertical=6.dp)) { Column(Modifier.padding(16.dp)) {
+                Text(pack.displayName,color=Ink,fontSize=18.sp);Text("${pack.downloadBytes/1_048_576} MB · ${if(current==null) "Not installed" else "Installed ${current.descriptor.version}"}",color=Muted,fontSize=13.sp)
+                Button(onClick={ scope.launch { message="Downloading ${pack.displayName}…";runCatching { withContext(Dispatchers.IO) { lifecycle.download(pack) } }.onSuccess { installed=lifecycle.installed();message="${pack.displayName} is ready offline" }.onFailure { message="${pack.displayName}: ${it.message ?: "download failed"}" } } }) { Text(if(current==null) "Download" else if(current.descriptor.version!=pack.version) "Update" else "Re-download") }
+                if(current!=null) TextButton(onClick={ scope.launch { withContext(Dispatchers.IO) { lifecycle.delete(pack.id) };installed=lifecycle.installed();message="${pack.displayName} removed. Owner corrections were kept." } }) { Text("Delete") }
+            } }
+        }
+    } }
 @Composable private fun MenuRow(title: String, subtitle: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
