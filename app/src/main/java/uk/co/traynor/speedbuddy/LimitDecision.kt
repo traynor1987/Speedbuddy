@@ -179,7 +179,7 @@ class LimitDecisionEngine {
             // A matching pass can briefly return no road at all. Keep the last
             // confirmed limit only while the fresh GPS point still fits that same
             // road geometry, within the existing bounded assumption lifetime.
-            } == true && now-anchor.at in 0..90_000
+            } == true && now-anchor.at in 0..2_000
         }
         val roadType=effective?.road?.tags?.get("highway")
         // Preserve a truthful assumed limit during a brief source gap on the
@@ -191,8 +191,8 @@ class LimitDecisionEngine {
             effective==null || effective.confidence < if(sameConfirmedWay) .35 else .7 -> "Assumption ended: road match lost confidence or previous geometry no longer fits"
             fix.accuracyM > (if(sameConfirmedWay) 35 else 20) || fix.bearing==null || (effective.headingDifference ?: 90.0) > (if(sameConfirmedWay) 55 else 30) -> "Assumption ended: GPS or heading uncertain"
             Geo.difference(fix.bearing,anchor.fix.bearing!!)>40 -> "Assumption ended: travel direction changed"
-            now-anchor.at !in 0..90_000 -> "Assumption expired after 90 seconds"
-            distance>750 -> "Assumption expired after 750 metres"
+            now-anchor.at !in 0..2_000 -> "Assumption expired after 2 seconds"
+            distance>30 -> "Assumption expired after 30 metres"
             !connected(previous.road,effective.road) -> "Assumption ended: road geometry disconnected"
             specialTags -> "Assumption ended: conditional or directional source limit"
             roadType in excluded && roadType != anchor.match.road.tags["highway"] ||
