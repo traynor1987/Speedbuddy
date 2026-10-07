@@ -13,8 +13,12 @@ internal object RoadProviderResolver {
         if(regional != null && regional.state !in setOf(RoadProviderState.COVERAGE_UNAVAILABLE,RoadProviderState.SERVICE_UNAVAILABLE))
             return ResolvedRoadLimit(RoadSource.REGIONAL_PACK,regional.state,regional.limitMph,false)
         if(cached != null) return ResolvedRoadLimit(RoadSource.LEGACY_CACHE,RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,cached,false)
-        val result=live ?: regional ?: return ResolvedRoadLimit(RoadSource.UNAVAILABLE,RoadProviderState.SERVICE_UNAVAILABLE,null,false)
-        return ResolvedRoadLimit(RoadSource.LIVE,result.state,result.limitMph,result.fallbackAllowed && result.state.permitsOverpass)
+        if(live==null) {
+            val unavailable=regional ?: return ResolvedRoadLimit(RoadSource.UNAVAILABLE,RoadProviderState.SERVICE_UNAVAILABLE,null,false)
+            return ResolvedRoadLimit(RoadSource.UNAVAILABLE,unavailable.state,null,
+                unavailable.fallbackAllowed && unavailable.state.permitsOverpass)
+        }
+        return ResolvedRoadLimit(RoadSource.LIVE,live.state,live.limitMph,live.fallbackAllowed && live.state.permitsOverpass)
     }
     fun resolve(owner: Int?, pack: Int?, cached: Int?, live: LiveRoadState?): ResolvedRoadLimit {
         if(owner != null) return ResolvedRoadLimit(RoadSource.LOCAL_OWNER,RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,owner,false)
