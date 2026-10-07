@@ -22,6 +22,15 @@ class RegionalRoadContractTest {
         assertTrue(pack.downloadUrl.endsWith("/roads.sqlite.gz"))
     }
 
+    @Test fun `catalogue recognises both released regions and rejects malformed entries`() {
+        val lancashire=catalogue.replace("merseyside","lancashire").replace("Merseyside","Lancashire")
+            .replace("20261006-1","20261005-1")
+        val combined=catalogue.dropLast(2)+","+lancashire.substringAfter("[{").substringBeforeLast("]}")+"}] }"
+        assertEquals(setOf("merseyside","lancashire"),RegionalRoadCatalogue.parse(combined).map { it.id }.toSet())
+        assertThrows(IllegalArgumentException::class.java) { RegionalRoadCatalogue.parse(catalogue.replace("\"catalogueVersion\":1","\"catalogueVersion\":2")) }
+        assertThrows(IllegalArgumentException::class.java) { RegionalRoadCatalogue.parse(catalogue.replace("\"downloadBytes\":16084855","\"downloadBytes\":0")) }
+    }
+
     @Test fun `catalogue rejects cross host pack and unsupported schema`() {
         assertThrows(IllegalArgumentException::class.java) {
             RegionalRoadCatalogue.parse(catalogue.replace("api.jtwebsolutions.co.uk", "example.org"))
