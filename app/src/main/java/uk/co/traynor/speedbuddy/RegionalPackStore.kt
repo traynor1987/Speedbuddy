@@ -14,6 +14,11 @@ internal class RegionalPackStore(private val context: Context) {
     private val root = File(context.filesDir, "regional-road-packs").apply { mkdirs() }
     private val active = File(root, "active")
     data class Installed(val descriptor: RegionalPackDescriptor, val database: File)
+    fun installed(): List<Installed> = active.listFiles { file -> file.extension == "json" }?.mapNotNull { pointer ->
+        val region=pointer.nameWithoutExtension
+        val descriptor=runCatching { RegionalRoadCatalogue.parse("{\"catalogueVersion\":1,\"generatedAt\":\"local\",\"regions\":[${pointer.readText()}]}").single() }.getOrNull()
+        descriptor?.let { active(region)?.let { database -> Installed(it,database) } }
+    }.orEmpty()
     fun activeDatabases(): List<Pair<String,File>> = active.listFiles { file -> file.extension == "json" }?.mapNotNull { pointer ->
         val region=pointer.nameWithoutExtension
         active(region)?.let { region to it }
