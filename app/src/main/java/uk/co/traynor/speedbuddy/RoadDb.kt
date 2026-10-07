@@ -34,7 +34,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         db.execSQL("CREATE TABLE average_sections(tile TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(tile,id))")
     }
     override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
-        if(oldVersion<5) db.execSQL("CREATE TABLE tile_subdivisions(id TEXT PRIMARY KEY)")
+        if(oldVersion<5) db.execSQL("CREATE TABLE IF NOT EXISTS tile_subdivisions(id TEXT PRIMARY KEY)")
         if(oldVersion<4) createLearning(db)
         if(oldVersion<3) createSections(db)
         if(oldVersion<2) db.execSQL("ALTER TABLE overrides ADD COLUMN payload TEXT")

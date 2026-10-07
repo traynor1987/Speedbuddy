@@ -90,7 +90,7 @@ class CombinedRoadCacheTest {
             db.writableDatabase.version=2
         }
         RoadDb(context,name).use { db ->
-            assertEquals(4,db.readableDatabase.version)
+            assertEquals(5,db.readableDatabase.version)
             assertEquals(road,db.nearby(p).roads.single().road)
             assertEquals(20,RoadDb.selectOverride(db.overrides(),road.id,0.0))
             db.replace(RoadTileData(tile,2000,listOf(road),listOf(camera),averageSections=listOf(section)))
@@ -116,7 +116,7 @@ class CombinedRoadCacheTest {
             db.writableDatabase.version=3
         }
         RoadDb(context,name).use { db ->
-            assertEquals(4,db.readableDatabase.version)
+            assertEquals(5,db.readableDatabase.version)
             assertEquals(setOf(road,next),db.nearby(p).roads.map { it.road }.toSet())
             assertEquals(section,db.nearby(p).averageSections.single())
             assertEquals(camera,db.nearby(p).cameras.single())
