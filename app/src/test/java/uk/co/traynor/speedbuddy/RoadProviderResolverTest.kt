@@ -15,4 +15,14 @@ class RoadProviderResolverTest {
         assertTrue(RoadProviderResolver.resolve(null,null,null,LiveRoadState(RoadProviderState.COVERAGE_UNAVAILABLE,false,null,true)).overpassAllowed)
         assertTrue(RoadProviderResolver.resolve(null,null,null,LiveRoadState(RoadProviderState.SERVICE_UNAVAILABLE,false,null,true)).overpassAllowed)
     }
+    @Test fun unavailableRegionalPackFallsThroughToLiveButUnknownPackDoesNot() {
+        val live=LiveRoadState(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,true,20,false)
+        assertEquals(RoadSource.LIVE,RoadProviderResolver.resolveProviderStates(null,
+            LiveRoadState(RoadProviderState.COVERAGE_UNAVAILABLE,false,null,true),null,live).source)
+        val unknown=RoadProviderResolver.resolveProviderStates(null,
+            LiveRoadState(RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN,true,null,false),null,live)
+        assertEquals(RoadSource.REGIONAL_PACK,unknown.source)
+        assertNull(unknown.limitMph)
+        assertFalse(unknown.overpassAllowed)
+    }
 }
