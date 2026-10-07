@@ -140,4 +140,14 @@ class PhysicalRoadRegressionTest {
         val future=DrivingLimitPipeline().evaluate(fix(285.0,1000),listOf(old,next),emptyList(),emptyMap(),listOf(second.boundary!!),emptyList(),1000,20_000)
         assertEquals(60,future.decision.mph);assertEquals(40,future.upcoming?.mph)
     }
+    @Test fun liveRoadStateFeedsTheRealPipelineOnlyWhenRegionalAuthorityIsUnavailable() {
+        val unknown=road("regional-unknown",0.0,1_000.0,null)
+        val live=LiveRoadState(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,true,20,false)
+        val fallback=DrivingLimitPipeline().evaluate(fix(100.0,1_000),listOf(unknown),emptyList(),emptyMap(),emptyList(),emptyList(),1_000,11_000,
+            RegionalPackMatcher.Result(RoadProviderState.COVERAGE_UNAVAILABLE,null),live)
+        assertEquals(20,fallback.decision.mph)
+        val terminal=DrivingLimitPipeline().evaluate(fix(100.0,1_000),listOf(unknown),emptyList(),emptyMap(),emptyList(),emptyList(),1_000,11_000,
+            RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN,RoadMatch(unknown,0.0,0.0,.95)),live)
+        assertNull(terminal.decision.mph)
+    }
 }
