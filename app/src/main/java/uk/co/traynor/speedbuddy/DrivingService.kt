@@ -33,6 +33,7 @@ data class DriveState(
     val turns: List<TurnLimit> = emptyList(), val alertPositionFresh: Boolean = true,
     val averageSection: ActiveAverageSection? = null,
     val roadCacheRevision: Long = 0L,val boundaryAvailable: Boolean = false,val correctionMessage: String = "",
+    val roadRequestKind: String = "No request",val subdivisionLevel: Int? = null,val currentRegionStatus: String = "Idle",val completedRoadRegions: Int = 0,
 )
 object DriveBus {
     private val mutable = MutableStateFlow(DriveState())
@@ -51,6 +52,7 @@ class DrivingService : Service(), LocationListener {
     private lateinit var db: CameraDb
     private lateinit var roads: RoadDb
     private lateinit var downloader: RoadDownload
+    private lateinit var adaptiveDownloader: AdaptiveRoadDownloader
     private lateinit var roadRepository: DrivingRoadRepository
     private val speedFilter = SpeedFilter()
     private val limitPipeline=DrivingLimitPipeline()
@@ -88,6 +90,9 @@ class DrivingService : Service(), LocationListener {
     private var imported = emptyList<Camera>()
     private var importedCount = 0
     private var mapStatus = "Loading saved road data"
+    private var roadRequestKind = "No request"
+    private var roadSubdivisionLevel: Int? = null
+    private var currentRegionStatus = "Idle"
     private var lastAlertId: String? = null
     private var tick: Job? = null
     private var processing: Job? = null
@@ -97,7 +102,7 @@ class DrivingService : Service(), LocationListener {
     override fun onBind(intent: Intent?) = null
     override fun onCreate() {
         super.onCreate(); locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
-        db = CameraDb(this); roads = RoadDb(this); downloader = RoadDownload(this)
+        db = CameraDb(this); roads = RoadDb(this); downloader = RoadDownload(this); adaptiveDownloader=AdaptiveRoadDownloader(roads,downloader)
         roadRepository=DrivingRoadRepository(roads,OsmDataSource(this)::cachedRegional)
         cameraVoice = CameraVoice(this) { signal(true,false) }
         scope.launch {
@@ -255,7 +260,8 @@ class DrivingService : Service(), LocationListener {
                     upcoming=upcoming,publicCameraCount=publicCameras.size,userCameraCount=userCameras.size,importedCameraCount=importedCount,importedNearbyCount=importedNearby.size,
                     turns=turns,alertPositionFresh=fix.accuracyM<=35,averageSection=section,roadDataStatus=roadStatus(now),limitDecision=decision,sourceLimitMph=source,tooEarlyAvailable=limitEngine.canReport(now),awaitingBoundary=limitEngine.pendingFeedback,
                     coverageTiles=wanted.count { it in coverage },targetTiles=wanted.size,roadCacheRevision=generation,boundaryAvailable=limitEngine.canMarkBoundary(now),
-                    correctionMessage=feedbackMessage.takeIf { now-feedbackAt in 0..6000 } ?: "").let(result::applyTo))
+                    correctionMessage=feedbackMessage.takeIf { now-feedbackAt in 0..6000 } ?: "",
+                    roadRequestKind=roadRequestKind,subdivisionLevel=roadSubdivisionLevel,currentRegionStatus=currentRegionStatus,completedRoadRegions=coverage.size).let(result::applyTo))
                 val diagnostic=LimitDiagnostics.snapshot("decision",DriveBus.state.value,transition=limitEngine.transitionEvidence())
                 withContext(Dispatchers.IO) { runCatching { roads.recordDiagnostic(diagnostic) }.onFailure { Log.w("SpeedBuddy","Decision diagnostic could not be saved",it) } }
                 cameraVoice.revalidate()
@@ -305,26 +311,38 @@ class DrivingService : Service(), LocationListener {
         if(!ready || fetching || stopped || budgetReached) return
         val target=planner.next(fix,coverage,System.currentTimeMillis()) ?: return
         fetching=true;planner.attempted(System.currentTimeMillis());mapStatus="Updating tile ${target.id}"
+        roadRequestKind="Normal tile";roadSubdivisionLevel=target.level;currentRegionStatus="Downloading"
+        DriveBus.set(DriveBus.state.value.copy(roadRequestKind=roadRequestKind,subdivisionLevel=roadSubdivisionLevel,currentRegionStatus=currentRegionStatus))
         scope.launch {
             try {
                 val result=withContext(Dispatchers.IO) {
                     if(!downloader.permitted()) return@withContext null
-                    val fresh=downloader.fetch(target);ensureActive()
-                    RoadCacheUpdater(roads).refresh(target) { fresh }
+                    val before=roads.coverage()
+                    // The current tile gets its exact current-position child first. A
+                    // small ahead prefetch has no current point inside it, so use its
+                    // centre rather than accidentally subdividing the wrong quadrant.
+                    val priorityPoint=fix.point.takeIf(target::contains) ?: target.center
+                    val fetched=adaptiveDownloader.fetch(target,priorityPoint);ensureActive()
+                    RoadCacheUpdater(roads).store(fetched.data)
                     val here=RoadTile.at(fix.point)
                     val protected=buildSet { for(y in here.y-1..here.y+1) for(x in here.x-1..here.x+1) add(RoadTile(y,x)) }
-                    val before=roads.coverage()
                     roads.cleanup(protected)
-                    roads.coverage() to (before.keys-roads.coverage().keys)
+                    Triple(roads.coverage(),before.keys-roads.coverage().keys,fetched)
                 }
                 if(result==null) { budgetReached=true;budgetUntil=(System.currentTimeMillis()/86_400_000+1)*86_400_000;mapStatus="Daily public-provider allowance reached; saved data retained" }
                 else { coverage=result.first
                     if(result.second.isNotEmpty()) planner.retentionLimited(fix.point)
-                    generation++;offline=false;refreshDelayed=false;updatedAt=SystemClock.elapsedRealtime();planner.succeeded();mapStatus="Saved tile ${target.id}; ${coverage.size} tiles available" }
+                    generation++;offline=false;refreshDelayed=false;updatedAt=SystemClock.elapsedRealtime();planner.succeeded()
+                    val detail=if(result.third.subdivisionLevel>0) "subdivided child ${result.third.requested.id} (level ${result.third.subdivisionLevel})" else "normal tile ${target.id}"
+                    mapStatus="Saved $detail; ${coverage.size} completed regions available"
+                    roadRequestKind=if(result.third.subdivisionLevel>0) "Subdivided child" else "Normal tile";roadSubdivisionLevel=result.third.subdivisionLevel;currentRegionStatus="Complete"
+                    DriveBus.set(DriveBus.state.value.copy(roadRequestKind=roadRequestKind,subdivisionLevel=roadSubdivisionLevel,currentRegionStatus=currentRegionStatus,completedRoadRegions=coverage.size,mapStatus=mapStatus)) }
             } catch(e: Exception) {
                 if(e is CancellationException) throw e
                 offline=e is java.net.UnknownHostException || e is java.net.ConnectException || e is java.net.NoRouteToHostException
                 refreshDelayed=true;planner.failed(System.currentTimeMillis());mapStatus="Refresh failed; retained saved data: ${e.message?.take(100)}"
+                currentRegionStatus="Failed"
+                DriveBus.set(DriveBus.state.value.copy(currentRegionStatus=currentRegionStatus,mapStatus=mapStatus))
                 Log.w("SpeedBuddy",mapStatus,e)
             } finally { fetching=false }
         }

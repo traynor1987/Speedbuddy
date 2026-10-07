@@ -6,17 +6,56 @@ const val ROAD_FRESH_MS = 7 * 86_400_000L
 const val ROAD_CHECK_MS = 15 * 60_000L
 const val ROAD_RADIUS_M = 32_186.88
 
-data class RoadTile(val y: Int, val x: Int) {
-    val id get() = "$y:$x"
-    val south get() = y * .08
-    val north get() = (y + 1) * .08
-    val west get() = x * .12
-    val east get() = (x + 1) * .12
+/**
+ * A normal cache tile is deliberately coarse so rural coverage remains cheap.  A dense
+ * tile may be split into quadrants; the child has its own durable cache identity and is
+ * never allowed to claim that its whole parent was downloaded.
+ */
+data class RoadTile(val y: Int, val x: Int, val path: String = "") {
+    init { require(path.all { it in '0'..'3' }) }
+    val id get() = if(path.isEmpty()) "$y:$x" else "$y:$x@$path"
+    val level get() = path.length
+    private val grid get() = 1 shl level
+    private val row get() = path.fold(0) { value, quadrant -> value * 2 + if(quadrant in "23") 1 else 0 }
+    private val column get() = path.fold(0) { value, quadrant -> value * 2 + if(quadrant in "13") 1 else 0 }
+    val south get() = y * .08 + row * (.08 / grid)
+    val north get() = y * .08 + (row + 1) * (.08 / grid)
+    val west get() = x * .12 + column * (.12 / grid)
+    val east get() = x * .12 + (column + 1) * (.12 / grid)
     val center get() = GeoPoint((south+north)/2, (west+east)/2)
+    fun contains(point: GeoPoint) = point.lat in south..north && point.lon in west..east
+    fun childContaining(point: GeoPoint): RoadTile {
+        require(contains(point))
+        val northHalf=point.lat >= (south+north)/2
+        val eastHalf=point.lon >= (west+east)/2
+        val quadrant=when {
+            !northHalf && !eastHalf -> '0'
+            !northHalf -> '1'
+            !eastHalf -> '2'
+            else -> '3'
+        }
+        return copy(path=path+quadrant)
+    }
     companion object {
         fun at(p: GeoPoint) = RoadTile(floor(p.lat/.08).toInt(),floor(p.lon/.12).toInt())
-        fun parse(id: String): RoadTile = id.split(':').let { RoadTile(it[0].toInt(),it[1].toInt()) }
+        fun parse(id: String): RoadTile {
+            val (parent,path)=id.split('@',limit=2).let { it[0] to (it.getOrNull(1) ?: "") }
+            return parent.split(':').let { RoadTile(it[0].toInt(),it[1].toInt(),path) }
+        }
     }
+}
+
+const val MAX_ROAD_SUBDIVISION_DEPTH = 3
+
+/** Pure policy for dense regions: current-position child first, bounded at 16ths. */
+object RoadSubdivision {
+    fun next(tile: RoadTile, point: GeoPoint, subdivided: Set<RoadTile>): RoadTile {
+        var current=tile
+        while(current in subdivided && current.level < MAX_ROAD_SUBDIVISION_DEPTH) current=current.childContaining(point)
+        return current
+    }
+    fun afterOversize(tile: RoadTile, point: GeoPoint): RoadTile? =
+        tile.takeIf { it.level < MAX_ROAD_SUBDIVISION_DEPTH }?.childContaining(point)
 }
 object RoadTiles {
     fun covering(center: GeoPoint): Set<RoadTile> {
@@ -61,9 +100,9 @@ class RoadRefreshPlanner {
             Geo.distance(plannedAt!!,fix.point) > 1500) {
             desired = RoadTiles.covering(fix.point); plannedAt = fix.point; lastCheckMs = now
         }
-        fun needed(tile: RoadTile) = tile !in coverage
-        if (needed(local)) return local
-        if (ahead != null && needed(ahead)) return ahead
+        fun needed(point: GeoPoint) = coverage.keys.none { it.contains(point) }
+        if (needed(fix.point)) return local
+        if (ahead != null && needed(Geo.ahead(fix.point,fix.bearing!!,1800.0))) return ahead
         retentionAt=null
         // Do not pre-fill every tile in the 20-mile diagnostic circle. That spends the
         // limited public data allowance before the driver reaches those roads.

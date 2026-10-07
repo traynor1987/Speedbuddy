@@ -61,4 +61,24 @@ class RoadCacheTest {
         val saved = mapOf(local to 1000L, ahead to 1000L)
         assertNull(planner.next(fix(speed = 12.0), saved, 1001))
     }
+    @Test fun denseParentSelectsTheCurrentChildBeforeAnyOtherQuadrant() {
+        val parent=RoadTile.at(point)
+        val current=GeoPoint(parent.south+.001,parent.east-.001)
+        val child=RoadSubdivision.next(parent,current,setOf(parent))
+        assertEquals(1,child.level)
+        assertTrue(child.contains(current))
+        assertEquals(parent,child.copy(path=""))
+    }
+    @Test fun denseSubdivisionIsBoundedAtTheMinimumRegionSize() {
+        val parent=RoadTile.at(point)
+        var tile=parent
+        repeat(MAX_ROAD_SUBDIVISION_DEPTH) { tile=tile.childContaining(point) }
+        assertNull(RoadSubdivision.afterOversize(tile,point))
+    }
+    @Test fun completedDenseChildCountsAsUsefulCurrentCoverageWithoutCompletingParent() {
+        val parent=RoadTile.at(point);val child=parent.childContaining(point)
+        val planner=RoadRefreshPlanner()
+        assertNull(planner.next(fix(),mapOf(child to 1000L),1000))
+        assertNotNull(planner.next(fix(Geo.ahead(point,180.0,20_000.0)),mapOf(child to 1000L),1001))
+    }
 }

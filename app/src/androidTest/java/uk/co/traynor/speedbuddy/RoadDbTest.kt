@@ -2,12 +2,61 @@ package uk.co.traynor.speedbuddy
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class RoadDbTest {
+    @Test fun oversizedParentFetchesCurrentChildOnceAndPersistsTheSubdivision() = runBlocking {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val point=GeoPoint(53.41,-2.99);val parent=RoadTile.at(point);val requested=mutableListOf<RoadTile>()
+        val road=Road("way/dense",null,listOf(point,GeoPoint(point.lat+.0002,point.lon+.0002)),mapOf("highway" to "residential","maxspeed" to "20 mph"))
+        context.deleteDatabase("adaptive-dense.db")
+        RoadDb(context,"adaptive-dense.db").use { db ->
+            val download=AdaptiveRoadDownloader(db) { tile,_ ->
+                requested+=tile
+                if(tile==parent) throw RoadResponseTooLargeException(4_000_001)
+                RoadTileData(tile,1000,listOf(road),emptyList())
+            }
+            val result=download.fetch(parent,point)
+            assertEquals(listOf(parent,parent.childContaining(point)),requested)
+            assertEquals(1,result.subdivisionLevel)
+            assertTrue(parent in db.subdivisions())
+            RoadCacheUpdater(db).store(result.data)
+            assertTrue(result.requested in db.coverage())
+            assertFalse(parent in db.coverage())
+        }
+        context.deleteDatabase("adaptive-dense.db")
+    }
+    @Test fun denseChildCoverageIsDurableButDoesNotMarkTheParentComplete() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val point=GeoPoint(53.41,-2.99);val parent=RoadTile.at(point);val child=parent.childContaining(point)
+        val road=Road("way/dense",null,listOf(point,GeoPoint(point.lat+.0002,point.lon+.0002)),mapOf("highway" to "residential","maxspeed" to "20 mph"))
+        RoadDb(context,"dense-child.db").use { db ->
+            db.markSubdivided(parent)
+            db.replace(RoadTileData(child,1000,listOf(road),emptyList()))
+            assertTrue(child in db.coverage())
+            assertFalse(parent in db.coverage())
+            assertTrue(parent in db.subdivisions())
+            assertEquals("way/dense",db.nearby(point).roads.single().road.id)
+        }
+        context.deleteDatabase("dense-child.db")
+    }
+    @Test fun laterDenseFetchStartsAtTheRecordedChildInsteadOfRetryingItsOversizedParent() = runBlocking {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val point=GeoPoint(53.41,-2.99);val parent=RoadTile.at(point);val requested=mutableListOf<RoadTile>()
+        val road=Road("way/dense",null,listOf(point,GeoPoint(point.lat+.0002,point.lon+.0002)),mapOf("highway" to "residential","maxspeed" to "20 mph"))
+        context.deleteDatabase("dense-retry.db")
+        RoadDb(context,"dense-retry.db").use { db ->
+            db.markSubdivided(parent)
+            val result=AdaptiveRoadDownloader(db) { tile,_ -> requested+=tile;RoadTileData(tile,2000,listOf(road),emptyList()) }.fetch(parent,point)
+            assertEquals(listOf(parent.childContaining(point)),requested)
+            assertEquals(1,result.subdivisionLevel)
+        }
+        context.deleteDatabase("dense-retry.db")
+    }
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
     private val point = GeoPoint(53.5,-2.8)
     private val tile = RoadTile.at(point)

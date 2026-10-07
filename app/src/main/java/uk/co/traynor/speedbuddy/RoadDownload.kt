@@ -16,6 +16,37 @@ import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/** The decoded body cap is deliberate; callers can subdivide a geographic request safely. */
+class RoadResponseTooLargeException(val decodedBytes: Int) : IllegalStateException("Road response too large")
+
+data class AdaptiveRoadFetch(val data: RoadTileData,val requested: RoadTile,val parent: RoadTile) {
+    val subdivisionLevel get() = requested.level
+}
+
+/**
+ * Retries only an explicit oversized geographic region as the child containing the
+ * driver.  Provider/network/parse failures are not retried here: the planner's normal
+ * exponential backoff remains responsible for those.
+ */
+class AdaptiveRoadDownloader(private val db: RoadDb,private val load: suspend (RoadTile,Boolean) -> RoadTileData) {
+    constructor(db: RoadDb,downloader: RoadDownload) : this(db,{ tile,immediate -> downloader.fetch(tile,immediate) })
+    suspend fun fetch(parent: RoadTile, current: GeoPoint): AdaptiveRoadFetch {
+        var target=RoadSubdivision.next(parent,current,db.subdivisions())
+        var immediate=false
+        while(true) try {
+            return AdaptiveRoadFetch(load(target,immediate),target,parent)
+        } catch(tooLarge: RoadResponseTooLargeException) {
+            val child=RoadSubdivision.afterOversize(target,current) ?: throw IllegalStateException(
+                "Road response too large at minimum dense-city region (level ${target.level})",tooLarge)
+            // This durable marker prevents a later drive from repeatedly requesting the
+            // known-oversized parent.  It contains no road data and is never coverage.
+            db.markSubdivided(target)
+            target=child
+            immediate=true
+        }
+    }
+}
+
 /** Strict completion checks: HTTP 200 alone is not evidence of a complete Overpass response. */
 object RoadResponse {
     private val keys=setOf("highway","name","ref","oneway","junction","maxspeed","maxspeed:type","source:maxspeed",
@@ -82,8 +113,8 @@ class RoadDownload(context: Context,private val connectionFactory: () -> HttpURL
     }
     fun permitted(): Boolean { newDay();return budget.getInt("requests",0)<90 && budget.getLong("bytes",0)<9_000_000 }
     /** Called only by the single refresh coroutine. Count failed attempts and failed bytes too. */
-    suspend fun fetch(tile: RoadTile): RoadTileData = RoadRequestGate.mutex.withLock {
-        val wait=30_000-(System.currentTimeMillis()-budget.getLong("lastAttempt",0))
+    suspend fun fetch(tile: RoadTile, immediateRetry: Boolean = false): RoadTileData = RoadRequestGate.mutex.withLock {
+        val wait=if(immediateRetry) 0 else 30_000-(System.currentTimeMillis()-budget.getLong("lastAttempt",0))
         if(wait>0) delay(wait)
         check(permitted()) { "Daily public-provider allowance reached" }
         check(budget.edit().putInt("requests",budget.getInt("requests",0)+1).putLong("lastAttempt",System.currentTimeMillis()).commit())
@@ -114,7 +145,8 @@ class RoadDownload(context: Context,private val connectionFactory: () -> HttpURL
                 while(true) {
                     checkActive()
                     val n=input.read(buffer);if(n<0) break
-                    check(output.size()+n<=4_000_000) { "Road response too large" };output.write(buffer,0,n)
+                    if(output.size()+n>4_000_000) throw RoadResponseTooLargeException(output.size()+n)
+                    output.write(buffer,0,n)
                 }
             }
             val data=RoadResponse.decode(output.toString("UTF-8"),tile,System.currentTimeMillis())
