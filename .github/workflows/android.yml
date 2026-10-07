@@ -135,7 +135,9 @@ jobs:
         run: |
           # Validation jobs for this push have passed; also require the independent PR run.
           for attempt in $(seq 1 80); do
-            conclusion=$(gh run list --commit "$SPEED_BUDDY_SOURCE_SHA" --event pull_request --workflow Android --limit 20 --json status,conclusion --jq '[.[] | select(.status == "completed")][0].conclusion // "pending"')
+            # Query Actions by head SHA.  The CLI's commit lookup can return an
+            # unrelated older PR run for the branch and reject a verified head.
+            conclusion=$(gh api "repos/$GH_REPO/actions/runs?event=pull_request&head_sha=$SPEED_BUDDY_SOURCE_SHA&per_page=100" --jq '[.workflow_runs[] | select(.name == "Android" and .status == "completed")][0].conclusion // "pending"')
             if [ "$conclusion" = success ]; then break; fi
             if [ "$conclusion" != pending ]; then echo 'Independent PR validation failed; candidate publication refused.'; exit 1; fi
             sleep 15
