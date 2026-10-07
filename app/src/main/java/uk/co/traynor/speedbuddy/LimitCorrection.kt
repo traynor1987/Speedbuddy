@@ -20,7 +20,7 @@ object QuickLimitCorrection {
     fun capture(fix: Fix,match: RoadMatch?,source: Int?,selected: Int,targetRoad: String,now: Long): RoadDb.Override? {
         if(match==null || match.road.id!=targetRoad || !OwnerLimit.valid(selected) ||
             !correctionReady(fix, match, now)) return null
-        return RoadDb.Override(match.road.id,fix.bearing,selected,source,fix.point,System.currentTimeMillis(),fix.accuracyM)
+        return RoadDb.Override(match.road.id,fix.bearing ?: return null,selected,source,fix.point,System.currentTimeMillis(),fix.accuracyM)
     }
 }
 
