@@ -363,7 +363,7 @@ class DrivingService : Service(), LocationListener {
                 if(intent.action!="RESET_CORRECTIONS" && (road==null || fix.bearing==null)) {
                     val receipt=LimitDiagnostics.snapshot("unmatched correction",state,intent.getIntExtra("mph",OWNER_UNKNOWN),transition=limitEngine.transitionEvidence())
                     scope.launch(Dispatchers.IO) { runCatching { roads.recordDiagnostic(receipt) } }
-                    feedback("Road not matched yet. Keep driving and tap the sign again.")
+                    feedback(unmatchedCorrectionMessage())
                     return
                 }
                 val selected=intent.getIntExtra("mph",OWNER_UNKNOWN)

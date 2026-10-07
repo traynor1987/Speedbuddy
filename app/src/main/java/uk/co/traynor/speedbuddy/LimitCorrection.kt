@@ -27,6 +27,10 @@ object QuickLimitCorrection {
     }
 }
 
+/** Explain the real prerequisite rather than asking the owner to guess where to tap. */
+internal fun unmatchedCorrectionMessage() =
+    "Waiting for a road match. Keep driving until Speed Buddy recognises the road, then when safely stopped tap the large round limit sign."
+
 /** One owner assertion, separate from road overrides and from downloaded data. */
 data class BoundaryObservation(val from: Road,val to: Road,val oldMph: Int,val newMph: Int,
     val predicted: GeoPoint,val stillPoint: GeoPoint,val bearing: Double,

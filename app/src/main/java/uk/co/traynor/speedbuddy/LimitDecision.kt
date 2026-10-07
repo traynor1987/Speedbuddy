@@ -176,7 +176,10 @@ class LimitDecisionEngine {
         val effective=match ?: previous.takeIf {
             geometry.first<=kotlin.math.max(16.0,fix.accuracyM*1.5) && fix.bearing?.let { b ->
                 geometry.second?.let { h -> kotlin.math.min(Geo.difference(b,h),Geo.difference(b,(h+180)%360))<=30 }
-            } == true && now-anchor.at in 0..15_000
+            // A matching pass can briefly return no road at all. Keep the last
+            // confirmed limit only while the fresh GPS point still fits that same
+            // road geometry, within the existing bounded assumption lifetime.
+            } == true && now-anchor.at in 0..90_000
         }
         val roadType=effective?.road?.tags?.get("highway")
         // Preserve a truthful assumed limit during a brief source gap on the

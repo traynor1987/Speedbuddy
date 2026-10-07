@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LimitLearningTest {
+    @Test fun `unmatched correction explains the exact next safe action`() {
+        assertEquals(
+            "Waiting for a road match. Keep driving until Speed Buddy recognises the road, then when safely stopped tap the large round limit sign.",
+            unmatchedCorrectionMessage(),
+        )
+    }
     private val start = GeoPoint(53.0, -2.0)
     private fun road(id: String, from: Double, to: Double, mph: Int?) = Road(id, "Main Road",
         listOf(Geo.ahead(start, 0.0, from), Geo.ahead(start, 0.0, to)),

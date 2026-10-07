@@ -449,8 +449,8 @@ class MainActivity : ComponentActivity() {
                         .semantics { contentDescription="Correct road speed limit" }
                         .clickable(enabled=state.active && (state.fix!=null || state.road!=null)) { pickerFor=state }) {
                         LimitSign(state.limitMph, national, Modifier.fillMaxSize().clearAndSetSemantics {})
-                        if(state.limitDecision?.assumed==true) Text("⚠",color=Warning,fontSize=32.sp,fontWeight=FontWeight.Black,
-                            modifier=Modifier.align(Alignment.TopEnd).offset(x=14.dp))
+                        if(state.limitDecision?.assumed==true) AssumedLimitBadge(
+                            Modifier.align(Alignment.TopEnd).offset(x=14.dp))
                     }
                     state.turns.firstOrNull { it.direction == TurnDirection.LEFT }?.let {
                         TurnLimitPreview(it, Modifier.align(Alignment.CenterStart).width(72.dp))
@@ -550,6 +550,12 @@ class MainActivity : ComponentActivity() {
         }
         Button(onClick = if (state.active) onStop else onStart, modifier = Modifier.fillMaxWidth().height(56.dp),
             shape = RoundedCornerShape(18.dp)) { Text(if (state.active) "Stop driving mode" else "Start driving mode", fontWeight = FontWeight.Bold) }
+    }
+}
+@Composable private fun AssumedLimitBadge(modifier: Modifier = Modifier) {
+    Surface(modifier.size(38.dp), shape=CircleShape, color=Color.White,
+        border=BorderStroke(4.dp, Color(0xFFE5272D)), contentColor=Color.Black) {
+        Box(contentAlignment=Alignment.Center) { Text("!",fontSize=25.sp,fontWeight=FontWeight.Black) }
     }
 }
 
