@@ -18,6 +18,8 @@ class FullReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('v0.4.0-regional-offline-', workflow)
         self.assertIn('docs/OWNER_ACCEPTANCE.md', workflow)
         self.assertIn('Remove temporary private key', workflow)
+        self.assertIn('head_sha=$SPEED_BUDDY_SOURCE_SHA', workflow)
+        self.assertNotIn('gh run list --commit', workflow)
 
 if __name__ == '__main__':
     unittest.main()
