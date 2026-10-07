@@ -25,4 +25,11 @@ class RoadProviderResolverTest {
         assertNull(unknown.limitMph)
         assertFalse(unknown.overpassAllowed)
     }
+    @Test fun unavailableRegionalPackWithoutALiveResultRemainsUnavailable() {
+        val resolved=RoadProviderResolver.resolveProviderStates(null,
+            LiveRoadState(RoadProviderState.COVERAGE_UNAVAILABLE,false,null,true),null,null)
+        assertEquals(RoadSource.UNAVAILABLE,resolved.source)
+        assertEquals(RoadProviderState.COVERAGE_UNAVAILABLE,resolved.state)
+        assertTrue(resolved.overpassAllowed)
+    }
 }
