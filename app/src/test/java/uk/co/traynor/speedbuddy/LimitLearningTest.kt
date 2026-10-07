@@ -31,14 +31,13 @@ class LimitLearningTest {
         accuracy: Double = 5.0, owner: Int? = null) =
         e.decide(fix(m, at, accuracy), match(r, confidence), SpeedLimits.mph(r.tags), owner, emptyList(), at)
 
-    @Test fun confirmedThirtyAndSixtyAreTemporarilyInheritedOnConnectedUnknownRoad() {
+    @Test fun connectedUnknownRoadDoesNotInheritAcrossTheThirtyMetreBoundary() {
         for (mph in listOf(30, 60)) {
             val e = LimitDecisionEngine()
             decide(e, old.copy(tags = mapOf("maxspeed" to "$mph mph", "highway" to "primary")), 180.0, 1000)
             val result = decide(e, next, 220.0, 2000)
-            assertEquals(mph, result.mph)
-            assertTrue(result.reason.contains("Assumed"))
-            assertTrue(result.reason.contains("way/1"))
+            assertNull(result.mph)
+            assertFalse(result.assumed)
         }
     }
     @Test fun assumptionDoesNotRenewItselfAndExpiresByTimeAndDistance() {
@@ -54,7 +53,7 @@ class LimitLearningTest {
         decide(e, next, 220.0, 2000)
         val tagged=next.copy(tags = mapOf("maxspeed" to "40 mph"))
         val candidate=decide(e,tagged,240.0,3000)
-        assertEquals(60,candidate.mph);assertEquals(40,candidate.upcoming?.mph)
+        assertNull(candidate.mph);assertEquals(40,candidate.upcoming?.mph)
         decide(e,tagged,255.0,4000)
         assertEquals(40,decide(e,tagged,270.0,5000).mph)
         val owner = LimitDecisionEngine(); decide(owner, old, 180.0, 1000)
