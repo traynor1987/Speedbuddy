@@ -107,7 +107,7 @@ class DrivingService : Service(), LocationListener {
     override fun onCreate() {
         super.onCreate(); locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         db = CameraDb(this); roads = RoadDb(this); downloader = RoadDownload(this); adaptiveDownloader=AdaptiveRoadDownloader(roads,downloader)
-        speedBuddyRoadClient = SpeedBuddyRoadClient { getSharedPreferences("settings", Context.MODE_PRIVATE).getString("speedBuddyCredential", null) }
+        speedBuddyRoadClient = SpeedBuddyRoadClient(credential = { getSharedPreferences("settings", Context.MODE_PRIVATE).getString("speedBuddyCredential", null) })
         roadRepository=DrivingRoadRepository(roads,OsmDataSource(this)::cachedRegional)
         regionalMatcher=RegionalPackMatcher(this)
         cameraVoice = CameraVoice(this) { signal(true,false) }
