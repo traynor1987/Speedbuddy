@@ -23,6 +23,11 @@ class DrivingReplayTest {
         val r=road("no-pack-way",null);val state=DrivingReplay().play(frame(r,1_000,RegionalPackMatcher.Result(RoadProviderState.COVERAGE_UNAVAILABLE,null),LiveRoadState(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,true,30,false)))
         assertEquals(30,state.limitMph)
     }
+    @Test fun serviceUnavailableWithoutALiveLimitStaysTruthfullyUnknown() {
+        val r=road("no-service-way",null);val state=DrivingReplay().play(frame(r,1_000,
+            RegionalPackMatcher.Result(RoadProviderState.SERVICE_UNAVAILABLE,null),null))
+        assertNull(state.limitMph);assertNull(state.sourceLimitMph)
+    }
     @Test fun uncertainRegionalMatchIsAlsoTerminalAndDoesNotUseLiveNumber() {
         val r=road("parallel-road",null);val state=DrivingReplay().play(frame(r,1_000,
             RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,RoadMatch(r,0.0,0.0,.4)),
@@ -44,6 +49,13 @@ class DrivingReplayTest {
         assertEquals(30,brief.limitMph);assertTrue(brief.limitDecision!!.assumed)
         val expired=replay.play(ReplayFrame(fix(115.0,3_001),emptyList(),now=3_001,wallNow=13_001))
         assertNull(expired.limitMph);assertFalse(expired.limitDecision!!.assumed)
+    }
+    @Test fun boundedContinuityExpiresAfterThirtyMetresBeforeItsTimeLimit() {
+        fun fix(m: Double,at: Long)=Fix(Geo.ahead(origin,0.0,m),5.0,10.0,1.0,0.0,at)
+        val replay=DrivingReplay();val known=road("distance-bound-way",30)
+        assertEquals(30,replay.play(ReplayFrame(fix(100.0,1_000),listOf(known),now=1_000,wallNow=11_000)).limitMph)
+        val expired=replay.play(ReplayFrame(fix(131.0,1_500),emptyList(),now=1_500,wallNow=11_500))
+        assertNull(expired.limitMph);assertTrue(expired.limitDecision!!.reason.contains("30 metres"))
     }
     @Test fun authoritativeChangeReplacesAnAssumptionAndAndroidAutoReadsTheSharedBusOnly() {
         val replay=DrivingReplay();val thirty=road("lancashire-boundary",30);val twenty=road("merseyside-boundary",20)
