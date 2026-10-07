@@ -11,7 +11,7 @@ internal class DrivingReplay(private val pipeline: DrivingLimitPipeline = Drivin
     fun play(frame: ReplayFrame): DriveState {
         val result=pipeline.evaluate(frame.fix,frame.roads,frame.overrides,frame.corrections,frame.boundaries,frame.observations,
             frame.now,frame.wallNow,frame.regional,frame.live)
-        // Only active MobileReport instances are Cameras; known enforcement zones remain passive context.\n        val (alert,cameraDecision)=cameraDetector.evaluate(frame.fix,result.road,frame.cameras,frame.speedMph,frame.roads,\n            frame.wallNow,result.decision.mph)\n        val state=result.applyTo(DriveBus.state.value.copy(active=true,speedMph=frame.speedMph)).copy(\n            alert=alert,decision=cameraDecision,mobileEnforcementZones=frame.mobileEnforcementZones)
+        // Only active MobileReport instances are Cameras; known enforcement zones remain passive context.\n        val (alert,cameraDecision)=cameraDetector.evaluate(frame.fix,result.road,frame.cameras,frame.speedMph,frame.roads,\n            frame.wallNow,result.decision.mph)\n        val state=result.applyTo(DriveState(active=true,speedMph=frame.speedMph)).copy(\n            alert=alert,decision=cameraDecision,mobileEnforcementZones=frame.mobileEnforcementZones)
         DriveBus.set(state)
         return state
     }
