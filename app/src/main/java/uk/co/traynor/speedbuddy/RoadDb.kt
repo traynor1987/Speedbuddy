@@ -9,10 +9,11 @@ import org.json.JSONObject
 import kotlin.math.cos
 
 /** Public tile storage is independent of owner cameras, settings and local corrections. */
-class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,4) {
+class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,5) {
     override fun onConfigure(db: SQLiteDatabase) { db.execSQL("PRAGMA auto_vacuum=INCREMENTAL") }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE tiles(id TEXT PRIMARY KEY,fetched INTEGER NOT NULL,bytes INTEGER NOT NULL,complete INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE tile_subdivisions(id TEXT PRIMARY KEY)")
         db.execSQL("CREATE TABLE roads(pk INTEGER PRIMARY KEY,tile TEXT NOT NULL,road_id TEXT NOT NULL,payload TEXT NOT NULL,UNIQUE(tile,road_id))")
         db.execSQL("CREATE INDEX road_tile ON roads(tile)")
         db.execSQL("CREATE TABLE road_cells(y INTEGER NOT NULL,x INTEGER NOT NULL,pk INTEGER NOT NULL,PRIMARY KEY(y,x,pk))")
@@ -33,12 +34,20 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         db.execSQL("CREATE TABLE average_sections(tile TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(tile,id))")
     }
     override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
+        if(oldVersion<5) db.execSQL("CREATE TABLE IF NOT EXISTS tile_subdivisions(id TEXT PRIMARY KEY)")
         if(oldVersion<4) createLearning(db)
         if(oldVersion<3) createSections(db)
         if(oldVersion<2) db.execSQL("ALTER TABLE overrides ADD COLUMN payload TEXT")
     }
     fun coverage(): Map<RoadTile,Long> = readableDatabase.rawQuery("SELECT id,fetched FROM tiles WHERE complete=1",null).use { c ->
         buildMap { while(c.moveToNext()) put(RoadTile.parse(c.getString(0)),c.getLong(1)) }
+    }
+    /** A subdivision marker has no road data itself: it records that its children are the truthful coverage units. */
+    fun subdivisions(): Set<RoadTile> = readableDatabase.rawQuery("SELECT id FROM tile_subdivisions",null).use { c ->
+        buildSet { while(c.moveToNext()) add(RoadTile.parse(c.getString(0))) }
+    }
+    fun markSubdivided(tile: RoadTile) {
+        writableDatabase.insertWithOnConflict("tile_subdivisions",null,ContentValues().apply { put("id",tile.id) },SQLiteDatabase.CONFLICT_IGNORE)
     }
     fun replace(data: RoadTileData) {
         require(data.fetchedAt > 0 && data.roads.size <= 30_000)
@@ -131,7 +140,10 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         val all=db.rawQuery("SELECT id,bytes FROM tiles ORDER BY fetched ASC",null).use { c -> buildList { while(c.moveToNext()) add(c.getString(0) to c.getLong(1)) } }
         var count=all.size;var bytes=all.sumOf { it.second }
         db.beginTransaction()
-        try { all.forEach { (id,size) -> if((count>maxTiles || bytes>maxBytes) && RoadTile.parse(id) !in protected) { deleteTile(db,id);count--;bytes-=size } };db.setTransactionSuccessful() }
+        try { all.forEach { (id,size) ->
+            val region=RoadTile.parse(id); val parent=region.copy(path="")
+            if((count>maxTiles || bytes>maxBytes) && region !in protected && parent !in protected) { deleteTile(db,id);count--;bytes-=size }
+        };db.setTransactionSuccessful() }
         finally { db.endTransaction() }
         db.execSQL("PRAGMA incremental_vacuum(2048)")
     }
@@ -308,5 +320,11 @@ class RoadCacheUpdater(private val db: RoadDb) {
         require(fresh.tile==tile && fresh.complete) { "Wrong or incomplete replacement tile" }
         db.replace(fresh)
         return fresh
+    }
+    /** Dense child regions are complete only for their exact bounds, never their parent. */
+    fun store(data: RoadTileData): RoadTileData {
+        require(data.complete)
+        db.replace(data)
+        return data
     }
 }

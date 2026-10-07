@@ -26,6 +26,13 @@ class PhysicalRoadRegressionTest {
         val restored=drive(e,matcher,120.0,3000,listOf(old))
         assertEquals(60,restored.mph);assertFalse(restored.assumed)
     }
+    @Test fun `same-road geometry gap remains assumed beyond the old fifteen second matcher window`() {
+        val e=LimitDecisionEngine();val matcher=RoadMatcher()
+        assertEquals(20,drive(e,matcher,100.0,1_000,listOf(old.copy(tags=old.tags+mapOf("maxspeed" to "20 mph")))).mph)
+        val gap=drive(e,matcher,120.0,21_000,emptyList())
+        assertEquals(20,gap.mph)
+        assertTrue(gap.assumed)
+    }
     @Test fun compatibleSameRoadSourceGapAtNormalGpsAccuracyStaysAssumed() {
         val engine=LimitDecisionEngine();val matcher=RoadMatcher()
         val confirmed=road("same",0.0,1_000.0,30)

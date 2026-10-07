@@ -420,6 +420,7 @@ class MainActivity : ComponentActivity() {
         tags?.get("maxspeed:type")?.startsWith("GB:nsl") == true ||
         tags?.get("maxspeed")?.startsWith("GB:nsl") == true || tags?.get("maxspeed") == "GB:motorway")
     val compact=LocalConfiguration.current.screenHeightDp<800
+    val correctionAvailable = state.road != null
     Column(Modifier.fillMaxSize().then(if(compact) Modifier.verticalScroll(rememberScrollState()) else Modifier)
         .padding(horizontal = 22.dp, vertical = if(compact) 6.dp else 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -447,10 +448,10 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.fillMaxWidth().height(mainSize), contentAlignment = Alignment.Center) {
                     Box(Modifier.size(mainSize).testTag("current-road-limit")
                         .semantics { contentDescription="Correct road speed limit" }
-                        .clickable(enabled=state.active && (state.fix!=null || state.road!=null)) { pickerFor=state }) {
+                        .clickable(enabled=state.active && correctionAvailable) { pickerFor=state }) {
                         LimitSign(state.limitMph, national, Modifier.fillMaxSize().clearAndSetSemantics {})
-                        if(state.limitDecision?.assumed==true) Text("⚠",color=Warning,fontSize=32.sp,fontWeight=FontWeight.Black,
-                            modifier=Modifier.align(Alignment.TopEnd).offset(x=14.dp))
+                        if(state.limitDecision?.assumed==true) AssumedLimitBadge(
+                            Modifier.align(Alignment.TopEnd).offset(x=14.dp))
                     }
                     state.turns.firstOrNull { it.direction == TurnDirection.LEFT }?.let {
                         TurnLimitPreview(it, Modifier.align(Alignment.CenterStart).width(72.dp))
@@ -460,7 +461,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 if (state.limitMph == null) Surface(
-                    onClick = { if(state.active && (state.fix!=null || state.road!=null)) pickerFor=state else onUnknownLimit() },
+                    onClick = { if(state.active && correctionAvailable) pickerFor=state else onUnknownLimit() },
                     modifier = Modifier.align(Alignment.BottomCenter).size(48.dp)
                         .semantics { contentDescription = "Set this road's speed limit" },
                     shape = CircleShape, color = Accent, contentColor = Background,
@@ -471,7 +472,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        state.upcoming?.let { next ->
+        state.upcoming?.takeIf { it.isCredibleUpcoming(state.limitMph) }?.let { next ->
             Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("UPCOMING", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -488,6 +489,8 @@ class MainActivity : ComponentActivity() {
         }, color = Muted, fontSize = 15.sp)
         if (state.roadDataStatus.isNotBlank()) Text(state.roadDataStatus, color = Muted, fontSize = 11.sp)
         if(state.awaitingBoundary) Text("Tap the limit at the real sign",color=Accent,fontSize=13.sp)
+        if(state.limitMph == null && state.active && !correctionAvailable)
+            Text("Waiting to identify this road — + becomes available when ready",color=Accent,fontSize=13.sp)
         if(state.correctionMessage.isNotBlank()) Text(state.correctionMessage,color=Accent,fontSize=13.sp)
         if(compact) Spacer(Modifier.height(12.dp)) else Spacer(Modifier.weight(1f))
         state.averageSection?.let { section->
@@ -550,6 +553,12 @@ class MainActivity : ComponentActivity() {
         }
         Button(onClick = if (state.active) onStop else onStart, modifier = Modifier.fillMaxWidth().height(56.dp),
             shape = RoundedCornerShape(18.dp)) { Text(if (state.active) "Stop driving mode" else "Start driving mode", fontWeight = FontWeight.Bold) }
+    }
+}
+@Composable private fun AssumedLimitBadge(modifier: Modifier = Modifier) {
+    Surface(modifier.size(38.dp), shape=CircleShape, color=Color.White,
+        border=BorderStroke(4.dp, Color(0xFFE5272D)), contentColor=Color.Black) {
+        Box(contentAlignment=Alignment.Center) { Text("!",fontSize=25.sp,fontWeight=FontWeight.Black) }
     }
 }
 
@@ -859,7 +868,11 @@ class MainActivity : ComponentActivity() {
             "Learned boundary" to state.limitDecision?.boundaryApplied?.toString(),
             "Decision reason" to state.limitDecision?.reason,
             "Coverage tiles" to "${state.coverageTiles} / ${state.targetTiles} in 20-mile target",
-            "Data mode" to if ((state.dataAgeMs ?: 0) > ROAD_FRESH_MS) "Older saved road data" else "Saved road data",
+            "Completed regions" to state.completedRoadRegions.toString(),
+            "Road-data request" to state.roadRequestKind,
+            "Subdivision" to (state.subdivisionLevel?.let { "level $it" } ?: "not required"),
+            "Current-region status" to state.currentRegionStatus,
+            "Data mode" to "Saved road data",
             "Map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
             "Map request" to state.mapStatus))
         val parked = state.active && (state.speedMph ?: Double.MAX_VALUE) < 5.0

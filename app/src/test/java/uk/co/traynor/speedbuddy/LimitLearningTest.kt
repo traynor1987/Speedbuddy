@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LimitLearningTest {
+    @Test fun `unmatched correction explains the exact next safe action`() {
+        assertEquals(
+            "Waiting for a reliable road match. The + control becomes available when Speed Buddy has identified this road; then, when safely stopped, tap the large round limit sign.",
+            unmatchedCorrectionMessage(),
+        )
+    }
     private val start = GeoPoint(53.0, -2.0)
     private fun road(id: String, from: Double, to: Double, mph: Int?) = Road(id, "Main Road",
         listOf(Geo.ahead(start, 0.0, from), Geo.ahead(start, 0.0, to)),
@@ -13,6 +19,14 @@ class LimitLearningTest {
     private fun fix(m: Double, at: Long, accuracy: Double = 5.0, bearing: Double = 0.0) =
         Fix(Geo.ahead(start, 0.0, m), accuracy, 10.0, 1.0, bearing, at)
     private fun match(r: Road, confidence: Double = .95, heading: Double = 0.0) = RoadMatch(r, 0.0, heading, confidence)
+
+    @Test fun `road correction is unavailable until the current road is reliably matched`() {
+        val f = fix(220.0, 2_000)
+        assertFalse(correctionReady(f, null, 2_000))
+        assertFalse(correctionReady(f.copy(accuracyM = 25.0), match(next), 2_000))
+        assertFalse(correctionReady(f, match(next, confidence = .6), 2_000))
+        assertTrue(correctionReady(f, match(next), 2_000))
+    }
     private fun decide(e: LimitDecisionEngine, r: Road, m: Double, at: Long, confidence: Double = .95,
         accuracy: Double = 5.0, owner: Int? = null) =
         e.decide(fix(m, at, accuracy), match(r, confidence), SpeedLimits.mph(r.tags), owner, emptyList(), at)
