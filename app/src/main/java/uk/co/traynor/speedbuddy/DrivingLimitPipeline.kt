@@ -17,12 +17,19 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
         plan?.boundary?.let(engine::confirmSavedBoundary)
     }
     fun evaluate(fix: Fix,roads: List<Road>,overrides: List<RoadDb.Override>,corrections: Map<String,RoadLimitCorrection>,
-        boundaries: List<BoundaryCorrection>,observations: List<BoundaryObservation>,now: Long,wallNow: Long): DriveLimitResult {
+        boundaries: List<BoundaryCorrection>,observations: List<BoundaryObservation>,now: Long,wallNow: Long,
+        regional: RegionalPackMatcher.Result? = null): DriveLimitResult {
         // Reject before either matcher or engine can mutate state after delayed IO.
         if(now-fix.elapsedMs !in 0..5000) return DriveLimitResult(fix,null,null,
             LimitDecision(null,reason="Unavailable: stale GPS fix; decision history unchanged"),null)
-        val road=matcher.match(fix,roads)
-        val source=limits.limit(road)
+        // A covered regional pack is authoritative even when it says Unknown or uncertain.
+        // Legacy cache is only considered when no usable regional provider participated.
+        val road=regional?.match ?: matcher.match(fix,roads)
+        val source=when (regional?.state) {
+            RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN -> road?.let { PackSpeedLimits.mph(it.road.tags,fix.bearing ?: return@let null,it) }
+            RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN, RoadProviderState.ROAD_MATCH_UNCERTAIN -> null
+            else -> limits.limit(road)
+        }
         val owner=OwnerRoadLimits.select(road?.road,fix.bearing,overrides,corrections,fix.point)
         val decision=engine.decide(fix,road,source,owner?.mph,boundaries,now,observations,wallNow).let {
             if(owner?.national==true) it.copy(national=true) else it
