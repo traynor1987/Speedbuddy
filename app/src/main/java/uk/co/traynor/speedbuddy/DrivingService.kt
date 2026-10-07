@@ -90,6 +90,7 @@ class DrivingService : Service(), LocationListener {
     private var localPoint: GeoPoint? = null
     private var local = LocalRoads(emptyList(),emptyList())
     private var regional = RegionalPackMatcher.Result(RoadProviderState.COVERAGE_UNAVAILABLE, null)
+    private var lastLiveRoadRequestAt = 0L
     private var userCameras = emptyList<Camera>()
     private var imported = emptyList<Camera>()
     private var importedCount = 0
@@ -245,7 +246,15 @@ class DrivingService : Service(), LocationListener {
                 val decisionAt=SystemClock.elapsedRealtime()
                 if (decisionAt-fix.elapsedMs !in 0..5000) return@launch
                 // State transitions and picker plans share the service's main-thread owner.
-                val result=limitPipeline.evaluate(fix,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,decisionAt,wallNow,regional)
+                val liveRoadState=if(regional.state in setOf(RoadProviderState.COVERAGE_UNAVAILABLE,RoadProviderState.SERVICE_UNAVAILABLE) &&
+                    fix.bearing != null && fix.accuracyM in 1.0..100.0 && decisionAt-lastLiveRoadRequestAt>=1_000) {
+                    lastLiveRoadRequestAt=decisionAt
+                    withContext(Dispatchers.IO) {
+                        runCatching { speedBuddyRoadClient.request(fix,DriveBus.state.value.road?.road?.id?.substringAfterLast('/')?.toLongOrNull()) }
+                            .getOrElse { LiveRoadState(RoadProviderState.SERVICE_UNAVAILABLE,false,null,true) }
+                    }
+                } else null
+                val result=limitPipeline.evaluate(fix,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,decisionAt,wallNow,regional,liveRoadState)
                 val road=result.road;val source=result.source;val decision=result.decision;val limit=decision.mph
                 val upcoming=result.upcoming
                 val settings = getSharedPreferences("settings",Context.MODE_PRIVATE)
