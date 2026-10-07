@@ -53,7 +53,10 @@ class LimitLearningTest {
         decide(e, next, 220.0, 2000)
         val tagged=next.copy(tags = mapOf("maxspeed" to "40 mph"))
         val candidate=decide(e,tagged,240.0,3000)
-        assertNull(candidate.mph);assertEquals(40,candidate.upcoming?.mph)
+        // The earlier unknown road is beyond the 30 m / 2 s inheritance
+        // window, so this is a fresh strong source, not a deferred assumed
+        // transition from the abandoned 60 mph road.
+        assertEquals(40,candidate.mph);assertNull(candidate.upcoming)
         decide(e,tagged,255.0,4000)
         assertEquals(40,decide(e,tagged,270.0,5000).mph)
         val owner = LimitDecisionEngine(); decide(owner, old, 180.0, 1000)
