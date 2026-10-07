@@ -54,6 +54,7 @@ class DrivingService : Service(), LocationListener {
     private lateinit var downloader: RoadDownload
     private lateinit var adaptiveDownloader: AdaptiveRoadDownloader
     private lateinit var roadRepository: DrivingRoadRepository
+    private lateinit var regionalMatcher: RegionalPackMatcher
     /** 0.4.0's fallback client is deliberately owned by this existing service, never by Auto. */
     private lateinit var speedBuddyRoadClient: SpeedBuddyRoadClient
     private val speedFilter = SpeedFilter()
@@ -88,6 +89,7 @@ class DrivingService : Service(), LocationListener {
     private var localAt = 0L
     private var localPoint: GeoPoint? = null
     private var local = LocalRoads(emptyList(),emptyList())
+    private var regional = RegionalPackMatcher.Result(RoadProviderState.COVERAGE_UNAVAILABLE, null)
     private var userCameras = emptyList<Camera>()
     private var imported = emptyList<Camera>()
     private var importedCount = 0
@@ -107,6 +109,7 @@ class DrivingService : Service(), LocationListener {
         db = CameraDb(this); roads = RoadDb(this); downloader = RoadDownload(this); adaptiveDownloader=AdaptiveRoadDownloader(roads,downloader)
         speedBuddyRoadClient = SpeedBuddyRoadClient { getSharedPreferences("settings", Context.MODE_PRIVATE).getString("speedBuddyCredential", null) }
         roadRepository=DrivingRoadRepository(roads,OsmDataSource(this)::cachedRegional)
+        regionalMatcher=RegionalPackMatcher(this)
         cameraVoice = CameraVoice(this) { signal(true,false) }
         scope.launch {
             try {
@@ -219,15 +222,16 @@ class DrivingService : Service(), LocationListener {
                 if (localGeneration != generation || cameraRevision!=OwnerDataRevision.cameras || now-localAt > 5000 || localPoint?.let { Geo.distance(it,fix.point)>150 } != false) {
                     val result = withContext(Dispatchers.IO) {
                         val nearby=roadRepository.nearby(fix.point,RoadTile.at(fix.point) in coverage)
+                        val regionalResult=regionalMatcher.match(fix)
                         val personal = db.userCameras()
                         val lufop = db.importedNearby(fix.point)
                         val count = db.importedInfo()?.count ?: 0
                         val effective=db.effectiveInBounds(fix.point.lat-.015,fix.point.lon-.025,
                             fix.point.lat+.015,fix.point.lon+.025,nearby.cameras)
-                        listOf(nearby,personal,lufop,count,effective)
+                        listOf(nearby,personal,lufop,count,effective,regionalResult)
                     }
                     @Suppress("UNCHECKED_CAST")
-                    run { local = result[0] as LocalRoads;userCameras = result[1] as List<Camera>;imported = result[2] as List<Camera>;importedCount = result[3] as Int;effectiveCameras=result[4] as List<Camera> }
+                    run { local = result[0] as LocalRoads;userCameras = result[1] as List<Camera>;imported = result[2] as List<Camera>;importedCount = result[3] as Int;effectiveCameras=result[4] as List<Camera>;regional=result[5] as RegionalPackMatcher.Result }
                     localPoint=fix.point;localAt=now;localGeneration=generation;cameraRevision=OwnerDataRevision.cameras
                 }
                 if(roadRevision!=OwnerDataRevision.roads) {
@@ -241,7 +245,7 @@ class DrivingService : Service(), LocationListener {
                 val decisionAt=SystemClock.elapsedRealtime()
                 if (decisionAt-fix.elapsedMs !in 0..5000) return@launch
                 // State transitions and picker plans share the service's main-thread owner.
-                val result=limitPipeline.evaluate(fix,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,decisionAt,wallNow)
+                val result=limitPipeline.evaluate(fix,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,decisionAt,wallNow,regional)
                 val road=result.road;val source=result.source;val decision=result.decision;val limit=decision.mph
                 val upcoming=result.upcoming
                 val settings = getSharedPreferences("settings",Context.MODE_PRIVATE)
@@ -426,7 +430,7 @@ class DrivingService : Service(), LocationListener {
             DriveBus.set(live.copy(limitMph=null,limitDecision=null,upcoming=null,awaitingBoundary=false,boundaryAvailable=false,tooEarlyAvailable=false))
             return
         }
-        val result=limitPipeline.evaluate(current,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,now,System.currentTimeMillis())
+        val result=limitPipeline.evaluate(current,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,now,System.currentTimeMillis(),regional)
         DriveBus.set(result.applyTo(live).copy(awaitingBoundary=false,boundaryAvailable=false,tooEarlyAvailable=false))
     }
     private fun fixedSpeedEnabled(settings: android.content.SharedPreferences) = CameraAlertPolicy.enabled(
