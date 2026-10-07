@@ -2,6 +2,7 @@ package uk.co.traynor.speedbuddy
 
 import org.junit.Assert.*
 import org.junit.Test
+import org.json.JSONObject
 
 class RegionalRoadContractTest {
     private val catalogue = """{
@@ -23,10 +24,13 @@ class RegionalRoadContractTest {
     }
 
     @Test fun `catalogue recognises both released regions and rejects malformed entries`() {
-        val lancashire=catalogue.replace("merseyside","lancashire").replace("Merseyside","Lancashire")
-            .replace("20261006-1","20261005-1")
-        val combined=catalogue.dropLast(2)+","+lancashire.substringAfter("[{").substringBeforeLast("]}")+"}] }"
-        assertEquals(setOf("merseyside","lancashire"),RegionalRoadCatalogue.parse(combined).map { it.id }.toSet())
+        val combined=JSONObject(catalogue)
+        val lancashire=JSONObject(combined.getJSONArray("regions").getJSONObject(0).toString())
+        lancashire.put("id","lancashire").put("displayName","Lancashire").put("version","20261005-1")
+        lancashire.put("downloadUrl","https://api.jtwebsolutions.co.uk/speedbuddy/v1/packs/lancashire/20261005-1/roads.sqlite.gz")
+        lancashire.put("manifestUrl","https://api.jtwebsolutions.co.uk/speedbuddy/v1/packs/lancashire/20261005-1/manifest.json")
+        combined.getJSONArray("regions").put(lancashire)
+        assertEquals(setOf("merseyside","lancashire"),RegionalRoadCatalogue.parse(combined.toString()).map { it.id }.toSet())
         assertThrows(IllegalArgumentException::class.java) { RegionalRoadCatalogue.parse(catalogue.replace("\"catalogueVersion\":1","\"catalogueVersion\":2")) }
         assertThrows(IllegalArgumentException::class.java) { RegionalRoadCatalogue.parse(catalogue.replace("\"downloadBytes\":16084855","\"downloadBytes\":0")) }
     }
