@@ -870,7 +870,7 @@ class MainActivity : ComponentActivity() {
             "Coverage tiles" to "${state.coverageTiles} / ${state.targetTiles} in 20-mile target",
             "Completed regions" to state.completedRoadRegions.toString(),
             "Road-data request" to state.roadRequestKind,
-            "Subdivision" to state.subdivisionLevel?.let { "level $it" } ?: "not required",
+            "Subdivision" to (state.subdivisionLevel?.let { "level $it" } ?: "not required"),
             "Current-region status" to state.currentRegionStatus,
             "Data mode" to "Saved road data",
             "Map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
