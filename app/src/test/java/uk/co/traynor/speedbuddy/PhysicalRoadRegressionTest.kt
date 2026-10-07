@@ -54,11 +54,11 @@ class PhysicalRoadRegressionTest {
         drive(e,matcher,230.0,4000,listOf(old,next))
         assertEquals(40,drive(e,matcher,250.0,5000,listOf(old,next)).mph)
     }
-    @Test fun longGpsStepAtBoundaryDoesNotEraseTrustworthyPrior() {
+    @Test fun longGpsStepAtBoundaryClearsTheBoundedAssumption() {
         val e=LimitDecisionEngine();val matcher=RoadMatcher()
         drive(e,matcher,180.0,1000,listOf(old,next))
         val candidate=drive(e,matcher,360.0,2000,listOf(old,next))
-        assertEquals(60,candidate.mph);assertTrue(candidate.assumed);assertEquals(40,candidate.upcoming?.mph)
+        assertNull(candidate.mph);assertFalse(candidate.assumed);assertEquals(40,candidate.upcoming?.mph)
     }
     @Test fun matchGapCannotInventLimitOutsidePriorGeometry() {
         val e=LimitDecisionEngine();val matcher=RoadMatcher()
@@ -79,7 +79,7 @@ class PhysicalRoadRegressionTest {
         val stale=pipeline.evaluate(fix(260.0,1000),listOf(old,next),listOf(RoadDb.Override(next.id,0.0,40)),emptyMap(),emptyList(),emptyList(),7000,17_000)
         assertNull(stale.decision.mph);assertTrue(stale.decision.reason.contains("stale"))
         val freshGap=pipeline.evaluate(fix(190.0,8000),emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),8000,18_000)
-        assertEquals(60,freshGap.decision.mph);assertTrue(freshGap.decision.assumed)
+        assertNull(freshGap.decision.mph);assertFalse(freshGap.decision.assumed)
     }
     @Test fun takingConnectedUnknownBranchDoesNotRetainAbandonedRoadPreview() {
         val junction=Geo.ahead(p,0.0,200.0)
@@ -88,7 +88,7 @@ class PhysicalRoadRegressionTest {
         assertEquals(40,pipeline.evaluate(fix(160.0,1000),listOf(old,next,branch),emptyList(),emptyMap(),emptyList(),emptyList(),1000,11_000).upcoming?.mph)
         val turned=fix(230.0,2000).copy(point=Geo.ahead(junction,20.0,30.0),bearing=20.0)
         val result=pipeline.evaluate(turned,listOf(old,next,branch),emptyList(),emptyMap(),emptyList(),emptyList(),2000,12_000)
-        assertEquals(branch.id,result.road?.road?.id);assertEquals(60,result.decision.mph)
+        assertEquals(branch.id,result.road?.road?.id);assertNull(result.decision.mph)
         assertNull(result.upcoming)
     }
     @Test fun singlePickerConfirmationDoesNotOverrideEntireLongRoad() {
