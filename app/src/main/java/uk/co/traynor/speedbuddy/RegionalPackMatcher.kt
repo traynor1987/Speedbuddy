@@ -15,16 +15,18 @@ internal class RegionalPackMatcher(context: Context) {
     data class Result(val state: RoadProviderState, val match: RoadMatch?, val generation: String? = null)
 
     fun match(fix: Fix): Result {
-        if (fix.accuracyM !in 1.0..25.0 || fix.speedMps?.let { it < 2.0 } == true || fix.bearing !in 0.0..<360.0)
+        if (fix.accuracyM !in 1.0..25.0 || fix.speedMps?.let { it < 2.0 } == true || fix.bearing?.let { it in 0.0..<360.0 } != true)
             return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN, null)
         val databases = packs.activeDatabases()
         if (databases.isEmpty()) return Result(RoadProviderState.COVERAGE_UNAVAILABLE, null)
         val candidates = mutableListOf<Road>()
         var covered = false
+        var generation: String? = null
         for ((region, database) in databases) {
             SQLiteDatabase.openDatabase(database.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
                 if (!covers(db, fix.point)) return@use
                 covered = true
+                generation = region
                 candidates += roadsNear(db, fix)
             }
         }
@@ -34,7 +36,7 @@ internal class RegionalPackMatcher(context: Context) {
             ?: return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN, null)
         val limit = PackSpeedLimits.mph(match.road.tags, fix.bearing!!, match)
         return Result(if (limit == null) RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN else RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,
-            match, region)
+            match, generation)
     }
 
     private fun roadsNear(db: SQLiteDatabase, fix: Fix): List<Road> {
