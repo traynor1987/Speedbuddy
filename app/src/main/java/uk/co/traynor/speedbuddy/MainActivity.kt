@@ -696,6 +696,7 @@ class MainActivity : ComponentActivity() {
             } }
         }
     } }
+}
 @Composable private fun MenuRow(title: String, subtitle: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
