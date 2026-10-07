@@ -680,7 +680,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 @Composable private fun OfflineRoadDataScreen(context: Context, back: () -> Unit) {
-    val scope=rememberCoroutineScope(); val lifecycle=remember { RegionalPackLifecycle(context) { context.getSharedPreferences("settings",Context.MODE_PRIVATE).getString("speedBuddyCredential",null) } }
+    val scope=rememberCoroutineScope(); val lifecycle=remember { RegionalPackLifecycle(context,credential = { context.getSharedPreferences("settings",Context.MODE_PRIVATE).getString("speedBuddyCredential",null) }) }
     var catalogue by remember { mutableStateOf<List<RegionalPackDescriptor>>(emptyList()) }
     var installed by remember { mutableStateOf(lifecycle.installed()) }; var message by remember { mutableStateOf("Checking the production catalogue…") }
     LaunchedEffect(Unit) { runCatching { withContext(Dispatchers.IO) { lifecycle.catalogue() } }.onSuccess { catalogue=it;message="" }.onFailure { message=it.message ?: "Catalogue unavailable" } }
