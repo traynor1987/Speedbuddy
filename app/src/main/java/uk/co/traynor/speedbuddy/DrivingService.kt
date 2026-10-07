@@ -54,6 +54,8 @@ class DrivingService : Service(), LocationListener {
     private lateinit var downloader: RoadDownload
     private lateinit var adaptiveDownloader: AdaptiveRoadDownloader
     private lateinit var roadRepository: DrivingRoadRepository
+    /** 0.4.0's fallback client is deliberately owned by this existing service, never by Auto. */
+    private lateinit var speedBuddyRoadClient: SpeedBuddyRoadClient
     private val speedFilter = SpeedFilter()
     private val limitPipeline=DrivingLimitPipeline()
     private val matcher get()=limitPipeline.matcher
@@ -103,6 +105,7 @@ class DrivingService : Service(), LocationListener {
     override fun onCreate() {
         super.onCreate(); locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         db = CameraDb(this); roads = RoadDb(this); downloader = RoadDownload(this); adaptiveDownloader=AdaptiveRoadDownloader(roads,downloader)
+        speedBuddyRoadClient = SpeedBuddyRoadClient { getSharedPreferences("settings", Context.MODE_PRIVATE).getString("speedBuddyCredential", null) }
         roadRepository=DrivingRoadRepository(roads,OsmDataSource(this)::cachedRegional)
         cameraVoice = CameraVoice(this) { signal(true,false) }
         scope.launch {
