@@ -77,11 +77,11 @@ class DrivingReplayTest {
         // Android Auto subscribes to DriveBus; replay has no Auto matcher or resolver.
         assertEquals("merseyside-boundary",DriveBus.state.value.road?.road?.id)
     }    @Test fun knownMobileEnforcementZoneIsNotAnActiveCameraButAnActiveReportIs() {
-        val r=road("camera-way",30);val reportPoint=Geo.ahead(origin,0.0,250.0)
-        val active=MobileReport("mobile:replay",reportPoint,1_000,1_000,7_201_000,120,0.0,"camera-way").asCamera()
+        val r=road("way/camera",30);val reportPoint=Geo.ahead(origin,0.0,250.0)
+        val active=MobileReport("mobile:replay",reportPoint,1_000,1_000,7_201_000,120,0.0,"way/camera").asCamera()
         val replay=DrivingReplay()
         val zoneOnly=replay.play(frame(r,1_000).copy(mobileEnforcementZones=listOf(
-            MobileEnforcementZone("zone:replay",reportPoint,"camera-way"))))
+            MobileEnforcementZone("zone:replay",reportPoint,"way/camera"))))
         assertTrue(zoneOnly.mobileEnforcementZones.single().known)
         assertNull(zoneOnly.alert)
         val reported=replay.play(frame(r,2_000).copy(cameras=listOf(active),speedMph=22.0))
