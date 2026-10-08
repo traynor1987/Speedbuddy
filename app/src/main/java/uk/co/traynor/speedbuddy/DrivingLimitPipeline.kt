@@ -75,7 +75,7 @@ internal data class DriveLimitResult(val fix: Fix,val road: RoadMatch?,val sourc
     val decision: LimitDecision,val upcoming: UpcomingLimit?) {
     fun applyTo(state: DriveState): DriveState {
         if(state.fix?.let { it.elapsedMs>fix.elapsedMs }==true) return state
-        return state.copy(fix=fix,roadDecisionElapsedMs=fix.elapsedMs,road=road,sourceLimitMph=source,limitMph=decision.mph,
+        return state.copy(fix=fix,roadDecisionElapsedMs=fix.elapsedMs,pendingConfirmedLimit=false,road=road,sourceLimitMph=source,limitMph=decision.mph,
         limitDecision=decision,upcoming=upcoming,status=when {
             decision.mph==null -> "Road limit unknown"
             state.speedMph==null && state.active -> "GPS speed unavailable"

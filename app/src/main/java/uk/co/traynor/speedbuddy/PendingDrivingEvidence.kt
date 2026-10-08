@@ -13,7 +13,7 @@ internal object PendingDrivingEvidence {
             else (fix.speedMps ?: Double.MAX_VALUE)<=2.0 && road.road.tags.keys.none {
                 it.startsWith("maxspeed:forward") || it.startsWith("maxspeed:backward") }
     }
-    fun current(state: DriveState, now: Long = state.fix?.elapsedMs ?: 0): Boolean = state.limitDecision?.reason==reason &&
+    fun current(state: DriveState, now: Long = state.fix?.elapsedMs ?: 0): Boolean = state.pendingConfirmedLimit &&
         state.fix?.let { fits(state,it) && state.roadDecisionElapsedMs!=it.elapsedMs &&
             state.roadDecisionElapsedMs?.let { at -> now-at in 0..2000 }==true }==true
     fun cameraLimit(state: DriveState, now: Long = state.fix?.elapsedMs ?: 0): Int? = state.alert?.let {

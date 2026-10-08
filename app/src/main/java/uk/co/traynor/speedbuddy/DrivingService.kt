@@ -32,7 +32,7 @@ data class DriveState(
     val awaitingBoundary: Boolean = false, val coverageTiles: Int = 0, val targetTiles: Int = 0,
     val turns: List<TurnLimit> = emptyList(), val alertPositionFresh: Boolean = true,
     val averageSection: ActiveAverageSection? = null,
-    val roadDecisionElapsedMs: Long? = null,
+    val roadDecisionElapsedMs: Long? = null,val pendingConfirmedLimit: Boolean = false,
     val roadCacheRevision: Long = 0L,val boundaryAvailable: Boolean = false,val correctionMessage: String = "",
     val roadRequestKind: String = "No request",val subdivisionLevel: Int? = null,val currentRegionStatus: String = "Idle",val completedRoadRegions: Int = 0,
     /** Passive context only: a known zone is never treated as an active mobile camera report. */
@@ -56,6 +56,7 @@ object DriveBus {
         val pendingLimit=prior.limitMph.takeIf { fits }
         mutable.value = prior.copy(active = true, speedMph = speedMph, fix = fix,limitMph=pendingLimit,
             road=prior.road.takeIf { fits },sourceLimitMph=prior.sourceLimitMph.takeIf { fits },
+            pendingConfirmedLimit=fits && (prior.limitDecision?.assumed==false || prior.pendingConfirmedLimit),
             alert=prior.alert?.takeIf { fits }?.let { it.copy(distanceM=Geo.distance(fix.point,it.camera.point)) },
             overspeed=false,upcoming=null,tooEarlyAvailable=false,boundaryAvailable=false,
             alertPositionFresh=fits && prior.alertPositionFresh,

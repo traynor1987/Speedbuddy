@@ -49,8 +49,10 @@ class RegionalDrivingCycleTest {
         }
         val gzip=File(context.cacheDir,"cycle1.gz")
         GZIPOutputStream(gzip.outputStream()).use { raw.inputStream().use { input -> input.copyTo(it) } }
-        val descriptor=RegionalPackDescriptor("lancashire","Lancashire","cycle1",1,"2026-10-08T00:00:00Z",gzip.length(),raw.length(),digest(gzip),digest(raw),
-            "https://api.jtwebsolutions.co.uk/speedbuddy/v1/packs/lancashire/cycle1/roads.sqlite.gz","https://api.jtwebsolutions.co.uk/speedbuddy/v1/packs/lancashire/cycle1/manifest.json")
+        // Different fixture contents need different immutable versions, just like real packs.
+        val version="cycle1-${java.util.UUID.randomUUID()}"
+        val descriptor=RegionalPackDescriptor("lancashire","Lancashire",version,1,"2026-10-08T00:00:00Z",gzip.length(),raw.length(),digest(gzip),digest(raw),
+            "https://api.jtwebsolutions.co.uk/speedbuddy/v1/packs/lancashire/$version/roads.sqlite.gz","https://api.jtwebsolutions.co.uk/speedbuddy/v1/packs/lancashire/$version/manifest.json")
         RegionalPackStore(context).install(descriptor,gzip)
     }
     private fun fix(point: GeoPoint,bearing: Double,t: Long)=Fix(point,5.0,10.0,1.0,bearing,t)

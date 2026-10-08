@@ -34,4 +34,20 @@ class PendingDrivingEvidenceTest {
         DriveBus.publishLocationSpeed(22.0,fix.copy(elapsedMs=4000))
         assertNull(DriveBus.state.value.alert);assertNull(DriveBus.state.value.limitMph)
     }
+    @Test fun pendingProcessingNeverPromotesAnAlreadyAssumedLimitToNumericSpeech() {
+        val p=GeoPoint(53.5,-2.8)
+        val fix=Fix(p,5.0,10.0,1.0,0.0,1000)
+        val road=RoadMatch(Road("way/1",null,listOf(p,Geo.ahead(p,0.0,500.0)),emptyMap()),0.0,0.0,.95)
+        val camera=Camera("camera",Geo.ahead(p,0.0,200.0),CameraType.SPEED,CameraSource.USER)
+        DriveBus.set(DriveState(active=true,fix=fix,road=road,limitMph=30,roadDecisionElapsedMs=1000,
+            limitDecision=LimitDecision(30,reason="bounded assumption",assumed=true),alert=Alert(camera,200.0),alertPositionFresh=true))
+        for(t in listOf(2000L,3000L)) {
+            DriveBus.publishLocationSpeed(22.0,fix.copy(elapsedMs=t))
+            val state=DriveBus.state.value
+            assertEquals(30,state.limitMph);assertTrue(state.limitDecision!!.assumed)
+            assertFalse(state.pendingConfirmedLimit)
+            assertFalse(PendingDrivingEvidence.limitSpeechRelevant(state,30,t))
+            assertNull(PendingDrivingEvidence.cameraLimit(state,t))
+        }
+    }
 }
