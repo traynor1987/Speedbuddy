@@ -203,4 +203,32 @@ class RegionalPackStoreTest {
         clean()
     }
 
+    @Test fun completeOfflineInventorySurvivesRecreationAndReportsBothRegionsAndBytes() {
+        clean();val store=RegionalPackStore(context)
+        val (lancashire,lGzip)=pack("lancashire","inventory");val (merseyside,mGzip)=pack("merseyside","inventory")
+        store.install(lancashire,lGzip);store.install(merseyside,mGzip)
+        // No token or network is needed to rediscover private activated packs.
+        val lifecycle=RegionalPackLifecycle(context,{null},{ error("Inventory must remain offline") })
+        val inventory=lifecycle.inventory()
+        assertEquals(setOf("lancashire","merseyside"),inventory.installed.map { it.descriptor.id }.toSet())
+        assertTrue(inventory.installed.all { it.problem==null });assertTrue(inventory.issues.isEmpty());assertNull(inventory.error)
+        assertEquals(store.storedBytes(),inventory.storedBytes)
+        store.delete("merseyside")
+        val recreated=RegionalPackLifecycle(context,{null},{ error("Inventory must remain offline") }).inventory()
+        assertEquals(listOf("lancashire"),recreated.installed.map { it.descriptor.id })
+        assertEquals(store.storedBytes(),recreated.storedBytes);clean()
+    }
+    @Test fun completeInventoryKeepsMissingAndCorruptedPacksVisibleForRepair() {
+        clean();val store=RegionalPackStore(context)
+        val (lancashire,lGzip)=pack("lancashire","missing");val (merseyside,mGzip)=pack("merseyside","corrupt")
+        store.install(lancashire,lGzip).database.delete()
+        store.install(merseyside,mGzip).database.writeText("not sqlite")
+        val inventory=RegionalPackStore(context).inventory()
+        assertEquals(setOf("lancashire","merseyside"),inventory.installed.map { it.descriptor.id }.toSet())
+        assertTrue(inventory.installed.all { it.problem!=null })
+        assertTrue(inventory.installed.first { it.descriptor.id=="lancashire" }.problem!!.contains("missing"))
+        assertTrue(inventory.installed.first { it.descriptor.id=="merseyside" }.problem!!.contains("unreadable"))
+        assertEquals(store.storedBytes(),inventory.storedBytes);clean()
+    }
+
 }

@@ -1,6 +1,8 @@
 package uk.co.traynor.speedbuddy
 
 import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -9,7 +11,8 @@ import java.net.URL
 
 /** Production catalogue and download gateway. Verification and activation stay in [RegionalPackStore]. */
 internal class RegionalPackLifecycle(private val context: Context, private val credential: () -> String?,
-    private val open: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }) {
+    private val open: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
+    inventoryScan: (() -> RegionalPackStore.Inventory)? = null) {
     data class DownloadProgress(val regionId: String, val stage: Stage, val downloadedBytes: Long, val totalBytes: Long) {
         enum class Stage { DOWNLOADING, VERIFYING_DOWNLOAD, DECOMPRESSING, VERIFYING_DATABASE, ACTIVATING }
         val fraction: Float get()=if(totalBytes==0L) 0f else downloadedBytes.toFloat().div(totalBytes).coerceIn(0f,1f)
@@ -22,6 +25,9 @@ internal class RegionalPackLifecycle(private val context: Context, private val c
         }
     }
     private val store=RegionalPackStore(context)
+    private val localInventory=RegionalInventory(inventoryScan ?: store::inventory)
+    val inventoryState get()=localInventory.state
+    suspend fun refreshInventory()=withContext(Dispatchers.IO) { localInventory.refresh() }
     fun installed()=store.installed()
     fun inventory()=store.inventory()
     fun catalogue(): List<RegionalPackDescriptor> = requestText("https://api.jtwebsolutions.co.uk/speedbuddy/v1/regions").let(RegionalRoadCatalogue::parse)

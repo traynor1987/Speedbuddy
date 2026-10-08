@@ -28,11 +28,13 @@ data class DriveState(
     val upcoming: UpcomingLimit? = null, val publicCameraCount: Int = 0, val userCameraCount: Int = 0,
     val importedCameraCount: Int = 0, val importedNearbyCount: Int = 0,
     val roadDataStatus: String = "", val limitDecision: LimitDecision? = null,
+    val limitPresentation: LimitDecision?=null,
     val sourceLimitMph: Int? = null, val tooEarlyAvailable: Boolean = false,
     val awaitingBoundary: Boolean = false, val coverageTiles: Int = 0, val targetTiles: Int = 0,
     val turns: List<TurnLimit> = emptyList(), val alertPositionFresh: Boolean = true,
     val averageSection: ActiveAverageSection? = null,
     val roadDecisionElapsedMs: Long? = null,val pendingConfirmedLimit: Boolean = false,
+    val pendingLimitAnchor: Fix?=null,val pendingLimitDistanceM: Double=0.0,
     val roadCacheRevision: Long = 0L,val boundaryAvailable: Boolean = false,val correctionMessage: String = "",
     val roadRequestKind: String = "No request",val subdivisionLevel: Int? = null,val currentRegionStatus: String = "Idle",val completedRoadRegions: Int = 0,
     /** Passive context only: a known zone is never treated as an active mobile camera report. */
@@ -47,6 +49,19 @@ object DriveBus {
         mutable.value = state
     }
 
+    fun expirePending(now: Long) {
+        val current=mutable.value
+        if(current.limitMph==null || current.limitDecision?.assumed!=true && current.limitPresentation?.assumed!=true ||
+            PendingDrivingEvidence.anchor(current)?.let { now-it.elapsedMs>2000 }!=true) return
+        mutable.value=current.copy(limitMph=null,limitDecision=null,limitPresentation=null,road=null,alert=null,pendingConfirmedLimit=false,
+            pendingLimitAnchor=null,pendingLimitDistanceM=0.0,upcoming=null,tooEarlyAvailable=false,boundaryAvailable=false,
+            alertPositionFresh=false)
+    }
+    fun expireTransition(now: Long) {
+        val current=mutable.value
+        if(current.limitPresentation?.changingUntilElapsedMs?.let { now>=it }!=true) return
+        mutable.value=current.copy(limitMph=null,limitPresentation=LimitDecision(null,reason="Unavailable: transition presentation expired"),upcoming=null)
+    }
     /** Location ownership remains in [DrivingService]; projection consumers get every useful speed promptly. */
     fun publishLocationSpeed(speedMph: Double?, fix: Fix) {
         if(mutable.value.fix?.let { it.elapsedMs>=fix.elapsedMs }==true) return
@@ -58,10 +73,14 @@ object DriveBus {
         mutable.value = prior.copy(active = true, speedMph = speedMph, fix = fix,limitMph=pendingLimit,
             road=prior.road.takeIf { fits },sourceLimitMph=prior.sourceLimitMph.takeIf { fits },
             pendingConfirmedLimit=fits && (prior.limitDecision?.assumed==false || prior.pendingConfirmedLimit),
+            pendingLimitAnchor=PendingDrivingEvidence.anchor(prior).takeIf { fits },
+            pendingLimitDistanceM=if(fits) PendingDrivingEvidence.distance(prior)+Geo.distance(prior.fix!!.point,fix.point) else 0.0,
             alert=prior.alert?.takeIf { fits }?.let { it.copy(distanceM=Geo.distance(fix.point,it.camera.point)) },
             overspeed=false,upcoming=null,tooEarlyAvailable=false,boundaryAvailable=false,
             alertPositionFresh=fits && prior.alertPositionFresh,
-            limitDecision=prior.limitDecision?.takeIf { pendingLimit!=null }?.copy(assumed=true,reason=PendingDrivingEvidence.reason))
+            limitDecision=prior.limitDecision?.takeIf { pendingLimit!=null }?.copy(assumed=true,reason=PendingDrivingEvidence.reason),
+            limitPresentation=prior.limitPresentation?.takeIf { it.changing && it.changingUntilElapsedMs?.let { at -> fix.elapsedMs<at }==true }
+                ?: prior.limitDecision?.takeIf { pendingLimit!=null }?.copy(assumed=true,reason=PendingDrivingEvidence.reason))
     }
 }
 
@@ -78,6 +97,7 @@ class DrivingService : Service(), LocationListener {
     private lateinit var speedBuddyRoadClient: SpeedBuddyRoadClient
     private val speedFilter = SpeedFilter()
     private val fixQueue = DrivingFixQueue()
+    private var pendingLimitExpiry: Job?=null
     private val limitPipeline=DrivingLimitPipeline()
     private val matcher get()=limitPipeline.matcher
     private val limitEngine get()=limitPipeline.engine
@@ -197,7 +217,7 @@ class DrivingService : Service(), LocationListener {
             tick = scope.launch { while (isActive) { delay(1000); val state = DriveBus.state.value
                 if (state.fix != null && SystemClock.elapsedRealtime() - state.fix.elapsedMs > 5000) {
                     speedFilter.current(SystemClock.elapsedRealtime()); matcher.reset(); limitEngine.reset()
-                    DriveBus.set(state.copy(speedMph = null, limitMph = null, road = null, alert = null, upcoming = null, limitDecision=null, turns=emptyList(), alertPositionFresh=false, averageSection=state.averageSection?.copy(remainingM=Double.NaN), tooEarlyAvailable = false, boundaryAvailable=false, awaitingBoundary = false, status = "GPS signal lost"))
+                    DriveBus.set(state.copy(speedMph = null, limitMph = null, road = null, alert = null, upcoming = null, limitDecision=null,limitPresentation=null, turns=emptyList(), alertPositionFresh=false, averageSection=state.averageSection?.copy(remainingM=Double.NaN), tooEarlyAvailable = false, boundaryAvailable=false, awaitingBoundary = false, status = "GPS signal lost"))
                     if(state.status!="GPS signal lost") {
                         val receipt=LimitDiagnostics.snapshot("GPS signal lost",DriveBus.state.value)
                         withContext(Dispatchers.IO) { runCatching { roads.recordDiagnostic(receipt) }
@@ -222,8 +242,9 @@ class DrivingService : Service(), LocationListener {
                 if(!fixedSpeedEnabled(settings) && DriveBus.state.value.averageSection!=null)
                     DriveBus.set(DriveBus.state.value.copy(averageSection=null))
                 cameraVoice.revalidate();announceLimitIfReady(settings)
-                val current = DriveBus.state.value
                 val now = SystemClock.elapsedRealtime()
+                DriveBus.expirePending(now);DriveBus.expireTransition(now)
+                val current = DriveBus.state.value
                 DriveBus.set(current.copy(roadDataStatus = roadStatus(now), tooEarlyAvailable = limitEngine.canReport(now),boundaryAvailable=limitEngine.canMarkBoundary(now),
                     correctionMessage=feedbackMessage.takeIf { now-feedbackAt in 0..6000 } ?: ""))
                 current.fix?.takeIf { now-it.elapsedMs in 0..5000 && RegionalRefreshPolicy.permitsAfterLive(regional.state,liveRoadResponse?.state) }?.let { refresh(it) }
@@ -246,7 +267,19 @@ class DrivingService : Service(), LocationListener {
             return
         }
         DriveBus.publishLocationSpeed(speed, fix)
+        limitPipeline.observePending(DriveBus.state.value.limitDecision)
+        schedulePresentationExpiry()
         startProcessing()
+    }
+    private fun schedulePresentationExpiry() {
+        pendingLimitExpiry?.cancel()
+        val state=DriveBus.state.value
+        val deadline=state.limitPresentation?.changingUntilElapsedMs ?:
+            PendingDrivingEvidence.anchor(state)?.takeIf { state.limitDecision?.assumed==true || state.limitPresentation?.assumed==true }?.elapsedMs?.plus(2001)
+        if(deadline!=null) pendingLimitExpiry=scope.launch {
+            delay((deadline-SystemClock.elapsedRealtime()).coerceAtLeast(0))
+            val now=SystemClock.elapsedRealtime();DriveBus.expirePending(now);DriveBus.expireTransition(now)
+        }
     }
     private fun startProcessing() {
         if (processing?.isActive == true) return
@@ -334,7 +367,7 @@ class DrivingService : Service(), LocationListener {
             if(!fixQueue.current(fix,evaluatedAt)) return
             val evaluated=limitPipeline.evaluate(fix,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,evaluatedAt,wallNow,regional,liveRoadState)
             val result=evaluated.copy(roadData=evaluated.roadData.copy(liveRequestStatus=liveRequestStatus,liveSampleElapsedMs=liveRoadResponse?.fix?.elapsedMs))
-            val road=result.road;val source=result.source;val decision=result.decision;val limit=decision.mph
+            val road=result.road;val source=result.source;val decision=result.decision;val limit=result.presentation.mph
             val correctedRoads=result.contextualRoads
             val upcoming=result.upcoming
             val settings = getSharedPreferences("settings",Context.MODE_PRIVATE)
@@ -354,10 +387,11 @@ class DrivingService : Service(), LocationListener {
                 dataAgeMs=age,status=when { speed==null -> "GPS speed unavailable";limit==null -> "Road limit unknown";else -> "" },
                 overspeed=settings.getBoolean("overspeed",false) && overspeed.isOver(speed,alertLimit,tolerance),mapStatus=mapStatus,
                 upcoming=upcoming,publicCameraCount=publicCameras.size,userCameraCount=userCameras.size,importedCameraCount=importedCount,importedNearbyCount=importedNearby.size,
-                turns=turns,alertPositionFresh=fix.accuracyM<=35,averageSection=section,roadDataStatus=roadStatus(now),limitDecision=decision,sourceLimitMph=source,tooEarlyAvailable=limitEngine.canReport(evaluatedAt),awaitingBoundary=limitEngine.pendingFeedback,
+                turns=turns,alertPositionFresh=fix.accuracyM<=35,averageSection=section,roadDataStatus=roadStatus(now),limitDecision=decision,limitPresentation=result.presentation,sourceLimitMph=source,tooEarlyAvailable=limitEngine.canReport(evaluatedAt),awaitingBoundary=limitEngine.pendingFeedback,
                 coverageTiles=wanted.count { it in coverage },targetTiles=wanted.size,roadCacheRevision=generation,boundaryAvailable=limitEngine.canMarkBoundary(evaluatedAt),
                 correctionMessage=feedbackMessage.takeIf { now-feedbackAt in 0..6000 } ?: "",
                 roadRequestKind=roadRequestKind,subdivisionLevel=roadSubdivisionLevel,currentRegionStatus=currentRegionStatus,completedRoadRegions=coverage.size).let(result::applyTo))
+            schedulePresentationExpiry()
             val diagnostic=LimitDiagnostics.snapshot("decision",DriveBus.state.value,transition=limitEngine.transitionEvidence())
             withContext(Dispatchers.IO) { runCatching { roads.recordDiagnostic(diagnostic) }.onFailure { Log.w("SpeedBuddy","Decision diagnostic could not be saved",it) } }
             if(!fixQueue.current(fix,SystemClock.elapsedRealtime())) return
@@ -390,6 +424,7 @@ class DrivingService : Service(), LocationListener {
             DriveBus.set(fallback.applyTo(DriveBus.state.value).copy(speedMph=speed,alert=null,
                 decision=CameraDecision(null,null,false,"Local road lookup failed"),
                 overspeed=false,alertPositionFresh=false,turns=emptyList(),mapStatus="Local decision failure: ${e.message}"))
+            schedulePresentationExpiry()
             val receipt=LimitDiagnostics.snapshot("lookup failure",DriveBus.state.value,transition=limitEngine.transitionEvidence())
             withContext(Dispatchers.IO) { runCatching { roads.recordDiagnostic(receipt) }
                 .onFailure { Log.w("SpeedBuddy","Failure diagnostic could not be saved",it) } }
@@ -457,7 +492,7 @@ class DrivingService : Service(), LocationListener {
         when(intent.action) {
             "TOO_EARLY" -> if(limitEngine.tooEarly(fix,now)) {
                 val d=limitEngine.decide(fix,state.road,state.sourceLimitMph,null,boundaries.map(RoadIdentity::boundary),now)
-                DriveBus.set(state.copy(limitMph=d.mph,limitDecision=d,tooEarlyAvailable=false,awaitingBoundary=true,upcoming=d.upcoming))
+                DriveBus.set(state.copy(limitMph=d.mph,limitDecision=d,limitPresentation=d,pendingLimitAnchor=null,pendingLimitDistanceM=0.0,tooEarlyAvailable=false,awaitingBoundary=true,upcoming=d.upcoming))
             }
             "CANCEL_BOUNDARY" -> { limitEngine.cancelFeedback();DriveBus.set(state.copy(awaitingBoundary=false,tooEarlyAvailable=false)) }
             "CHANGED_NOW","STARTS_HERE" -> {
@@ -521,7 +556,7 @@ class DrivingService : Service(), LocationListener {
         val current=live.fix
         val now=SystemClock.elapsedRealtime()
         if(current==null || now-current.elapsedMs !in 0..5000) {
-            DriveBus.set(live.copy(limitMph=null,limitDecision=null,upcoming=null,awaitingBoundary=false,boundaryAvailable=false,tooEarlyAvailable=false))
+            DriveBus.set(live.copy(limitMph=null,limitDecision=null,limitPresentation=null,upcoming=null,awaitingBoundary=false,boundaryAvailable=false,tooEarlyAvailable=false))
             return
         }
         // A correction save must not reapply the last regional match to a newer GPS frame.

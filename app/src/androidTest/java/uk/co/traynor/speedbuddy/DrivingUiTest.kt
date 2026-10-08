@@ -13,6 +13,26 @@ import org.junit.Test
 
 class DrivingUiTest {
     @get:Rule val compose=createComposeRule()
+    @Test fun unknownUsesQuestionSignAndChangingHasNoUnverifiedNumber() {
+        var state by mutableStateOf(DriveState())
+        compose.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{}) } }
+        compose.onNodeWithText("?").assertIsDisplayed()
+        compose.onNodeWithText("Limit unknown").assertIsDisplayed()
+        compose.runOnIdle { state=state.copy(limitDecision=LimitDecision(null,reason="Resolving junction",changing=true)) }
+        compose.onNodeWithText("Limit changing…").assertIsDisplayed()
+        compose.onNodeWithText("?").assertDoesNotExist()
+        compose.onNodeWithText("Limit unknown").assertDoesNotExist()
+    }
+    @Test fun assumedBadgeAndRedLabelDisappearImmediatelyForNewConfirmedLimit() {
+        var state by mutableStateOf(DriveState(limitMph=20,limitDecision=LimitDecision(20,reason="Gap",assumed=true)))
+        compose.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{}) } }
+        compose.onNodeWithText("!").assertIsDisplayed()
+        compose.onNodeWithText("⚠ ASSUMED").assertIsDisplayed()
+        compose.runOnIdle { state=state.copy(limitMph=30,limitDecision=LimitDecision(30,reason="Verified")) }
+        compose.onNodeWithText("!").assertDoesNotExist()
+        compose.onNodeWithText("⚠ ASSUMED").assertDoesNotExist()
+        compose.onNodeWithText("30 mph").assertIsDisplayed()
+    }
     @Test fun mainMapEntryAndNaturalSignCorrectionCoexist() {
         val point=GeoPoint(53.5,-2.8)
         val road=Road("way/ui-coexist","Test road",listOf(point,Geo.ahead(point,0.0,400.0)),mapOf("maxspeed" to "30 mph"))
@@ -57,7 +77,7 @@ class DrivingUiTest {
             onFeedback={action,mph,id->correction=Triple(action,mph,id)}) } }
         compose.onNodeWithText("Map").assertIsDisplayed()
         compose.onNodeWithText("!").assertIsDisplayed()
-        compose.onNodeWithText("Assumed • not confirmed").assertIsDisplayed()
+        compose.onNodeWithText("⚠ ASSUMED").assertIsDisplayed()
         compose.onNodeWithText("Saved roads available").assertIsDisplayed()
         compose.onNodeWithText("Correction saved").assertIsDisplayed()
         compose.onNodeWithContentDescription("Correct road speed limit").performClick()

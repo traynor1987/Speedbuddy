@@ -52,10 +52,14 @@ internal class RegionalPackStore(private val context: Context) {
         }
         Snapshot(installed,identities.joinToString("|"),unavailable)
     }
-    data class Inventory(val installed: List<Installed>,val issues: List<String>,val error: String?=null)
+    data class Inventory(val installed: List<Installed>,val issues: List<String>,val error: String?=null,val storedBytes: Long=0L)
     fun inventory(): Inventory=files.read {
         val listed=mutableListOf<Installed>();val issues=mutableListOf<String>()
-        active.listFiles { f -> f.extension=="json" }.orEmpty().sortedBy { it.name }.forEach { pointer ->
+        val pointers=if(!active.exists()) emptyList() else {
+            check(active.isDirectory) { "Regional pointer storage unavailable" }
+            checkNotNull(active.listFiles { f -> f.extension=="json" }) { "Regional pointer inventory unavailable" }.toList()
+        }
+        pointers.sortedBy { it.name }.forEach { pointer ->
             val d=descriptor(pointer)?.takeIf { it.id==pointer.nameWithoutExtension }
             if(d==null) issues+=pointer.nameWithoutExtension
             else {
@@ -69,7 +73,9 @@ internal class RegionalPackStore(private val context: Context) {
                 listed+=Installed(d,database,problem)
             }
         }
-        Inventory(listed,issues,recoveryError ?: if(!root.isDirectory) "Regional storage unavailable" else null)
+        val error=recoveryError ?: if(!root.isDirectory) "Regional storage unavailable" else null
+        // Counts and rows share the same reader lease, so activation/deletion cannot split the result.
+        Inventory(listed,issues,error,if(root.isDirectory) files.bytes() else 0L)
     }
     fun installed(): List<Installed> = snapshot().installed
     fun activeDatabases(): List<Pair<String,File>> = installed().map { it.descriptor.id to it.database }

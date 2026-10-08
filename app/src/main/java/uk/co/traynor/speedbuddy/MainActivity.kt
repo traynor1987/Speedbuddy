@@ -351,10 +351,11 @@ class MainActivity : ComponentActivity() {
                     Offset(size.width * .82f, size.height * .18f), strokeWidth = size.width * .14f)
             }
         }
-        limit == null -> BoxWithConstraints(circle.border(2.dp, Line, CircleShape).background(Panel),
-            contentAlignment = Alignment.Center) {
-            val diameter = minOf(maxWidth, maxHeight).value
-            Text("--", fontSize = (diameter * .44f).sp, fontWeight = FontWeight.Bold, color = Muted)
+        limit == null -> BoxWithConstraints(circle.background(Color.White),contentAlignment=Alignment.Center) {
+            val diameter=minOf(maxWidth,maxHeight).value
+            Box(Modifier.fillMaxSize().border((diameter*.09f).dp,Color(0xFFDC282B),CircleShape),contentAlignment=Alignment.Center) {
+                Text("?",fontSize=(diameter*.50f).sp,fontWeight=FontWeight.Black,color=Color(0xFF111111))
+            }
         }
         else -> BoxWithConstraints(circle.background(Color.White), contentAlignment = Alignment.Center) {
             val diameter = minOf(maxWidth, maxHeight).value
@@ -413,6 +414,7 @@ class MainActivity : ComponentActivity() {
     LaunchedEffect(state.road?.road?.id,state.active) {
         if(!state.active || pickerRoadId!=state.road?.road?.id) pickerRoadId=null
     }
+    val displayDecision=state.limitPresentation ?: state.limitDecision
     val speed = state.speedMph
     val moving = state.active && (speed == null || speed >= 5.0)
     val fix = state.fix
@@ -425,8 +427,8 @@ class MainActivity : ComponentActivity() {
         else -> "GPS FIX · ${fix.accuracyM.roundToInt()} M"
     }
     val tags = state.road?.road?.tags
-    val national = state.limitDecision?.national==true || state.limitMph != null && state.limitDecision?.assumed!=true &&
-        state.sourceLimitMph == state.limitMph && state.limitDecision?.ownerApplied != true && state.limitDecision?.boundaryApplied != true && (
+    val national = displayDecision?.national==true || state.limitMph != null && displayDecision?.assumed!=true &&
+        state.sourceLimitMph == state.limitMph && displayDecision?.ownerApplied != true && displayDecision?.boundaryApplied != true && (
         tags?.get("maxspeed:type")?.startsWith("GB:nsl") == true ||
         tags?.get("maxspeed")?.startsWith("GB:nsl") == true || tags?.get("maxspeed") == "GB:motorway")
     val compact=LocalConfiguration.current.let { it.screenHeightDp<800 || it.fontScale>1.15f }
@@ -459,8 +461,10 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.size(mainSize).testTag("current-road-limit")
                         .semantics { contentDescription="Correct road speed limit" }
                         .clickable(enabled=state.active && correctionAvailable) { pickerRoadId=state.road?.road?.id }) {
-                        LimitSign(state.limitMph, national, Modifier.fillMaxSize().clearAndSetSemantics {})
-                        if(state.limitDecision?.assumed==true) AssumedLimitBadge(
+                        if(displayDecision?.changing==true) Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {
+                            Text("Limit changing…",color=Ink,fontSize=20.sp,fontWeight=FontWeight.Bold,textAlign=TextAlign.Center)
+                        } else LimitSign(state.limitMph, national && displayDecision?.assumed!=true, Modifier.fillMaxSize().clearAndSetSemantics {})
+                        if(displayDecision?.assumed==true) AssumedLimitBadge(
                             Modifier.align(Alignment.TopEnd).offset(x=14.dp))
                     }
                     state.turns.firstOrNull { it.direction == TurnDirection.LEFT }?.let {
@@ -470,7 +474,7 @@ class MainActivity : ComponentActivity() {
                         TurnLimitPreview(it, Modifier.align(Alignment.CenterEnd).width(72.dp))
                     }
                 }
-                if (state.limitMph == null) Surface(
+                if (state.limitMph == null && displayDecision?.changing!=true) Surface(
                     onClick = { if(state.active && correctionAvailable) pickerRoadId=state.road?.road?.id else onUnknownLimit() },
                     modifier = Modifier.align(Alignment.BottomCenter).size(48.dp)
                         .semantics { contentDescription = "Set this road's speed limit" },
@@ -482,6 +486,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        if(displayDecision?.assumed==true) Text("⚠ ASSUMED",color=Color(0xFFDC282B),fontSize=15.sp,fontWeight=FontWeight.Bold,modifier=Modifier.padding(top=9.dp))
         state.upcoming?.takeIf { it.isCredibleUpcoming(state.limitMph) }?.let { next ->
             Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -491,15 +496,15 @@ class MainActivity : ComponentActivity() {
             }
         }
         Spacer(Modifier.height(9.dp))
-        Text(when {
-            state.limitDecision?.assumed==true -> "Assumed • not confirmed"
+        if(displayDecision?.assumed!=true) Text(when {
+            displayDecision?.changing==true -> "Resolving the new road"
             national -> "National speed limit" + (state.limitMph?.let { " · $it mph" } ?: "")
             state.limitMph == null -> "Limit unknown"
             else -> "${state.limitMph} mph"
         }, color = Muted, fontSize = 15.sp)
         if (state.roadDataStatus.isNotBlank()) Text(state.roadDataStatus, color = Muted, fontSize = 11.sp)
         if(state.awaitingBoundary) Text("Tap the limit at the real sign",color=Accent,fontSize=13.sp)
-        if(state.limitMph == null && state.active && !correctionAvailable)
+        if(state.limitMph == null && displayDecision?.changing!=true && state.active && !correctionAvailable)
             Text("Waiting to identify this road — + becomes available when ready",color=Accent,fontSize=13.sp)
         if(state.correctionMessage.isNotBlank()) Text(state.correctionMessage,color=Accent,fontSize=13.sp)
         if(compact) Spacer(Modifier.height(12.dp)) else Spacer(Modifier.weight(1f))
@@ -692,20 +697,25 @@ class MainActivity : ComponentActivity() {
     val scope=rememberCoroutineScope(); val access=remember { RegionalRoadDataAccess(context) }
     val lifecycle=remember { providedLifecycle ?: RegionalPackLifecycle(context,credential = access::credential) }
     var catalogue by remember { mutableStateOf<List<RegionalPackDescriptor>>(emptyList()) }
-    var installed by remember { mutableStateOf(emptyList<RegionalPackStore.Installed>()) }; var message by remember { mutableStateOf("Checking the production catalogue…") }
+    val inventoryState by lifecycle.inventoryState.collectAsState()
+    val inventory=when(val value=inventoryState) {
+        is RegionalInventoryState.Ready -> value.inventory
+        is RegionalInventoryState.Checking -> value.previous
+        is RegionalInventoryState.Error -> value.previous
+    }
+    val inventoryReady=inventoryState is RegionalInventoryState.Ready
+    val installed=inventory?.installed.orEmpty()
+    val inventoryIssues=inventory?.issues.orEmpty()
+    val storedBytes=inventory?.takeIf { it.error==null }?.storedBytes
+    val storageError=(inventoryState as? RegionalInventoryState.Error)?.message
+    var message by remember { mutableStateOf("Checking the production catalogue…") }
     var configured by remember { mutableStateOf(access.credential()!=null) }
     var credentialInput by rememberSaveable { mutableStateOf("") }
     var catalogueRevision by remember { mutableIntStateOf(0) }
-    var storageError by remember { mutableStateOf<String?>(null) }
-    var inventoryIssues by remember { mutableStateOf(emptyList<String>()) }
     var busy by remember { mutableStateOf(false) }
-    var storedBytes by remember { mutableLongStateOf(0L) }
     val downloadProgress=remember { MutableStateFlow<RegionalPackLifecycle.DownloadProgress?>(null) }
     val progress by downloadProgress.collectAsState()
-    suspend fun refreshInstalled() {
-        val local=withContext(Dispatchers.IO) { lifecycle.inventory() to lifecycle.storedBytes() }
-        installed=local.first.installed;inventoryIssues=local.first.issues;storageError=local.first.error;storedBytes=local.second
-    }
+    suspend fun refreshInstalled() { lifecycle.refreshInventory() }
     fun deletePack(id: String,name: String) { busy=true;scope.launch {
         try { val deletion=withContext(Dispatchers.IO) { lifecycle.delete(id) };refreshInstalled()
             message="$name removed · ${"%.1f".format(Locale.UK,deletion.freedBytes/1_048_576.0)} MB freed. Owner corrections were kept." }
@@ -734,24 +744,25 @@ class MainActivity : ComponentActivity() {
             }
         } }
         if(message.isNotBlank()) Text(message,color=Muted,modifier=Modifier.padding(horizontal=16.dp,vertical=8.dp))
-        Text("Stored regional files: ${"%.1f".format(Locale.UK,storedBytes/1_048_576.0)} MB",color=Muted,modifier=Modifier.padding(16.dp))
+        if(!inventoryReady) Text(if(inventoryState is RegionalInventoryState.Checking) "Checking installed road packs…" else "Installed road pack inventory unavailable",color=Muted,modifier=Modifier.padding(16.dp))
+        storedBytes?.let { bytes -> Text("Stored regional files: ${"%.1f".format(Locale.UK,bytes/1_048_576.0)} MB",color=Muted,modifier=Modifier.padding(16.dp)) }
         storageError?.let { Text(it,color=Muted,modifier=Modifier.padding(16.dp)) }
-        if(installed.isEmpty() && catalogue.isEmpty()) Text("No installed regional packs",color=Muted,modifier=Modifier.padding(16.dp))
+        if(inventoryReady && installed.isEmpty() && catalogue.isEmpty()) Text("No installed regional packs",color=Muted,modifier=Modifier.padding(16.dp))
         inventoryIssues.forEach { id ->
             Text("Unavailable regional pack: $id · active metadata damaged",color=Muted,modifier=Modifier.padding(16.dp))
-            TextButton(enabled=!busy,onClick={ deletePack(id,id) }) { Text("Delete unavailable pack $id") }
+            TextButton(enabled=!busy && inventoryReady,onClick={ deletePack(id,id) }) { Text("Delete unavailable pack $id") }
         }
         OfflinePackRows.merge(catalogue,installed.map { it.descriptor }).forEach { row ->
             val pack=row.pack
             val current=installed.firstOrNull { it.descriptor.id==pack.id }
             Surface(shape=RoundedCornerShape(20.dp),color=Panel,modifier=Modifier.padding(horizontal=16.dp,vertical=6.dp)) { Column(Modifier.padding(16.dp)) {
-                Text(pack.displayName,color=Ink,fontSize=18.sp);Text("${pack.downloadBytes/1_048_576} MB · ${if(current==null) "Not installed" else "Installed ${current.descriptor.version}"}",color=Muted,fontSize=13.sp)
+                Text(pack.displayName,color=Ink,fontSize=18.sp);Text("${pack.downloadBytes/1_048_576} MB · ${if(current!=null) "Installed ${current.descriptor.version}" else if(inventoryReady) "Not installed" else "Checking installation…"}",color=Muted,fontSize=13.sp)
                 current?.problem?.let { Text(it,color=Muted,fontSize=13.sp) }
                 progress?.takeIf { it.regionId==pack.id }?.let { currentProgress ->
                     Spacer(Modifier.height(10.dp));LinearProgressIndicator(progress={ currentProgress.fraction },modifier=Modifier.fillMaxWidth())
                     Text(currentProgress.label,color=Muted,fontSize=13.sp,modifier=Modifier.padding(top=6.dp))
                 }
-                Button(enabled=!busy && configured,onClick={ busy=true;scope.launch {
+                Button(enabled=!busy && configured && inventoryReady,onClick={ busy=true;scope.launch {
                     message="";var activated=false
                     try {
                         withContext(Dispatchers.IO) { lifecycle.download(pack) { downloadProgress.value=it } };activated=true
@@ -762,7 +773,7 @@ class MainActivity : ComponentActivity() {
                         message=if(activated) "${pack.displayName} activated; storage display could not refresh" else "${pack.displayName}: ${error.message ?: "download failed"}"
                     } finally { downloadProgress.value=null;busy=false }
                 } }) { Text(if(current==null) "Download" else if(current.descriptor.version!=pack.version) "Update" else "Re-download") }
-                if(current!=null) TextButton(enabled=!busy,onClick={ deletePack(pack.id,pack.displayName) }) { Text("Delete") }
+                if(current!=null) TextButton(enabled=!busy && inventoryReady,onClick={ deletePack(pack.id,pack.displayName) }) { Text("Delete") }
             } }
         }
     } }
@@ -960,7 +971,10 @@ class MainActivity : ComponentActivity() {
             "Displayed limit" to state.limitMph?.let { "$it mph" },
             "Source limit" to state.sourceLimitMph?.let { "$it mph · ${state.roadData.provider}" },
             "Owner correction" to state.limitDecision?.ownerApplied?.toString(),
-            "Assumed limit" to state.limitDecision?.assumed?.toString(),
+            "Assumed limit" to (state.limitPresentation ?: state.limitDecision)?.assumed?.toString(),
+            "Evidence assumed" to state.limitDecision?.assumed?.toString(),
+            "Limit changing" to state.limitPresentation?.changing?.toString(),
+            "Presentation reason" to state.limitPresentation?.reason,
             "Inherited from" to state.limitDecision?.inheritedFrom,
             "Learned boundary" to state.limitDecision?.boundaryApplied?.toString(),
             "Decision reason" to state.limitDecision?.reason,

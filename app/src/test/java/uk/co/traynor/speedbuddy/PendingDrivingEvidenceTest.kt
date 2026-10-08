@@ -8,6 +8,32 @@ import org.junit.Before
 class PendingDrivingEvidenceTest {
     @Before fun resetBefore()=DriveBus.set(DriveState())
     @After fun cleanup()=DriveBus.set(DriveState())
+    @Test fun pendingGeometryCannotCarryLimitBeyondThirtyMetres() {
+        val p=GeoPoint(53.5,-2.8);val fix=Fix(p,5.0,25.0,1.0,0.0,1000)
+        val road=RoadMatch(Road("way/1",null,listOf(p,Geo.ahead(p,0.0,500.0)),mapOf("maxspeed" to "20 mph")),0.0,0.0,.95)
+        DriveBus.set(DriveState(active=true,fix=fix,road=road,limitMph=20,roadDecisionElapsedMs=1000,limitDecision=LimitDecision(20,reason="Confirmed")))
+        DriveBus.publishLocationSpeed(50.0,fix.copy(point=Geo.ahead(p,0.0,20.0),elapsedMs=1500))
+        assertEquals(20,DriveBus.state.value.limitMph)
+        DriveBus.expirePending(3000);assertEquals(20,DriveBus.state.value.limitMph)
+        DriveBus.publishLocationSpeed(50.0,fix.copy(point=Geo.ahead(p,0.0,40.0),elapsedMs=2000))
+        assertNull(DriveBus.state.value.limitMph)
+    }
+    @Test fun genuineAssumptionKeepsOriginalEvidenceDeadlineDuringPendingProcessing() {
+        val p=GeoPoint(53.5,-2.8);val fix=Fix(p,5.0,0.0,1.0,0.0,2000)
+        val road=RoadMatch(Road("way/1",null,listOf(p,Geo.ahead(p,0.0,500.0)),emptyMap()),0.0,0.0,.95)
+        DriveBus.set(DriveState(active=true,fix=fix,road=road,limitMph=20,roadDecisionElapsedMs=2000,
+            limitDecision=LimitDecision(20,reason="Assumed",assumed=true,evidenceElapsedMs=1000,evidencePoint=p)))
+        DriveBus.publishLocationSpeed(0.0,fix.copy(elapsedMs=3001))
+        assertNull(DriveBus.state.value.limitMph)
+    }
+    @Test fun pendingExpiryDoesNotNeedAnotherGpsFix() {
+        val p=GeoPoint(53.5,-2.8);val fix=Fix(p,5.0,0.0,1.0,0.0,1000)
+        val road=RoadMatch(Road("way/1",null,listOf(p,Geo.ahead(p,0.0,500.0)),mapOf("maxspeed" to "20 mph")),0.0,0.0,.95)
+        DriveBus.set(DriveState(active=true,fix=fix,road=road,limitMph=20,roadDecisionElapsedMs=1000,limitDecision=LimitDecision(20,reason="Confirmed")))
+        DriveBus.publishLocationSpeed(0.0,fix.copy(elapsedMs=2000))
+        DriveBus.expirePending(3001)
+        assertNull(DriveBus.state.value.limitMph);assertNull(DriveBus.state.value.limitDecision)
+    }
     @Test fun speechRemainsRelevantAcrossNormalGpsFixDuringDelayedMatchingButEndsOnTurnOrExpiry() {
         val p=GeoPoint(53.5,-2.8)
         val fix=Fix(p,5.0,10.0,1.0,0.0,1000)

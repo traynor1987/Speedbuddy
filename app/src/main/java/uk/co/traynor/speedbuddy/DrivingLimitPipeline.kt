@@ -5,6 +5,8 @@ import org.json.JSONObject
 /** Drive mode and regressions share matching, source selection, owner priority and UI mapping. */
 internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecisionEngine(),
     val matcher: RoadMatcher = RoadMatcher()) {
+    private val presentation=LimitPresentation()
+    fun observePending(decision: LimitDecision?)=presentation.noteAssumption(decision)
     private val upcomingDetector=UpcomingLimitDetector()
     private data class Preview(val upcoming: UpcomingLimit,val current: Int?,val roadId: String?,val fix: Fix,val at: Long)
     private var preview: Preview? = null
@@ -14,7 +16,7 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
     private var previousWayDirection: Pair<String,WayTravelDirection>? = null
     /** Called only after the owner's selection was durably saved. */
     fun acceptSavedSelection(plan: LimitSelectionPlan?) {
-        if(plan?.observation==null) engine.reset()
+        if(plan?.observation==null) { engine.reset();presentation.reset() }
         // This tap is direct current-position evidence for this pass. Persisted
         // replay still requires crossing the GPS uncertainty margin on future passes.
         plan?.boundary?.let(engine::confirmSavedBoundary)
@@ -30,7 +32,7 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
         latestEvaluatedAt=fix.elapsedMs
         if(regional!=null) {
             if(generationObserved && regionalGeneration!=regional.generation) {
-                engine.reset();matcher.reset();preview=null;previousWayDirection=null
+                engine.reset();matcher.reset();presentation.reset();preview=null;previousWayDirection=null
             }
             regionalGeneration=regional.generation;generationObserved=true
         }
@@ -52,7 +54,7 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
         val resolved=RoadProviderResolver.resolveProviderStates(null,regionalState,cached,safeLive)
         if(resolved.source==RoadSource.LIVE && resolved.state==RoadProviderState.ROAD_MATCH_UNCERTAIN) {
             // Conflicting identities cannot authorize owner rules, assumed continuity or geometry-dependent alerts.
-            engine.reset();matcher.reset();preview=null;previousWayDirection=null
+            engine.reset();matcher.reset();presentation.reset();preview=null;previousWayDirection=null
             val reason=safeLive?.error ?: "Live road selection uncertain"
             return DriveLimitResult(fix,null,null,LimitDecision(null,reason="Unavailable: $reason"),null,
                 contextualRoads,false,RoadDataDiagnostics("Live server",resolved.state.name,
@@ -107,16 +109,18 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
             regional?.packDetails.orEmpty().map { RegionalPackInfo(it.displayName,it.id,it.version,it.osmTimestamp) },
             fix.elapsedMs,fallback,regional?.error ?: safeLive?.error ?: live?.error ?: live?.takeIf { it.state==RoadProviderState.SERVICE_UNAVAILABLE }?.let { "Live road service unavailable" },
             regional?.contextComplete)
-        return DriveLimitResult(fix,road,source,decision,upcoming,corrected,geometryComplete,details)
+        val displayed=presentation.resolve(fix,road,decision,contextualRoads,geometryComplete)
+        return DriveLimitResult(fix,road,source,decision,upcoming.takeUnless { displayed.changing },corrected,geometryComplete,details,displayed)
     }
 }
 internal data class DriveLimitResult(val fix: Fix,val road: RoadMatch?,val source: Int?,
-    val decision: LimitDecision,val upcoming: UpcomingLimit?,val contextualRoads: List<Road> = emptyList(),val geometryComplete: Boolean=true,val roadData: RoadDataDiagnostics=RoadDataDiagnostics()) {
+    val decision: LimitDecision,val upcoming: UpcomingLimit?,val contextualRoads: List<Road> = emptyList(),val geometryComplete: Boolean=true,val roadData: RoadDataDiagnostics=RoadDataDiagnostics(),val presentation: LimitDecision=decision) {
     fun applyTo(state: DriveState): DriveState {
         if(state.fix?.let { it.elapsedMs>fix.elapsedMs }==true) return state
-        return state.copy(roadData=roadData,fix=fix,roadDecisionElapsedMs=fix.elapsedMs,pendingConfirmedLimit=false,road=road,sourceLimitMph=source,limitMph=decision.mph,
-        limitDecision=decision,upcoming=upcoming,status=when {
-            decision.mph==null -> "Road limit unknown"
+        return state.copy(roadData=roadData,fix=fix,roadDecisionElapsedMs=fix.elapsedMs,pendingConfirmedLimit=false,pendingLimitAnchor=null,pendingLimitDistanceM=0.0,road=road,sourceLimitMph=source,limitMph=presentation.mph,
+        limitDecision=decision,limitPresentation=presentation,upcoming=upcoming,status=when {
+            presentation.changing -> "Limit changing…"
+            presentation.mph==null -> "Road limit unknown"
             state.speedMph==null && state.active -> "GPS speed unavailable"
             else -> ""
         })
@@ -133,7 +137,10 @@ internal object LimitDiagnostics {
         val decision=state.limitDecision
         return JSONObject().put("kind",kind).put("at",System.currentTimeMillis())
             .put("displayed",state.limitMph ?: JSONObject.NULL)
-            .put("state",when { decision?.assumed==true -> "assumed";decision?.ownerApplied==true -> "owner";state.limitMph==null -> "unknown";else -> "confirmed" })
+            .put("presentationChanging",state.limitPresentation?.changing==true)
+            .put("presentationAssumed",state.limitPresentation?.assumed==true)
+            .put("presentationReason",state.limitPresentation?.reason ?: JSONObject.NULL)
+            .put("state",when { decision?.changing==true -> "changing";decision?.assumed==true -> "assumed";decision?.ownerApplied==true -> "owner";state.limitMph==null -> "unknown";else -> "confirmed" })
             .put("selected",selected ?: JSONObject.NULL).put("location",fix?.point?.let(RoadJson::point) ?: JSONObject.NULL)
             .put("accuracy",fix?.accuracyM ?: JSONObject.NULL).put("heading",fix?.bearing ?: JSONObject.NULL)
             .put("elapsed",fix?.elapsedMs ?: JSONObject.NULL).put("road",state.road?.road?.id ?: JSONObject.NULL)

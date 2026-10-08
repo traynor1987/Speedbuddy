@@ -12,7 +12,8 @@ data class BoundaryCorrection(
 )
 data class LimitDecision(val mph: Int?,val upcoming: UpcomingLimit? = null,val ownerApplied: Boolean = false,
     val boundaryApplied: Boolean = false,val reason: String,val assumed: Boolean = false,
-    val inheritedFrom: String? = null,val national: Boolean = false)
+    val inheritedFrom: String? = null,val national: Boolean = false,val changing: Boolean = false,val changingUntilElapsedMs: Long?=null,
+    val evidenceElapsedMs: Long?=null,val evidencePoint: GeoPoint?=null,val evidenceDistanceM: Double=0.0)
 private data class Transition(val from: RoadMatch,val to: RoadMatch,val old: Int,val new: Int,
     val fix: Fix,val at: Long)
 private data class ConfirmedLimit(val match: RoadMatch,val mph: Int,val fix: Fix,val at: Long)
@@ -204,7 +205,7 @@ class LimitDecisionEngine {
         }
         assumedMatch=effective;assumptionDistance=distance;assumptionPoint=fix.point
         return LimitDecision(anchor.mph,reason="Assumed ${anchor.mph} mph from confirmed ${anchor.match.road.id}; ${match?.road?.id ?: "temporary match gap on prior geometry"}; ${now-anchor.at} ms, ${distance.toInt()} m",
-            assumed=true,inheritedFrom=anchor.match.road.id)
+            assumed=true,inheritedFrom=anchor.match.road.id,evidenceElapsedMs=anchor.fix.elapsedMs,evidencePoint=anchor.fix.point,evidenceDistanceM=distance)
     }
     fun canReport(now: Long) = reportable && pending == null && transition?.let { now-it.at in 0..30_000 && currentRoadId == it.to.road.id } == true
     fun tooEarly(fix: Fix,now: Long): Boolean {
