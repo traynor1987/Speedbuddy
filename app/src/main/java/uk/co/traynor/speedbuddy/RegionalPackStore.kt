@@ -141,8 +141,7 @@ internal class RegionalPackStore(private val context: Context) {
         SQLiteDatabase.openDatabase(file.absolutePath,null,SQLiteDatabase.OPEN_READONLY).use { db ->
             require(db.rawQuery("PRAGMA integrity_check",null).use { it.moveToFirst() && it.getString(0)=="ok" }) { "Pack integrity check failed" }
             val metadata=db.rawQuery("SELECT key,value FROM metadata",null).use { c -> buildMap { while(c.moveToNext()) put(c.getString(0),c.getString(1)) } }
-            require(metadata["formatVersion"]?.trim('"')=="1" && metadata["matcherVersion"]?.trim('"')=="1" && metadata["coverage"]!=null) { "Unsupported pack schema" }
-            require(metadata["dataset"]?.contains("\"region\":\"${d.id}\"")==true) { "Pack region mismatch" }
+            RegionalPackManifest.verifyMetadata(metadata,d.id)
             db.rawQuery("SELECT osm_way_id,coordinates,tags FROM roads LIMIT 1",null).close()
             db.rawQuery("SELECT osm_way_id,min_lon,max_lon,min_lat,max_lat FROM roads_rtree LIMIT 1",null).close()
         }

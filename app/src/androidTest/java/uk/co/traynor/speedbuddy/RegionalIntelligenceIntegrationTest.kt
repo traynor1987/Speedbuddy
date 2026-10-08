@@ -36,7 +36,7 @@ class RegionalIntelligenceIntegrationTest {
         val raw=File(context.cacheDir,"$version.sqlite")
         SQLiteDatabase.openOrCreateDatabase(raw,null).use { db ->
             db.execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)")
-            for((k,v) in mapOf("formatVersion" to "1","matcherVersion" to "1","dataset" to "{\"region\":\"$region\"}",
+            for((k,v) in mapOf("formatVersion" to "1","matcherVersion" to "\"distance-heading-oneway-continuity-v1\"","dataset" to "{\"region\":\"$region\"}",
                 "coverage" to coverage))
                 db.execSQL("INSERT INTO metadata VALUES(?,?)",arrayOf(k,v))
             db.execSQL("CREATE TABLE roads(osm_way_id INTEGER PRIMARY KEY,coordinates TEXT NOT NULL,tags TEXT NOT NULL)")

@@ -7,6 +7,8 @@ internal object DrivingCacheFallback {
 
 /** Public OSM tiles are a last-resort cache; a covered verified pack must not refresh them. */
 internal object RegionalRefreshPolicy {
+    fun permitsAfterLive(state: RoadProviderState,live: LiveRoadState?) = permitsLegacyRefresh(state) &&
+        live!=null && live.state.permitsOverpass && live.fallbackAllowed
     fun permitsLegacyRefresh(state: RoadProviderState) = state in setOf(
         RoadProviderState.COVERAGE_UNAVAILABLE, RoadProviderState.SERVICE_UNAVAILABLE)
 }

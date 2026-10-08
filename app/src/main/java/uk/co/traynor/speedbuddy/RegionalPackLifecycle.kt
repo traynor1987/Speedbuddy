@@ -27,12 +27,13 @@ internal class RegionalPackLifecycle(private val context: Context, private val c
     fun catalogue(): List<RegionalPackDescriptor> = requestText("https://api.jtwebsolutions.co.uk/speedbuddy/v1/regions").let(RegionalRoadCatalogue::parse)
         .filter { it.id in supportedRegions }
     fun download(descriptor: RegionalPackDescriptor, onProgress: (DownloadProgress) -> Unit = {}): RegionalPackStore.Installed = store.downloading(descriptor.id) { revision ->
+        RegionalPackManifest.verify(requestText(descriptor.manifestUrl),descriptor)
         val staging=store.temporaryDownload()
         try {
             val token=credential()?.takeIf(String::isNotBlank) ?: error("Sign in to download regional road data")
             val connection=open(URL(descriptor.downloadUrl))
             try {
-                connection.requestMethod="GET"; connection.connectTimeout=10_000; connection.readTimeout=30_000
+                connection.instanceFollowRedirects=false;connection.requestMethod="GET"; connection.connectTimeout=10_000; connection.readTimeout=30_000
                 connection.setRequestProperty("Authorization","Bearer $token")
                 require(connection.responseCode in 200..299) { "Regional pack download failed (HTTP ${connection.responseCode})" }
                 connection.inputStream.use { input -> FileOutputStream(staging).use { output ->
@@ -56,7 +57,7 @@ internal class RegionalPackLifecycle(private val context: Context, private val c
     private fun requestText(url: String): String {
         val token=credential()?.takeIf(String::isNotBlank) ?: error("Sign in to check regional road data")
         val connection=open(URL(url))
-        try { connection.requestMethod="GET";connection.connectTimeout=10_000;connection.readTimeout=15_000
+        try { connection.instanceFollowRedirects=false;connection.requestMethod="GET";connection.connectTimeout=10_000;connection.readTimeout=15_000
             connection.setRequestProperty("Authorization","Bearer $token")
             require(connection.responseCode in 200..299) { "Regional catalogue unavailable (HTTP ${connection.responseCode})" }
             return connection.inputStream.bufferedReader().use { it.readText() }

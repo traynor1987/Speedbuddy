@@ -45,9 +45,12 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
             road?.takeIf { it.confidence>=.35 }?.let { PackSpeedLimits.mph(it.road.tags,fix.bearing,it) } else null
         // Owner corrections remain inside LimitDecisionEngine; this resolver selects
         // only the non-owner authority and keeps Unknown/uncertain terminal.
-        val safeLive=live?.takeIf { road!=null && road.confidence>=.7 && fix.accuracyM<=20 &&
-            fix.bearing!=null && (road.headingDifference ?: 90.0)<=30 && it.matched }
-        val source=RoadProviderResolver.resolveProviderStates(null,regionalState,cached,safeLive).limitMph
+        val safeLive=live?.takeIf { it.state in setOf(RoadProviderState.COVERAGE_UNAVAILABLE,RoadProviderState.SERVICE_UNAVAILABLE,RoadProviderState.ROAD_MATCH_UNCERTAIN) || road!=null && it.roadId!=null && RoadIdentity.same(it.roadId,road.road.id) && road.confidence>=.7 && fix.accuracyM<=20 &&
+            fix.bearing!=null && (road.headingDifference ?: 90.0)<=30 && it.matched } ?: live?.takeIf { it.state !in setOf(RoadProviderState.COVERAGE_UNAVAILABLE,RoadProviderState.SERVICE_UNAVAILABLE) }?.let {
+            LiveRoadState(RoadProviderState.ROAD_MATCH_UNCERTAIN,false,null,false,error="Live road identity does not agree with fresh local geometry")
+        }
+        val resolved=RoadProviderResolver.resolveProviderStates(null,regionalState,cached,safeLive)
+        val source=resolved.limitMph
         val direction=road?.takeIf { it.confidence>=.7 && fix.accuracyM<=20 &&
             (it.headingDifference ?: 90.0)<=30 }?.let { WayTravelDirection.from(it,fix.bearing) }
         val previous=previousWayDirection
@@ -80,17 +83,20 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
         }?.let { it.upcoming.copy(distanceM=(it.upcoming.distanceM-Geo.distance(it.fix.point,fix.point)).coerceAtLeast(0.0),uncertain=true) }
         if(detected!=null) preview=Preview(detected,decision.mph,road?.road?.id,fix,now)
         else if(upcoming==null) preview=null
-        val provider=when { covered -> "Regional offline";road==null -> "None";cached!=null || safeLive?.limitMph==null -> "Legacy saved OSM";else -> "Live server with legacy geometry" }
-        val fallback=if(covered) null else when(regional?.state) {
+        val provider=when { covered -> "Regional offline";road==null -> "None";resolved.source!=RoadSource.LIVE -> "Legacy saved OSM";else -> "Live server with legacy geometry" }
+        val fallback=if(covered || resolved.source==RoadSource.LIVE) null else when {
+            live!=null -> live.error ?: "Live ${live.state.name}; using saved legacy geometry"
+            else -> when(regional?.state) {
             RoadProviderState.SERVICE_UNAVAILABLE -> "Regional packs unavailable"
             RoadProviderState.COVERAGE_UNAVAILABLE -> "No regional coverage at this position"
-            else -> "No regional provider participated"
+            else -> "Live request pending or unavailable; saved legacy geometry used when reliable"
+        }
         }
         val details=RoadDataDiagnostics(provider,
-            if(covered) regional!!.state.name else if(road!=null) (safeLive?.state?.takeIf { cached==null }?.name ?: "LEGACY_MATCHED") else "NO_LOCAL_MATCH",
+            if(covered) regional!!.state.name else if(road!=null) (safeLive?.state?.takeIf { resolved.source==RoadSource.LIVE }?.name ?: "LEGACY_MATCHED") else "NO_LOCAL_MATCH",
             when(regional?.coverage) { true -> "Covered";false -> "Not covered";null -> "Not established" },
             regional?.packDetails.orEmpty().map { RegionalPackInfo(it.displayName,it.id,it.version,it.osmTimestamp) },
-            fix.elapsedMs,fallback,regional?.error ?: live?.takeIf { it.state==RoadProviderState.SERVICE_UNAVAILABLE }?.let { "Live road service unavailable" },
+            fix.elapsedMs,fallback,regional?.error ?: safeLive?.error ?: live?.error ?: live?.takeIf { it.state==RoadProviderState.SERVICE_UNAVAILABLE }?.let { "Live road service unavailable" },
             regional?.contextComplete)
         return DriveLimitResult(fix,road,source,decision,upcoming,corrected,geometryComplete,details)
     }

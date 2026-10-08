@@ -46,7 +46,7 @@ internal enum class RoadProviderState(val permitsOverpass: Boolean) {
     ROAD_MATCHED_LIMIT_KNOWN(false), ROAD_MATCHED_LIMIT_UNKNOWN(false), ROAD_MATCH_UNCERTAIN(false),
     COVERAGE_UNAVAILABLE(true), SERVICE_UNAVAILABLE(true), UNKNOWN(false),
 }
-internal data class LiveRoadState(val state: RoadProviderState, val matched: Boolean, val limitMph: Int?, val fallbackAllowed: Boolean)
+internal data class LiveRoadState(val state: RoadProviderState, val matched: Boolean, val limitMph: Int?, val fallbackAllowed: Boolean, val roadId: String? = null, val error: String? = null)
 internal object LiveRoadStateParser {
     fun parse(body: String): LiveRoadState {
         val json = JSONObject(body)
@@ -57,6 +57,26 @@ internal object LiveRoadStateParser {
         require(state!=RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN || matched && limit!=null) { "Known road state needs matched numeric limit" }
         require(state==RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN || json.isNull("limit")) { "Non-numeric road state must not contain a limit" }
         require(state!=RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN || matched) { "Unknown matched road needs identity evidence" }
-        return LiveRoadState(state,matched,limit,json.optBoolean("fallbackAllowed"))
+        val id=json.optJSONObject("road")?.optString("osmWayId")?.takeIf { it.matches(Regex("[1-9][0-9]{0,18}")) && it.toLongOrNull()!=null }
+        return LiveRoadState(state,matched,limit,json.optBoolean("fallbackAllowed"),id?.let { "way/$it" })
+    }
+}
+
+/** Released manifest semantics, independent of byte/integrity verification by the installer. */
+internal object RegionalPackManifest {
+    const val MATCHER = "distance-heading-oneway-continuity-v1"
+    fun verifyMetadata(metadata: Map<String,String>,region: String) {
+        require(metadata["formatVersion"]?.trim('"')=="1" && metadata["matcherVersion"]?.trim('"')==MATCHER && metadata["coverage"]!=null) { "Unsupported pack schema or matcher" }
+        require(metadata["dataset"]?.let { JSONObject(it).optString("region")==region }==true) { "Pack region mismatch" }
+    }
+    fun verify(body: String,d: RegionalPackDescriptor) {
+        val m=JSONObject(body)
+        require(m.getString("format")=="speedbuddy-roadpack-sqlite-v1" && m.getInt("formatVersion")==1 &&
+            m.getInt("schemaVersion")==d.schemaVersion && m.getString("matcherVersion")==MATCHER) { "Unsupported manifest schema or matcher" }
+        require(m.getString("region")==d.id && m.getString("packVersion")==d.version) { "Manifest pack identity mismatch" }
+        val download=m.getJSONObject("download")
+        require(download.getLong("bytes")==d.downloadBytes && download.getLong("uncompressedBytes")==d.uncompressedBytes &&
+            download.getString("sha256")==d.sha256 && download.getString("uncompressedSha256")==d.uncompressedSha256) { "Manifest catalogue digest or size mismatch" }
+        require(m.getString("coordinateSystem")=="EPSG:4326") { "Unsupported pack coordinates" }
     }
 }

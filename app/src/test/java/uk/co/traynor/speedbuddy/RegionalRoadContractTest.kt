@@ -57,4 +57,25 @@ class RegionalRoadContractTest {
         assertNull(unknown.limitMph)
         assertEquals(RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN, unknown.state)
     }
+
+    @Test fun releasedManifestCrossChecksCatalogueRatherThanTrustingDownloadAlone() {
+        val d=RegionalRoadCatalogue.parse(catalogue).single()
+        val manifest=JSONObject().put("format","speedbuddy-roadpack-sqlite-v1").put("formatVersion",1)
+            .put("schemaVersion",1).put("matcherVersion",RegionalPackManifest.MATCHER).put("coordinateSystem","EPSG:4326")
+            .put("region",d.id).put("packVersion",d.version).put("download",JSONObject().put("bytes",d.downloadBytes)
+                .put("uncompressedBytes",d.uncompressedBytes).put("sha256",d.sha256).put("uncompressedSha256",d.uncompressedSha256))
+        RegionalPackManifest.verify(manifest.toString(),d)
+        for(key in listOf("region","packVersion","matcherVersion","coordinateSystem")) {
+            val altered=JSONObject(manifest.toString()).put(key,"incompatible")
+            assertThrows(IllegalArgumentException::class.java) { RegionalPackManifest.verify(altered.toString(),d) }
+        }
+        manifest.getJSONObject("download").put("sha256","0".repeat(64))
+        assertThrows(IllegalArgumentException::class.java) { RegionalPackManifest.verify(manifest.toString(),d) }
+    }
+    @Test fun productionLiveShapeRetainsInt64RoadIdentity() {
+        val result=LiveRoadStateParser.parse("""{"matched":true,"road":{"osmWayId":4015482,"name":"North Linkside Road","highway":"residential"},"limit":{"mph":20.0,"raw":"20 mph","source":"osm:maxspeed"},"providerState":"ROAD_MATCHED_LIMIT_KNOWN","fallbackAllowed":false}""")
+        assertEquals("way/4015482",result.roadId);assertEquals(20,result.limitMph)
+        val large=LiveRoadStateParser.parse("""{"matched":true,"road":{"osmWayId":9007199254740993},"limit":{"mph":20},"providerState":"ROAD_MATCHED_LIMIT_KNOWN"}""")
+        assertEquals("way/9007199254740993",large.roadId)
+    }
 }

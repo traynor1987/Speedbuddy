@@ -27,7 +27,7 @@ class RegionalManagementUiTest {
         val version="ui-${java.util.UUID.randomUUID()}";val raw=File(base.cacheDir,"$version.sqlite")
         SQLiteDatabase.openOrCreateDatabase(raw,null).use { db ->
             db.execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)")
-            for((k,v) in mapOf("formatVersion" to "1","matcherVersion" to "1","dataset" to "{\"region\":\"$id\"}","coverage" to "[[[[-3,53],[-2,53],[-2,54],[-3,54],[-3,53]]]]")) db.execSQL("INSERT INTO metadata VALUES(?,?)",arrayOf(k,v))
+            for((k,v) in mapOf("formatVersion" to "1","matcherVersion" to "\"distance-heading-oneway-continuity-v1\"","dataset" to "{\"region\":\"$id\"}","coverage" to "[[[[-3,53],[-2,53],[-2,54],[-3,54],[-3,53]]]]")) db.execSQL("INSERT INTO metadata VALUES(?,?)",arrayOf(k,v))
             db.execSQL("CREATE TABLE roads(osm_way_id INTEGER PRIMARY KEY,coordinates TEXT,tags TEXT)")
             db.execSQL("CREATE VIRTUAL TABLE roads_rtree USING rtree(osm_way_id,min_lon,max_lon,min_lat,max_lat)")
         }

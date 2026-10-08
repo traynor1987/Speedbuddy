@@ -22,7 +22,7 @@ class RegionalPackStoreTest {
     private fun pack(id: String, version: String)=customPack(id,version) {
         execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)")
         execSQL("INSERT INTO metadata VALUES('formatVersion','1')")
-        execSQL("INSERT INTO metadata VALUES('matcherVersion','1')")
+        execSQL("INSERT INTO metadata VALUES('matcherVersion','\"distance-heading-oneway-continuity-v1\"')")
         execSQL("INSERT INTO metadata VALUES('coverage','[[[[-3.0,53.0],[-2.0,53.0],[-2.0,54.0],[-3.0,54.0],[-3.0,53.0]]]]')")
         execSQL("INSERT INTO metadata VALUES('dataset','{\"region\":\"$id\"}')")
         execSQL("CREATE TABLE roads(osm_way_id INTEGER PRIMARY KEY,coordinates TEXT NOT NULL,tags TEXT NOT NULL)")
@@ -75,7 +75,7 @@ class RegionalPackStoreTest {
         val (unsupported,unsupportedGzip)=customPack("lancashire","schema") {
             execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)")
             execSQL("INSERT INTO metadata VALUES('formatVersion','2')")
-            execSQL("INSERT INTO metadata VALUES('matcherVersion','1')")
+            execSQL("INSERT INTO metadata VALUES('matcherVersion','\"distance-heading-oneway-continuity-v1\"')")
             execSQL("INSERT INTO metadata VALUES('coverage','{}')")
             execSQL("INSERT INTO metadata VALUES('dataset','{\"region\":\"lancashire\"}')")
             execSQL("CREATE TABLE roads_rtree(osm_way_id INTEGER)")
@@ -84,7 +84,7 @@ class RegionalPackStoreTest {
         val (missingRtree,missingRtreeGzip)=customPack("lancashire","rtree") {
             execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)")
             execSQL("INSERT INTO metadata VALUES('formatVersion','1')")
-            execSQL("INSERT INTO metadata VALUES('matcherVersion','1')")
+            execSQL("INSERT INTO metadata VALUES('matcherVersion','\"distance-heading-oneway-continuity-v1\"')")
             execSQL("INSERT INTO metadata VALUES('coverage','{}')")
             execSQL("INSERT INTO metadata VALUES('dataset','{\"region\":\"lancashire\"}')")
         }
@@ -145,7 +145,14 @@ class RegionalPackStoreTest {
         val lifecycle=RegionalPackLifecycle(context,{"test"},{ url -> object: java.net.HttpURLConnection(url) {
             override fun connect() {};override fun disconnect() {};override fun usingProxy()=false
             override fun getResponseCode()=200
-            override fun getInputStream(): java.io.InputStream { started.countDown();check(finish.await(5,java.util.concurrent.TimeUnit.SECONDS));return gzip.inputStream() }
+            override fun getInputStream(): java.io.InputStream {
+                if(url.path.endsWith("manifest.json")) return org.json.JSONObject().put("format","speedbuddy-roadpack-sqlite-v1")
+                    .put("formatVersion",1).put("schemaVersion",1).put("matcherVersion",RegionalPackManifest.MATCHER)
+                    .put("region",d.id).put("packVersion",d.version).put("coordinateSystem","EPSG:4326")
+                    .put("download",org.json.JSONObject().put("bytes",d.downloadBytes).put("uncompressedBytes",d.uncompressedBytes)
+                        .put("sha256",d.sha256).put("uncompressedSha256",d.uncompressedSha256)).toString().byteInputStream()
+                started.countDown();check(finish.await(5,java.util.concurrent.TimeUnit.SECONDS));return gzip.inputStream()
+            }
         } })
         val pool=java.util.concurrent.Executors.newSingleThreadExecutor()
         try {

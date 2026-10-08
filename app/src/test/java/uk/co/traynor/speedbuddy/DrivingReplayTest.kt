@@ -36,7 +36,7 @@ class DrivingReplayTest {
         assertNull(state.limitMph);assertEquals("merseyside-way",state.road?.road?.id)
     }
     @Test fun coverageUnavailableUsesLiveStateThroughTheProductionPipeline() {
-        val r=road("no-pack-way",null);val state=DrivingReplay().play(frame(r,1_000,RegionalPackMatcher.Result(RoadProviderState.COVERAGE_UNAVAILABLE,null),LiveRoadState(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,true,30,false)))
+        val r=road("no-pack-way",null);val state=DrivingReplay().play(frame(r,1_000,RegionalPackMatcher.Result(RoadProviderState.COVERAGE_UNAVAILABLE,null),LiveRoadState(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,true,30,false,r.id)))
         assertEquals(30,state.limitMph)
     }
     @Test fun serviceUnavailableWithoutALiveLimitStaysTruthfullyUnknown() {

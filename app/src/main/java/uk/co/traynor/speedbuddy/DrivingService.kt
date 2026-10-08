@@ -114,7 +114,12 @@ class DrivingService : Service(), LocationListener {
     private var lastLiveRoadRequestAt = 0L
     private var regionalFixElapsedMs: Long? = null
     private var liveRoadRequest: Job? = null
-    private var liveRoadResponse: Pair<Long,LiveRoadState>? = null
+    private var liveRoadResponse: LiveRoadSample? = null
+    private var liveRequestStatus = "Not requested"
+    private var liveRetryAt = 0L
+    private var liveFailures = 0
+    private var rejectedLiveCredential: String? = null
+    private var liveAuthBlocked=false
     private var userCameras = emptyList<Camera>()
     private var imported = emptyList<Camera>()
     private var importedCount = 0
@@ -221,7 +226,7 @@ class DrivingService : Service(), LocationListener {
                 val now = SystemClock.elapsedRealtime()
                 DriveBus.set(current.copy(roadDataStatus = roadStatus(now), tooEarlyAvailable = limitEngine.canReport(now),boundaryAvailable=limitEngine.canMarkBoundary(now),
                     correctionMessage=feedbackMessage.takeIf { now-feedbackAt in 0..6000 } ?: ""))
-                current.fix?.takeIf { now-it.elapsedMs in 0..5000 && RegionalRefreshPolicy.permitsLegacyRefresh(regional.state) }?.let { refresh(it) }
+                current.fix?.takeIf { now-it.elapsedMs in 0..5000 && RegionalRefreshPolicy.permitsAfterLive(regional.state,liveRoadResponse?.state) }?.let { refresh(it) }
             } }
         }
         DriveBus.set(DriveBus.state.value.copy(active = true, status = "Waiting for GPS"))
@@ -297,25 +302,38 @@ class DrivingService : Service(), LocationListener {
             if (!fixQueue.current(fix,decisionAt)) return
             // State transitions and picker plans share the service's main-thread owner.
             val mayRequestLive=regional.state in setOf(RoadProviderState.COVERAGE_UNAVAILABLE,RoadProviderState.SERVICE_UNAVAILABLE)
-            val liveRoadState=liveRoadResponse?.takeIf { it.first==fix.elapsedMs && mayRequestLive }?.second
-            if(liveRoadState==null && mayRequestLive && fix.bearing!=null && fix.accuracyM in 1.0..100.0 &&
-                liveRoadRequest?.isActive!=true && decisionAt-lastLiveRoadRequestAt>=1_000) {
+            val requestCredential=getSharedPreferences("settings",Context.MODE_PRIVATE).getString("speedBuddyCredential",null)
+            val liveRoadState=liveRoadResponse?.takeIf { mayRequestLive }?.forFix(fix)
+            if(mayRequestLive && fix.bearing!=null && fix.accuracyM in 1.0..100.0 &&
+                liveRoadRequest?.isActive!=true && decisionAt>=liveRetryAt && decisionAt-lastLiveRoadRequestAt>=1_000 &&
+                !(liveAuthBlocked && rejectedLiveCredential==requestCredential)) {
                 lastLiveRoadRequestAt=decisionAt
+                liveRequestStatus="Request in flight"
                 val previousWayId=DriveBus.state.value.road?.road?.id?.substringAfterLast('/')?.toLongOrNull()
                 // The network never holds up matching subsequent phone-owned GPS fixes.
                 liveRoadRequest=scope.launch {
                     val response=withContext(Dispatchers.IO) {
                         runCatching { speedBuddyRoadClient.request(fix,previousWayId) }
-                            .getOrElse { LiveRoadState(RoadProviderState.SERVICE_UNAVAILABLE,false,null,true) }
+                            .getOrElse { LiveRoadState(RoadProviderState.SERVICE_UNAVAILABLE,false,null,true,error=if(it is java.net.SocketTimeoutException) "Timeout" else "Transport unavailable") }
                     }
-                    if(!fixQueue.current(fix,SystemClock.elapsedRealtime())) return@launch
-                    liveRoadResponse=fix.elapsedMs to response
-                    fixQueue.retry(frame);startProcessing()
+                    if(requestCredential!=getSharedPreferences("settings",Context.MODE_PRIVATE).getString("speedBuddyCredential",null)) return@launch
+                    liveRequestStatus=response.error ?: response.state.name
+                    if(response.error in setOf("HTTP 401","HTTP 403","Credential missing")) { liveAuthBlocked=true;rejectedLiveCredential=requestCredential }
+                    else liveAuthBlocked=false
+                    liveFailures=if(response.state==RoadProviderState.SERVICE_UNAVAILABLE) (liveFailures+1).coerceAtMost(5) else 0
+                    liveRetryAt=SystemClock.elapsedRealtime()+if(response.error=="HTTP 429") 5_000 else if(liveFailures>0) (1_000L shl (liveFailures-1)).coerceAtMost(30_000) else 1_000
+                    // Store scoped evidence; re-evaluate ONLY the latest frame and its fresh geometry.
+                    liveRoadResponse=LiveRoadSample(fix,response)
+                    val latest=DriveBus.state.value.fix
+                    if(latest!=null && liveRoadResponse?.forFix(latest)!=null) {
+                        fixQueue.retry(DrivingFixQueue.Frame(latest,DriveBus.state.value.speedMph));startProcessing()
+                    }
                 }
             }
             val evaluatedAt=SystemClock.elapsedRealtime()
             if(!fixQueue.current(fix,evaluatedAt)) return
-            val result=limitPipeline.evaluate(fix,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,evaluatedAt,wallNow,regional,liveRoadState)
+            val evaluated=limitPipeline.evaluate(fix,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,evaluatedAt,wallNow,regional,liveRoadState)
+            val result=evaluated.copy(roadData=evaluated.roadData.copy(liveRequestStatus=liveRequestStatus,liveSampleElapsedMs=liveRoadResponse?.fix?.elapsedMs))
             val road=result.road;val source=result.source;val decision=result.decision;val limit=decision.mph
             val correctedRoads=result.contextualRoads
             val upcoming=result.upcoming
@@ -356,7 +374,7 @@ class DrivingService : Service(), LocationListener {
             val cameraLimit=alert?.let { CameraLimits.resolve(it.camera,road,alertLimit) }
             val cameraCoversSpeeding=cameraLimit!=null && speed!=null && speed>cameraLimit+tolerance.coerceAtLeast(0)
             if(overspeedSignal && !cameraCoversSpeeding && warning?.doubleBeep!=true) signal(true,settings.getBoolean("vibrate",true))
-            if (RegionalRefreshPolicy.permitsLegacyRefresh(regional.state)) refresh(fix)
+            if (RegionalRefreshPolicy.permitsAfterLive(regional.state,liveRoadResponse?.state)) refresh(fix)
         } catch(e: Exception) {
             if(e is CancellationException) throw e
             Log.e("SpeedBuddy","Local road decision failed",e)

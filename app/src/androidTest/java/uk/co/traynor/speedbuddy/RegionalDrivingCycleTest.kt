@@ -34,7 +34,7 @@ class RegionalDrivingCycleTest {
         val raw=File(context.cacheDir,"cycle1.sqlite").apply { delete() }
         SQLiteDatabase.openOrCreateDatabase(raw,null).use { db ->
             db.execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)")
-            for((key,value) in mapOf("formatVersion" to "1","matcherVersion" to "1","dataset" to "{\"region\":\"lancashire\"}",
+            for((key,value) in mapOf("formatVersion" to "1","matcherVersion" to "\"distance-heading-oneway-continuity-v1\"","dataset" to "{\"region\":\"lancashire\"}",
                 "coverage" to "[[[[-3.0,53.0],[-2.0,53.0],[-2.0,54.0],[-3.0,54.0],[-3.0,53.0]]]]"))
                 db.execSQL("INSERT INTO metadata VALUES(?,?)",arrayOf(key,value))
             db.execSQL("CREATE TABLE roads(osm_way_id INTEGER PRIMARY KEY,coordinates TEXT NOT NULL,tags TEXT NOT NULL)")
