@@ -159,9 +159,9 @@ class PhysicalRoadRegressionTest {
         // The regional RTree has found the connected next way, but cannot yet choose it
         // authoritatively. It is context for bounded continuity only, never a new limit.
         val gap=RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,candidates=listOf(second))
-        val assumed=pipeline.evaluate(fix(215.0,1_500),emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),1_500,11_500,gap)
+        val assumed=pipeline.evaluate(fix(205.0,1_500),emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),1_500,11_500,gap)
         assertEquals(40,assumed.decision.mph);assertTrue(assumed.decision.assumed)
         val confirmed=RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,RoadMatch(second,0.0,0.0,.95))
-        assertEquals(40,pipeline.evaluate(fix(225.0,1_800),emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),1_800,11_800,confirmed).decision.mph)
+        assertEquals(40,pipeline.evaluate(fix(215.0,1_800),emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),1_800,11_800,confirmed).decision.mph)
     }
 }
