@@ -12,48 +12,81 @@ internal class RegionalPackMatcher(context: Context) {
     private val packs = RegionalPackStore(context)
     private val matcher = RoadMatcher()
 
-    /** Candidates are context for bounded continuity only; they never bypass authority. */
-    data class Result(val state: RoadProviderState, val match: RoadMatch?, val generation: String? = null, val candidates: List<Road> = emptyList())
+    /** Context is bounded separately from point matching, so look-ahead never changes the current road. */
+    data class Result(val state: RoadProviderState,val match: RoadMatch?,val generation: String?=null,
+        val candidates: List<Road> = emptyList(),val contextComplete: Boolean=true)
+    private var lastGeneration: String?=null
+    private data class Batch(val roads: List<Road>,val complete: Boolean,val corrupt: Boolean)
 
     @Synchronized
     fun match(fix: Fix): Result {
-        // Accurate stationary fixes are valid spatial evidence; RoadMatcher rejects ambiguity.
-        if (fix.accuracyM !in 1.0..25.0)
-            return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN, null)
-        val databases = packs.activeDatabases()
-        if (databases.isEmpty()) return Result(RoadProviderState.COVERAGE_UNAVAILABLE, null)
-        val candidates = mutableListOf<Road>()
-        var covered = false
-        var generation: String? = null
-        for ((region, database) in databases) {
-            SQLiteDatabase.openDatabase(database.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
-                if (!covers(db, fix.point)) return@use
-                covered = true
-                generation = region
-                candidates += roadsNear(db, fix)
+        val snapshot=packs.snapshot()
+        val generation=snapshot.generation
+        if(lastGeneration!=generation) { matcher.reset();lastGeneration=generation }
+        if(!validPoint(fix.point) || fix.accuracyM !in 1.0..25.0)
+            return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,generation)
+        val near=mutableListOf<Road>();val context=mutableListOf<Road>()
+        var covered=false;var unavailable=snapshot.unavailable;var uncertain=false;var contextComplete=true
+        for(installed in snapshot.installed) {
+            var pointCovered=false;var coverageRead=false
+            runCatching {
+                SQLiteDatabase.openDatabase(installed.database.absolutePath,null,SQLiteDatabase.OPEN_READONLY).use { db ->
+                    pointCovered=covers(db,fix.point);coverageRead=true
+                    if(pointCovered) {
+                        covered=true
+                        val pointRoads=roadsNear(db,fix,minOf(60.0,maxOf(20.0,3.0*fix.accuracyM)))
+                        uncertain=uncertain || !pointRoads.complete || pointRoads.corrupt
+                        near+=pointRoads.roads.filter { Geo.projection(fix.point,it.points).first<=maxOf(20.0,fix.accuracyM*1.5) }
+                    }
+                    // Installed neighboring regions may supply forward geometry without
+                    // being allowed to establish the current point's road authority.
+                    val lookAhead=roadsNear(db,fix,350.0)
+                    contextComplete=contextComplete && lookAhead.complete && !lookAhead.corrupt
+                    context+=lookAhead.roads
+                }
+            }.onFailure {
+                unavailable=true
+                if(coverageRead) contextComplete=false
+                if(pointCovered) uncertain=true
             }
         }
-        if (!covered) return Result(RoadProviderState.COVERAGE_UNAVAILABLE, null)
-        val unique=candidates.distinctBy { it.id }
-        if (unique.size > 64) return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN, null, generation)
-        val match = matcher.match(fix, unique) ?: return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN, null, generation, unique)
-        val limit = PackSpeedLimits.mph(match.road.tags, fix.bearing, match)
-        return Result(if (limit == null) RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN else RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN, match, generation, unique)
+        val currentGeneration=packs.snapshot().generation
+        if(currentGeneration!=generation) return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,currentGeneration,contextComplete=false)
+        if(!covered) return Result(if(unavailable) RoadProviderState.SERVICE_UNAVAILABLE else RoadProviderState.COVERAGE_UNAVAILABLE,null,generation)
+        // Conflicting overlapping regional facts must not be resolved by file enumeration order.
+        fun conflicts(roads: List<Road>)=roads.groupBy { it.id }.values.any { group ->
+            group.map { r -> r.tags.filterKeys { it.startsWith("maxspeed") || it.startsWith("source:maxspeed") || it in setOf("oneway","highway","junction") } }.distinct().size>1 }
+        uncertain=uncertain || conflicts(near)
+        contextComplete=contextComplete && !conflicts(context)
+        val unique=context.distinctBy { it.id }
+        if(uncertain) return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,generation,unique,false)
+        val match=matcher.match(fix,near.distinctBy { it.id }) ?: return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,generation,unique,contextComplete)
+        val limit=PackSpeedLimits.mph(match.road.tags,fix.bearing,match)
+        return Result(if(limit==null) RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN else RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,match,generation,unique,contextComplete)
     }
 
-    private fun roadsNear(db: SQLiteDatabase, fix: Fix): List<Road> {
-        val radius = minOf(60.0, maxOf(20.0, 3.0 * fix.accuracyM))
-        val latDelta = radius / 111319.49079327358
-        val lonDelta = radius / (111319.49079327358 * cos(Math.toRadians(fix.point.lat)))
+    private fun roadsNear(db: SQLiteDatabase,fix: Fix,radius: Double): Batch {
+        val latDelta=radius/111319.49079327358
+        val lonDelta=radius/(111319.49079327358*cos(Math.toRadians(fix.point.lat)))
         return db.rawQuery("""SELECT r.osm_way_id,r.coordinates,r.tags FROM roads_rtree x
             JOIN roads r ON r.osm_way_id=x.osm_way_id
-            WHERE x.max_lon>=? AND x.min_lon<=? AND x.max_lat>=? AND x.min_lat<=? LIMIT 65""",
-            arrayOf("${fix.point.lon-lonDelta}", "${fix.point.lon+lonDelta}", "${fix.point.lat-latDelta}", "${fix.point.lat+latDelta}")).use { cursor ->
-            buildList { while (cursor.moveToNext()) {
-                val tags = JSONObject(cursor.getString(2)).let { json -> json.keys().asSequence().associateWith { json.optString(it) } }
-                val points = JSONArray(cursor.getString(1)).let { array -> List(array.length()) { i -> array.getJSONArray(i).let { GeoPoint(it.getDouble(1), it.getDouble(0)) } } }
-                if (points.size >= 2) add(Road("way/${cursor.getLong(0)}", tags["name"], points, tags))
-            } }
+            WHERE x.max_lon>=? AND x.min_lon<=? AND x.max_lat>=? AND x.min_lat<=? ORDER BY r.osm_way_id LIMIT 513""",
+            arrayOf("${fix.point.lon-lonDelta}","${fix.point.lon+lonDelta}","${fix.point.lat-latDelta}","${fix.point.lat+latDelta}")).use { cursor ->
+            val roads=mutableListOf<Road>();var corrupt=false;var count=0
+            while(cursor.moveToNext()) {
+                count++
+                if(count>512) break
+                runCatching {
+                    val id=cursor.getLong(0);require(id>0)
+                    val json=JSONObject(cursor.getString(2))
+                    val tags=json.keys().asSequence().associateWith { key -> require(json.get(key) is String);json.getString(key) }
+                    val array=JSONArray(cursor.getString(1));require(array.length() in 2..20_000)
+                    val points=List(array.length()) { i -> array.getJSONArray(i).let { require(it.length()==2);GeoPoint(it.getDouble(1),it.getDouble(0)) } }
+                    require(points.all(::validPoint))
+                    Road("way/$id",tags["name"],points,tags)
+                }.onSuccess(roads::add).onFailure { corrupt=true }
+            }
+            Batch(roads,count<=512,corrupt)
         }
     }
 
@@ -74,21 +107,37 @@ internal class RegionalPackMatcher(context: Context) {
 }
 
 internal object PackSpeedLimits {
-    fun mph(tags: Map<String,String>, bearing: Double?, match: RoadMatch): Int? {
-        if (listOf("maxspeed:conditional","maxspeed:variable","maxspeed:lanes").any(tags::containsKey)) return null
-        if ("maxspeed:forward" !in tags && "maxspeed:backward" !in tags) return parse(tags["maxspeed"])
-        // headingDifference folds both directions for matching. The original segment tangent
-        // retains OSM node order, including reverse geometry and oneway=-1.
-        val key = when (WayTravelDirection.from(match,bearing)) {
+    private fun unsupported(tags: Map<String,String>) = tags.keys.any {
+        it.startsWith("maxspeed") && ("conditional" in it || "variable" in it || "lanes" in it)
+    }
+    fun undirected(tags: Map<String,String>): Int? {
+        if(unsupported(tags) || "maxspeed:forward" in tags || "maxspeed:backward" in tags) return null
+        return parse(tags["maxspeed"] ?: tags["maxspeed:type"] ?: tags["source:maxspeed"])
+    }
+    private fun value(tags: Map<String,String>,bearing: Double?,match: RoadMatch): String? {
+        if(unsupported(tags)) return null
+        val base=tags["maxspeed"] ?: tags["maxspeed:type"] ?: tags["source:maxspeed"]
+        if("maxspeed:forward" !in tags && "maxspeed:backward" !in tags) return base
+        val key=when(WayTravelDirection.from(match,bearing)) {
             WayTravelDirection.FORWARD -> "maxspeed:forward"
             WayTravelDirection.BACKWARD -> "maxspeed:backward"
             null -> return null
         }
-        return parse(tags[key] ?: tags["maxspeed"])
+        return tags[key] ?: base
     }
+    fun mph(tags: Map<String,String>,bearing: Double?,match: RoadMatch)=parse(value(tags,bearing,match))
+    fun national(tags: Map<String,String>,bearing: Double?,match: RoadMatch)=
+        value(tags,bearing,match)?.trim()?.lowercase() in setOf("gb:nsl_single","gb:nsl_dual","gb:motorway")
     private fun parse(raw: String?): Int? {
-        val m = Regex("^(\\d{1,3})(?:\\s*(mph|km/h|kmh|kph))?$").matchEntire(raw?.trim()?.lowercase() ?: return null) ?: return null
-        val value=m.groupValues[1].toDouble(); val mph=if(m.groupValues[2]=="mph") value else value/1.609344
-        return mph.takeIf { it>0 && it<=130 }?.let { kotlin.math.round(it).toInt() }
+        val value=raw?.trim()?.lowercase() ?: return null
+        when(value) {
+            "gb:nsl_single" -> return 60
+            "gb:nsl_dual", "gb:motorway" -> return 70
+            "gb:nsl_restricted" -> return 30
+        }
+        val m=Regex("^(\\d{1,3})(?:\\s*(mph|km/h|kmh|kph))?$").matchEntire(value) ?: return null
+        val number=m.groupValues[1].toDouble()
+        val mph=if(m.groupValues[2]=="mph") number else number/1.609344
+        return mph.takeIf { it>=5 && it<=130 }?.let { kotlin.math.round(it).toInt() }
     }
 }

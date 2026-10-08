@@ -20,7 +20,7 @@ internal object CorrectionDirectionPolicy {
         "residential", "unclassified", "tertiary", "secondary", "primary", "trunk", "living_street") &&
         road.tags["oneway"]?.lowercase() in setOf(null,"no","0","false") &&
         road.tags["junction"] !in setOf("roundabout","circular") &&
-        road.tags.keys.none { it.startsWith("maxspeed:forward") || it.startsWith("maxspeed:backward") }
+        road.tags.keys.none { it.startsWith("maxspeed") && (":forward" in it || ":backward" in it) }
 }
 
 /** OSM forward/backward refer to node order, independent of absolute compass heading. */

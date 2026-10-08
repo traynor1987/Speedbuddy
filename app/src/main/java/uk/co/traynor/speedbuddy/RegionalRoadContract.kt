@@ -24,6 +24,7 @@ internal object RegionalRoadCatalogue {
         val id = node.getString("id")
         require(id.matches(Regex("[a-z0-9-]{1,64}"))) { "Invalid region id" }
         val version = node.getString("version")
+        require(version.matches(Regex("[a-zA-Z0-9._-]{1,100}")) && version !in setOf(".","..")) { "Invalid pack version" }
         val download = node.getString("downloadUrl")
         val manifest = node.getString("manifestUrl")
         require(firstParty(download, "/speedbuddy/v1/packs/$id/$version/roads.sqlite.gz")) { "Untrusted pack URL" }
@@ -50,10 +51,12 @@ internal object LiveRoadStateParser {
     fun parse(body: String): LiveRoadState {
         val json = JSONObject(body)
         val state = runCatching { RoadProviderState.valueOf(json.getString("providerState")) }.getOrDefault(RoadProviderState.UNKNOWN)
-        val limit = json.optJSONObject("limit")?.takeIf { state == RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN }?.getDouble("mph")
-            ?.takeIf { it > 0 && it <= 130 }?.let { kotlin.math.round(it).toInt() }
-        require(state != RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN || limit != null) { "Known road state needs numeric limit" }
-        require(state != RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN || limit == null) { "Unknown road state must not contain numeric limit" }
-        return LiveRoadState(state,json.optBoolean("matched"),limit,json.optBoolean("fallbackAllowed"))
+        val rawLimit=json.optJSONObject("limit")?.optDouble("mph",Double.NaN)
+        val matched=json.optBoolean("matched")
+        val limit=rawLimit?.takeIf { it.isFinite() && it>=5 && it<=130 }?.let { kotlin.math.round(it).toInt() }
+        require(state!=RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN || matched && limit!=null) { "Known road state needs matched numeric limit" }
+        require(state==RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN || json.isNull("limit")) { "Non-numeric road state must not contain a limit" }
+        require(state!=RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN || matched) { "Unknown matched road needs identity evidence" }
+        return LiveRoadState(state,matched,limit,json.optBoolean("fallbackAllowed"))
     }
 }

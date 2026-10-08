@@ -85,18 +85,7 @@ class SpeedFilter {
 }
 
 object SpeedLimits {
-    fun mph(tags: Map<String, String>): Int? {
-        if (tags["maxspeed:conditional"] != null || tags["maxspeed:variable"] != null ||
-            tags["maxspeed:lanes"] != null || tags["maxspeed:forward"] != null || tags["maxspeed:backward"] != null) return null
-        val raw = (tags["maxspeed"] ?: tags["maxspeed:type"] ?: tags["source:maxspeed"])
-            ?.trim()?.lowercase() ?: return null
-        if (raw == "gb:nsl_single") return 60
-        if (raw == "gb:nsl_dual" || raw == "gb:motorway") return 70
-        if (raw == "gb:nsl_restricted") return 30
-        val match = Regex("^(\\d{1,3})(?:\\s*(mph|km/h|kmh|kph))?$").matchEntire(raw) ?: return null
-        val value = match.groupValues[1].toInt(); if (value !in 5..130) return null
-        return if (match.groupValues[2] == "mph") value else (value * .621371).roundToInt()
-    }
+    fun mph(tags: Map<String,String>): Int? = PackSpeedLimits.undirected(tags)
 }
 
 /** Bridge brief GPS ambiguity using observed road geometry or a connected, tagged road. */
@@ -192,7 +181,7 @@ class TurnLimitDetector {
     fun detect(fix: Fix, current: RoadMatch?, currentMph: Int?, roads: List<Road>): List<TurnLimit> {
         val road = current?.road ?: return emptyList()
         val heading = fix.bearing ?: return emptyList()
-        if (currentMph == null || fix.accuracyM > 25 || current.confidence < .35) return emptyList()
+        if (currentMph == null || fix.accuracyM > 25 || current.confidence < .7) return emptyList()
         val junctions = road.points.filter { point ->
             val distance = Geo.distance(fix.point, point)
             distance in 25.0..LIMIT_PREVIEW_METERS &&
@@ -202,24 +191,18 @@ class TurnLimitDetector {
             val distance = Geo.distance(fix.point, junction)
             roads.asSequence().filter { it.id != road.id && it.points.size > 1 }
                 .mapNotNull { next ->
-                    val outgoing = when {
-                        Geo.distance(next.points.first(), junction) < 12.0 ->
-                            Geo.bearing(next.points[0], next.points[1])
-                        next.tags["oneway"] != "yes" && Geo.distance(next.points.last(), junction) < 12.0 ->
-                            Geo.bearing(next.points.last(), next.points[next.points.lastIndex - 1])
-                        else -> return@mapNotNull null
-                    }
+                    val outgoing=RoadLookAhead.outgoing(next,junction) ?: return@mapNotNull null
                     val turn = (outgoing - heading + 540.0) % 360.0 - 180.0
                     val direction = when {
                         turn in -140.0..-40.0 -> TurnDirection.LEFT
                         turn in 40.0..140.0 -> TurnDirection.RIGHT
                         else -> return@mapNotNull null
                     }
-                    val mph = SpeedLimits.mph(next.tags) ?: return@mapNotNull null
+                    val nextMatch=RoadMatch(next,0.0,0.0,1.0,Geo.projection(junction,next.points).second)
+                    val mph=PackSpeedLimits.mph(next.tags,outgoing,nextMatch) ?: return@mapNotNull null
                     if (mph == currentMph) return@mapNotNull null
                     TurnLimit(mph, distance, direction,
-                        next.tags["maxspeed"]?.startsWith("GB:nsl") == true ||
-                            next.tags["maxspeed:type"]?.startsWith("GB:nsl") == true)
+                        PackSpeedLimits.national(next.tags,outgoing,nextMatch))
                 }.toList()
         }
         return listOf(TurnDirection.LEFT, TurnDirection.RIGHT).mapNotNull { direction ->
@@ -234,38 +217,50 @@ const val CAMERA_CLOSE_METERS = 91.44
 /** 200 imperial yards for conditional and straight-ahead speed-limit previews. */
 const val LIMIT_PREVIEW_METERS = 182.88
 
-/** Preview only a connected continuation of the current named road, never a nearby side road. */
-class UpcomingLimitDetector {
-    fun detect(fix: Fix, current: RoadMatch?, currentMph: Int?, roads: List<Road>): UpcomingLimit? {
-        val road = current?.road ?: return null
-        val heading = fix.bearing ?: return null
-        if (currentMph == null || fix.accuracyM > 25 || road.points.size < 2) return null
-        val end = road.points.last()
-        val start = road.points.first()
-        val forward = Geo.difference(heading, Geo.bearing(road.points[road.points.lastIndex - 1], end)) < 40
-        val backward = Geo.difference(heading, Geo.bearing(road.points[1], start)) < 40
-        val junction = when {
-            forward -> end
-            backward && road.tags["oneway"] != "yes" -> start
-            else -> return null
+/** Legal outgoing geometry, shared by turns and straight-ahead regional previews. */
+internal object RoadLookAhead {
+    fun outgoing(road: Road,junction: GeoPoint): Double? {
+        val oneWay=road.tags["oneway"]?.lowercase()
+        val forward=oneWay!="-1"
+        val backward=oneWay !in setOf("yes","1","true") && road.tags["junction"] !in setOf("roundabout","circular")
+        return when {
+            forward && Geo.distance(road.points.first(),junction)<12 -> Geo.bearing(road.points[0],road.points[1])
+            backward && Geo.distance(road.points.last(),junction)<12 -> Geo.bearing(road.points.last(),road.points[road.points.lastIndex-1])
+            else -> null
         }
-        val distance = Geo.distance(fix.point, junction)
-        if (distance !in 25.0..LIMIT_PREVIEW_METERS || Geo.difference(heading, Geo.bearing(fix.point, junction)) > 35) return null
-        val identity = road.tags["ref"] ?: road.name ?: return null
-        val candidates = roads.asSequence().filter { it.id != road.id && it.points.size > 1 &&
-            (it.tags["ref"] ?: it.name) == identity }
-            .mapNotNull { next ->
-                val nextHeading = when {
-                    Geo.distance(next.points.first(), junction) < 12.0 -> Geo.bearing(next.points[0], next.points[1])
-                    next.tags["oneway"] != "yes" && Geo.distance(next.points.last(), junction) < 12.0 ->
-                        Geo.bearing(next.points.last(), next.points[next.points.lastIndex - 1])
-                    else -> return@mapNotNull null
-                }
-                val mph = SpeedLimits.mph(next.tags)
-                if (mph == null || mph == currentMph || Geo.difference(heading, nextHeading) > 35) null
-                else UpcomingLimit(mph, distance, next.tags["maxspeed:type"]?.startsWith("GB:nsl") == true,roadId=next.id)
-            }.toList()
-        return candidates.singleOrNull()
+    }
+}
+
+/** Preview only connected, unambiguous continuations; nearby side roads never establish identity. */
+class UpcomingLimitDetector {
+    fun detect(fix: Fix,current: RoadMatch?,currentMph: Int?,roads: List<Road>): UpcomingLimit? {
+        val road=current?.road ?: return null
+        val heading=fix.bearing ?: return null
+        if(currentMph==null || fix.accuracyM>25 || road.points.size<2 || current.confidence<.7) return null
+        val direction=WayTravelDirection.from(current.copy(wayHeading=Geo.projection(fix.point,road.points).second),heading) ?: return null
+        val oneWay=road.tags["oneway"]?.lowercase()
+        if(direction==WayTravelDirection.FORWARD && oneWay=="-1" ||
+            direction==WayTravelDirection.BACKWARD && (oneWay in setOf("yes","1","true") || road.tags["junction"] in setOf("roundabout","circular"))) return null
+        val junction=if(direction==WayTravelDirection.FORWARD) road.points.last() else road.points.first()
+        val distance=Geo.distance(fix.point,junction)
+        if(distance !in 0.0..LIMIT_PREVIEW_METERS || Geo.difference(heading,Geo.bearing(fix.point,junction))>35) return null
+        val identity=road.tags["ref"] ?: road.name ?: return null
+        fun follow(at: GeoPoint,atHeading: Double,travelled: Double,seen: Set<String>): UpcomingLimit? {
+            if(seen.size>16 || travelled>LIMIT_PREVIEW_METERS) return null
+            val next=roads.filter { it.id !in seen && it.points.size>1 && (it.tags["ref"] ?: it.name)==identity }
+                .mapNotNull { r -> RoadLookAhead.outgoing(r,at)?.takeIf { Geo.difference(atHeading,it)<=35 }?.let { r to it } }
+                .singleOrNull() ?: return null
+            val (r,outgoing)=next
+            val match=RoadMatch(r,0.0,0.0,1.0,Geo.projection(at,r.points).second)
+            val mph=PackSpeedLimits.mph(r.tags,outgoing,match) ?: return null
+            if(mph!=currentMph) return if(travelled>=25.0) UpcomingLimit(mph,travelled,PackSpeedLimits.national(r.tags,outgoing,match),roadId=r.id) else null
+            val forward=Geo.distance(at,r.points.first())<12
+            val end=if(forward) r.points.last() else r.points.first()
+            val endHeading=if(forward) Geo.bearing(r.points[r.points.lastIndex-1],end) else Geo.bearing(r.points[1],end)
+            val length=r.points.zipWithNext().sumOf { Geo.distance(it.first,it.second) }
+            return follow(end,endHeading,travelled+length,seen+r.id)
+        }
+        return follow(junction,heading,distance,setOf(road.id))
     }
 }
 

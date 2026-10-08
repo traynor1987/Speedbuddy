@@ -254,9 +254,15 @@ class DrivingService : Service(), LocationListener {
         if(!fixQueue.current(fix,now)) return
         try {
             val wallNow = System.currentTimeMillis()
+            // Geometry and directional matching belong to this GPS frame, even while
+            // reusable legacy road/camera candidates remain within their cache window.
+            val freshRegional=withContext(Dispatchers.IO) { regionalMatcher.match(fix) }
+            if(!fixQueue.current(fix,SystemClock.elapsedRealtime())) return
+            regional=freshRegional;regionalFixElapsedMs=fix.elapsedMs
             if (localGeneration != generation || cameraRevision!=OwnerDataRevision.cameras || now-localAt > 5000 || localPoint?.let { Geo.distance(it,fix.point)>150 } != false) {
                 val result = withContext(Dispatchers.IO) {
-                    val nearby=roadRepository.nearby(fix.point,RoadTile.at(fix.point) in coverage)
+                    val nearby=runCatching { roadRepository.nearby(fix.point,RoadTile.at(fix.point) in coverage) }
+                        .getOrElse { Log.w("SpeedBuddy","Optional legacy geometry unavailable",it);LocalRoads(emptyList(),emptyList()) }
                     val personal = db.userCameras()
                     val lufop = db.importedNearby(fix.point)
                     val count = db.importedInfo()?.count ?: 0
@@ -269,11 +275,6 @@ class DrivingService : Service(), LocationListener {
                 run { local = result[0] as LocalRoads;userCameras = result[1] as List<Camera>;imported = result[2] as List<Camera>;importedCount = result[3] as Int;effectiveCameras=result[4] as List<Camera> }
                 localPoint=fix.point;localAt=now;localGeneration=generation;cameraRevision=OwnerDataRevision.cameras
             }
-            // Geometry and directional matching belong to this GPS frame, even while
-            // reusable legacy road/camera candidates remain within their cache window.
-            val freshRegional=withContext(Dispatchers.IO) { regionalMatcher.match(fix) }
-            if(!fixQueue.current(fix,SystemClock.elapsedRealtime())) return
-            regional=freshRegional;regionalFixElapsedMs=fix.elapsedMs
             if(roadRevision!=OwnerDataRevision.roads) {
                 val loadedRevision=OwnerDataRevision.roads
                 val ownerData=withContext(Dispatchers.IO) { Triple(db.roadCorrections().associateBy { it.id },roads.overrides(),roads.boundaries()) }
@@ -286,7 +287,6 @@ class DrivingService : Service(), LocationListener {
                 if(roadRevision>=0) limitEngine.reset()
                 roadRevision=loadedRevision
             }
-            val correctedRoads=local.roads.map { mapCorrections[it.road.id]?.apply(it.road) ?: it.road }
             val decisionAt=SystemClock.elapsedRealtime()
             if (!fixQueue.current(fix,decisionAt)) return
             // State transitions and picker plans share the service's main-thread owner.
@@ -311,17 +311,18 @@ class DrivingService : Service(), LocationListener {
             if(!fixQueue.current(fix,evaluatedAt)) return
             val result=limitPipeline.evaluate(fix,local.roads.map { it.road },overrides,mapCorrections,boundaries,observations,evaluatedAt,wallNow,regional,liveRoadState)
             val road=result.road;val source=result.source;val decision=result.decision;val limit=decision.mph
+            val correctedRoads=result.contextualRoads
             val upcoming=result.upcoming
             val settings = getSharedPreferences("settings",Context.MODE_PRIVATE)
             val publicCameras=local.cameras
             val importedNearby=imported.filterNot { candidate -> publicCameras.any { it.type==candidate.type && Geo.distance(it.point,candidate.point)<25 } }
-            val enabled=effectiveCameras.filter { cameraEnabled(it,settings) }
+            val enabled=effectiveCameras.filter { result.geometryComplete && cameraEnabled(it,settings) }
             val tolerance=settings.getInt("tolerance",2)
             val alertLimit=limit.takeUnless { decision.assumed }
             val (alert,cameraDecision)=detector.evaluate(fix,road,enabled,speed,correctedRoads,wallNow,
                 matchedRoadLimitMph=alertLimit,toleranceMph=tolerance)
             val section=if(fixedSpeedEnabled(settings)) sectionTracker.update(fix,road,local.averageSections) else null
-            val turns=turnDetector.detect(fix,road,limit,correctedRoads)
+            val turns=if(result.geometryComplete) turnDetector.detect(fix,road,limit,correctedRoads) else emptyList()
             val overspeedSignal=settings.getBoolean("overspeed",false) && overspeed.update(speed,alertLimit,tolerance)
             val age=local.roads.firstOrNull { it.road.id==road?.road?.id }?.let { (wallNow-it.fetchedAt).coerceAtLeast(0) }
             val wanted=RoadTiles.covering(fix.point)
