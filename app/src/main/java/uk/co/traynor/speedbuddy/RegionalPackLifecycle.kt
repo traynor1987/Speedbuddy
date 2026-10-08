@@ -5,7 +5,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.UUID
+
 
 /** Production catalogue and download gateway. Verification and activation stay in [RegionalPackStore]. */
 internal class RegionalPackLifecycle(private val context: Context, private val credential: () -> String?,
@@ -23,10 +23,11 @@ internal class RegionalPackLifecycle(private val context: Context, private val c
     }
     private val store=RegionalPackStore(context)
     fun installed()=store.installed()
+    fun inventory()=store.inventory()
     fun catalogue(): List<RegionalPackDescriptor> = requestText("https://api.jtwebsolutions.co.uk/speedbuddy/v1/regions").let(RegionalRoadCatalogue::parse)
         .filter { it.id in supportedRegions }
-    fun download(descriptor: RegionalPackDescriptor, onProgress: (DownloadProgress) -> Unit = {}): RegionalPackStore.Installed {
-        val staging=File(context.cacheDir,"regional-pack-${UUID.randomUUID()}.gz")
+    fun download(descriptor: RegionalPackDescriptor, onProgress: (DownloadProgress) -> Unit = {}): RegionalPackStore.Installed = store.downloading(descriptor.id) { revision ->
+        val staging=store.temporaryDownload()
         try {
             val token=credential()?.takeIf(String::isNotBlank) ?: error("Sign in to download regional road data")
             val connection=open(URL(descriptor.downloadUrl))
@@ -42,15 +43,16 @@ internal class RegionalPackLifecycle(private val context: Context, private val c
                     require(total==descriptor.downloadBytes) { "Regional pack download was incomplete" }
                 } }
             } finally { connection.disconnect() }
-            return store.install(descriptor,staging) { stage -> onProgress(DownloadProgress(descriptor.id,when(stage) {
+            store.installDownloaded(descriptor,staging,revision) { stage -> onProgress(DownloadProgress(descriptor.id,when(stage) {
                 RegionalPackStore.InstallStage.VERIFYING_DOWNLOAD -> DownloadProgress.Stage.VERIFYING_DOWNLOAD
                 RegionalPackStore.InstallStage.DECOMPRESSING -> DownloadProgress.Stage.DECOMPRESSING
                 RegionalPackStore.InstallStage.VERIFYING_DATABASE -> DownloadProgress.Stage.VERIFYING_DATABASE
                 RegionalPackStore.InstallStage.ACTIVATING -> DownloadProgress.Stage.ACTIVATING
             },descriptor.downloadBytes,descriptor.downloadBytes)) }
-        } finally { staging.delete() }
+        } finally { store.releaseTemporary(staging) }
     }
-    fun delete(region: String) { store.delete(region) }
+    fun delete(region: String)=store.delete(region)
+    fun storedBytes()=store.storedBytes()
     private fun requestText(url: String): String {
         val token=credential()?.takeIf(String::isNotBlank) ?: error("Sign in to check regional road data")
         val connection=open(URL(url))

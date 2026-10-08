@@ -14,17 +14,25 @@ internal class RegionalPackMatcher(context: Context) {
 
     /** Context is bounded separately from point matching, so look-ahead never changes the current road. */
     data class Result(val state: RoadProviderState,val match: RoadMatch?,val generation: String?=null,
-        val candidates: List<Road> = emptyList(),val contextComplete: Boolean=true)
+        val candidates: List<Road> = emptyList(),val contextComplete: Boolean=true,
+        val packDetails: List<RegionalPackDescriptor> = emptyList(),val coverage: Boolean?=null,val error: String?=null)
     private var lastGeneration: String?=null
     private data class Batch(val roads: List<Road>,val complete: Boolean,val corrupt: Boolean)
 
     @Synchronized
-    fun match(fix: Fix): Result {
+    fun match(fix: Fix): Result=packs.reading { matchReading(fix) }
+    private fun matchReading(fix: Fix): Result {
         val snapshot=packs.snapshot()
         val generation=snapshot.generation
         if(lastGeneration!=generation) { matcher.reset();lastGeneration=generation }
+        val participating=mutableListOf<RegionalPackDescriptor>()
+        var readFailed=snapshot.unavailable
+        fun result(state: RoadProviderState,match: RoadMatch?,candidates: List<Road> = emptyList(),complete: Boolean=true,coverage: Boolean?=null)=
+            Result(state,match,generation,candidates,complete,
+                participating.ifEmpty { snapshot.installed.map { it.descriptor } },coverage,
+                if(readFailed) "Some regional pack files are corrupt, missing or unreadable" else if(!complete) "Regional geometry incomplete or conflicting" else null)
         if(!validPoint(fix.point) || fix.accuracyM !in 1.0..25.0)
-            return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,generation)
+            return result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null)
         val near=mutableListOf<Road>();val context=mutableListOf<Road>()
         var covered=false;var unavailable=snapshot.unavailable;var uncertain=false;var contextComplete=true
         for(installed in snapshot.installed) {
@@ -33,7 +41,7 @@ internal class RegionalPackMatcher(context: Context) {
                 SQLiteDatabase.openDatabase(installed.database.absolutePath,null,SQLiteDatabase.OPEN_READONLY).use { db ->
                     pointCovered=covers(db,fix.point);coverageRead=true
                     if(pointCovered) {
-                        covered=true
+                        covered=true;participating+=installed.descriptor
                         val pointRoads=roadsNear(db,fix,minOf(60.0,maxOf(20.0,3.0*fix.accuracyM)))
                         uncertain=uncertain || !pointRoads.complete || pointRoads.corrupt
                         near+=pointRoads.roads.filter { Geo.projection(fix.point,it.points).first<=maxOf(20.0,fix.accuracyM*1.5) }
@@ -45,24 +53,24 @@ internal class RegionalPackMatcher(context: Context) {
                     context+=lookAhead.roads
                 }
             }.onFailure {
-                unavailable=true
+                unavailable=true;readFailed=true
                 if(coverageRead) contextComplete=false
                 if(pointCovered) uncertain=true
             }
         }
         val currentGeneration=packs.snapshot().generation
         if(currentGeneration!=generation) return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,currentGeneration,contextComplete=false)
-        if(!covered) return Result(if(unavailable) RoadProviderState.SERVICE_UNAVAILABLE else RoadProviderState.COVERAGE_UNAVAILABLE,null,generation)
+        if(!covered) return result(if(unavailable) RoadProviderState.SERVICE_UNAVAILABLE else RoadProviderState.COVERAGE_UNAVAILABLE,null,coverage=if(unavailable) null else false)
         // Conflicting overlapping regional facts must not be resolved by file enumeration order.
         fun conflicts(roads: List<Road>)=roads.groupBy { it.id }.values.any { group ->
             group.map { r -> r.tags.filterKeys { it.startsWith("maxspeed") || it.startsWith("source:maxspeed") || it in setOf("oneway","highway","junction") } }.distinct().size>1 }
         uncertain=uncertain || conflicts(near)
         contextComplete=contextComplete && !conflicts(context)
         val unique=context.distinctBy { it.id }
-        if(uncertain) return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,generation,unique,false)
-        val match=matcher.match(fix,near.distinctBy { it.id }) ?: return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,generation,unique,contextComplete)
+        if(uncertain) return result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,unique,false,true)
+        val match=matcher.match(fix,near.distinctBy { it.id }) ?: return result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,unique,contextComplete,true)
         val limit=PackSpeedLimits.mph(match.road.tags,fix.bearing,match)
-        return Result(if(limit==null) RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN else RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,match,generation,unique,contextComplete)
+        return result(if(limit==null) RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN else RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,match,unique,contextComplete,true)
     }
 
     private fun roadsNear(db: SQLiteDatabase,fix: Fix,radius: Double): Batch {

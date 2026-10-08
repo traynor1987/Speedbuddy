@@ -1,5 +1,7 @@
 package uk.co.traynor.speedbuddy
 
+import org.json.JSONObject
+
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -681,24 +683,45 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-@Composable private fun OfflineRoadDataScreen(context: Context, back: () -> Unit) {
+@Composable internal fun OfflineRoadDataScreen(context: Context, providedLifecycle: RegionalPackLifecycle?=null, back: () -> Unit) {
     val scope=rememberCoroutineScope(); val access=remember { RegionalRoadDataAccess(context) }
-    val lifecycle=remember { RegionalPackLifecycle(context,credential = access::credential) }
+    val lifecycle=remember { providedLifecycle ?: RegionalPackLifecycle(context,credential = access::credential) }
     var catalogue by remember { mutableStateOf<List<RegionalPackDescriptor>>(emptyList()) }
-    var installed by remember { mutableStateOf(lifecycle.installed()) }; var message by remember { mutableStateOf("Checking the production catalogue…") }
+    var installed by remember { mutableStateOf(emptyList<RegionalPackStore.Installed>()) }; var message by remember { mutableStateOf("Checking the production catalogue…") }
     var configured by remember { mutableStateOf(access.credential()!=null) }
     var credentialInput by rememberSaveable { mutableStateOf("") }
     var catalogueRevision by remember { mutableIntStateOf(0) }
+    var storageError by remember { mutableStateOf<String?>(null) }
+    var inventoryIssues by remember { mutableStateOf(emptyList<String>()) }
+    var busy by remember { mutableStateOf(false) }
+    var storedBytes by remember { mutableLongStateOf(0L) }
     val downloadProgress=remember { MutableStateFlow<RegionalPackLifecycle.DownloadProgress?>(null) }
     val progress by downloadProgress.collectAsState()
-    LaunchedEffect(catalogueRevision) { runCatching { withContext(Dispatchers.IO) { lifecycle.catalogue() } }.onSuccess { catalogue=it;message="" }.onFailure { message=it.message ?: "Catalogue unavailable" } }
+    suspend fun refreshInstalled() {
+        val local=withContext(Dispatchers.IO) { lifecycle.inventory() to lifecycle.storedBytes() }
+        installed=local.first.installed;inventoryIssues=local.first.issues;storageError=local.first.error;storedBytes=local.second
+    }
+    fun deletePack(id: String,name: String) { busy=true;scope.launch {
+        try { val deletion=withContext(Dispatchers.IO) { lifecycle.delete(id) };refreshInstalled()
+            message="$name removed · ${"%.1f".format(Locale.UK,deletion.freedBytes/1_048_576.0)} MB freed. Owner corrections were kept." }
+        catch(error: Exception) { runCatching { refreshInstalled() };message="Could not remove $name: ${error.message ?: "storage unavailable"}" }
+        finally { busy=false }
+    } }
+    LaunchedEffect(Unit) {
+        while(true) { runCatching { refreshInstalled() }.onFailure { message="Local pack inventory unavailable" };kotlinx.coroutines.delay(5000) }
+    }
+    LaunchedEffect(catalogueRevision) {
+        try { catalogue=withContext(Dispatchers.IO) { lifecycle.catalogue() };message="" }
+        catch(cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch(error: Exception) { message=error.message ?: "Catalogue unavailable" }
+    }
     Page("Offline Road Data",back) { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom=24.dp)) {
         Text("Verified regional packs",color=Muted,modifier=Modifier.padding(16.dp),fontSize=14.sp)
         Surface(shape=RoundedCornerShape(20.dp),color=Panel,modifier=Modifier.padding(horizontal=16.dp,vertical=6.dp)) { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
             Text("Regional road data access",color=Ink,fontSize=18.sp,fontWeight=FontWeight.SemiBold)
             if(configured) {
                 Text("Access is configured on this device. It is used only for Speed Buddy regional packs and live road-state requests.",color=Muted,fontSize=13.sp)
-                TextButton(onClick={ access.clear();configured=false;catalogue=emptyList();message="Regional road data access removed." }) { Text("Remove access") }
+                TextButton(onClick={ access.clear();configured=false;catalogue=emptyList();catalogueRevision++;message="Regional road data access removed. Installed packs remain available offline." }) { Text("Remove access") }
             } else {
                 Text("Enter the access token provided for your Speed Buddy regional road data. It stays in this app’s private storage and is never shown here.",color=Muted,fontSize=13.sp)
                 OutlinedTextField(value=credentialInput,onValueChange={ credentialInput=it },singleLine=true,label={ Text("Access token") },visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),modifier=Modifier.fillMaxWidth())
@@ -706,16 +729,35 @@ class MainActivity : ComponentActivity() {
             }
         } }
         if(message.isNotBlank()) Text(message,color=Muted,modifier=Modifier.padding(horizontal=16.dp,vertical=8.dp))
-        catalogue.forEach { pack ->
+        Text("Stored regional files: ${"%.1f".format(Locale.UK,storedBytes/1_048_576.0)} MB",color=Muted,modifier=Modifier.padding(16.dp))
+        storageError?.let { Text(it,color=Muted,modifier=Modifier.padding(16.dp)) }
+        if(installed.isEmpty() && catalogue.isEmpty()) Text("No installed regional packs",color=Muted,modifier=Modifier.padding(16.dp))
+        inventoryIssues.forEach { id ->
+            Text("Unavailable regional pack: $id · active metadata damaged",color=Muted,modifier=Modifier.padding(16.dp))
+            TextButton(enabled=!busy,onClick={ deletePack(id,id) }) { Text("Delete unavailable pack $id") }
+        }
+        OfflinePackRows.merge(catalogue,installed.map { it.descriptor }).forEach { row ->
+            val pack=row.pack
             val current=installed.firstOrNull { it.descriptor.id==pack.id }
             Surface(shape=RoundedCornerShape(20.dp),color=Panel,modifier=Modifier.padding(horizontal=16.dp,vertical=6.dp)) { Column(Modifier.padding(16.dp)) {
                 Text(pack.displayName,color=Ink,fontSize=18.sp);Text("${pack.downloadBytes/1_048_576} MB · ${if(current==null) "Not installed" else "Installed ${current.descriptor.version}"}",color=Muted,fontSize=13.sp)
+                current?.problem?.let { Text(it,color=Muted,fontSize=13.sp) }
                 progress?.takeIf { it.regionId==pack.id }?.let { currentProgress ->
                     Spacer(Modifier.height(10.dp));LinearProgressIndicator(progress={ currentProgress.fraction },modifier=Modifier.fillMaxWidth())
                     Text(currentProgress.label,color=Muted,fontSize=13.sp,modifier=Modifier.padding(top=6.dp))
                 }
-                Button(enabled=progress==null,onClick={ scope.launch { message="";runCatching { withContext(Dispatchers.IO) { lifecycle.download(pack) { downloadProgress.value=it } } }.onSuccess { installed=lifecycle.installed();message="${pack.displayName} is ready offline" }.onFailure { message="${pack.displayName}: ${it.message ?: "download failed"}" }.also { downloadProgress.value=null } } }) { Text(if(current==null) "Download" else if(current.descriptor.version!=pack.version) "Update" else "Re-download") }
-                if(current!=null) TextButton(onClick={ scope.launch { withContext(Dispatchers.IO) { lifecycle.delete(pack.id) };installed=lifecycle.installed();message="${pack.displayName} removed. Owner corrections were kept." } }) { Text("Delete") }
+                Button(enabled=!busy && configured,onClick={ busy=true;scope.launch {
+                    message="";var activated=false
+                    try {
+                        withContext(Dispatchers.IO) { lifecycle.download(pack) { downloadProgress.value=it } };activated=true
+                        refreshInstalled();message="${pack.displayName} is ready offline"
+                    } catch(cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch(error: Exception) {
+                        runCatching { refreshInstalled() }
+                        message=if(activated) "${pack.displayName} activated; storage display could not refresh" else "${pack.displayName}: ${error.message ?: "download failed"}"
+                    } finally { downloadProgress.value=null;busy=false }
+                } }) { Text(if(current==null) "Download" else if(current.descriptor.version!=pack.version) "Update" else "Re-download") }
+                if(current!=null) TextButton(enabled=!busy,onClick={ deletePack(pack.id,pack.displayName) }) { Text("Delete") }
             } }
         }
     } }
@@ -883,7 +925,12 @@ class MainActivity : ComponentActivity() {
     }
     Spacer(Modifier.height(20.dp))
 }
-@Composable private fun DiagnosticsScreen(state: DriveState, correction: (String, Int?) -> Unit, back: () -> Unit) = Page("Diagnostics", back) {
+@Composable internal fun DiagnosticsScreen(state: DriveState, correction: (String, Int?) -> Unit, back: () -> Unit) = Page("Diagnostics", back) {
+    val context=androidx.compose.ui.platform.LocalContext.current
+    val scope=rememberCoroutineScope()
+    var retentionMessage by remember { mutableStateOf("") }
+    var clearing by remember { mutableStateOf(false) }
+    val identity=remember { runCatching { context.assets.open("owner-build.json").bufferedReader().use { JSONObject(it.readText()) } }.getOrNull() }
     val fix = state.fix
     val fixAge = fix?.let { SystemClock.elapsedRealtime() - it.elapsedMs }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
@@ -901,34 +948,48 @@ class MainActivity : ComponentActivity() {
             "Speed" to fix?.speedMps?.let { "${(it * MPS_TO_MPH).roundToInt()} mph" },
             "Heading" to fix?.bearing?.let { "${it.roundToInt()}°" },
             "Fix age" to fixAge?.let { "${it / 1000} s" }))
+        DiagnosticCard("ROAD DATA",state.roadData.rows(elapsed=SystemClock.elapsedRealtime()))
         DiagnosticCard("ROAD", listOf(
             "Matched road" to state.road?.road?.let { "${it.name ?: "Unnamed"} · ${it.id}" },
             "Confidence" to state.road?.let { String.format(Locale.UK, "%.2f", it.confidence) },
             "Displayed limit" to state.limitMph?.let { "$it mph" },
-            "Source limit" to state.sourceLimitMph?.let { "$it mph · saved OSM" },
+            "Source limit" to state.sourceLimitMph?.let { "$it mph · ${state.roadData.provider}" },
             "Owner correction" to state.limitDecision?.ownerApplied?.toString(),
             "Assumed limit" to state.limitDecision?.assumed?.toString(),
             "Inherited from" to state.limitDecision?.inheritedFrom,
             "Learned boundary" to state.limitDecision?.boundaryApplied?.toString(),
             "Decision reason" to state.limitDecision?.reason,
-            "Coverage tiles" to "${state.coverageTiles} / ${state.targetTiles} in 20-mile target",
-            "Completed regions" to state.completedRoadRegions.toString(),
-            "Road-data request" to state.roadRequestKind,
-            "Subdivision" to (state.subdivisionLevel?.let { "level $it" } ?: "not required"),
-            "Current-region status" to state.currentRegionStatus,
-            "Data mode" to "Saved road data",
-            "Map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
-            "Map request" to state.mapStatus))
+            "Current-fix decision" to if(state.fix==null) "No GPS fix" else if(state.roadDecisionElapsedMs==state.fix.elapsedMs) "Current" else "Pending or stale",
+            "Legacy coverage tiles" to "${state.coverageTiles} / ${state.targetTiles} in 20-mile target",
+            "Legacy completed regions" to state.completedRoadRegions.toString(),
+            "Legacy road-data request" to state.roadRequestKind,
+            "Legacy subdivision" to (state.subdivisionLevel?.let { "level $it" } ?: "not required"),
+            "Legacy current-region status" to state.currentRegionStatus,
+            "Data mode" to state.roadData.provider,
+            "Legacy map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
+            "Legacy map request" to state.mapStatus))
         val parked = state.active && (state.speedMph ?: Double.MAX_VALUE) < 5.0
         if (state.active) Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
             Column(Modifier.padding(16.dp)) {
                 Text("Local road corrections", fontWeight = FontWeight.Bold)
-                Text("Applies to this matched OSM way and travel direction. Source tags stay unchanged.", color = Muted, fontSize = 12.sp)
+                Text("Ordinary two-way corrections share both directions by default; asymmetric or explicit directional corrections remain separate. Source tags stay unchanged.", color = Muted, fontSize = 12.sp)
                 Text("Tap the main speed-limit sign to correct it.",color=Muted,fontSize=13.sp)
                 TextButton(onClick = { correction("RESET_ROAD", null) }, enabled = parked && state.road != null && state.fix?.bearing != null) { Text("Reset road") }
                 TextButton(onClick = { correction("RESET_CORRECTIONS", null) }, enabled = parked) { Text("Reset all learned limits & boundaries") }
             }
         }
+        DiagnosticCard("BUILD",listOf("Version" to identity?.let { "${it.optString("versionName")} / code ${it.optInt("versionCode")}" },"Source SHA" to identity?.optString("sourceSha"),"Physical acceptance" to "Pending owner road test"))
+        Surface(shape=RoundedCornerShape(20.dp),color=Panel) { Column(Modifier.padding(16.dp)) {
+            Text("Local diagnostic retention",fontWeight=FontWeight.Bold)
+            Text("Up to 500 recent records contain location, heading, time and road decisions. They survive restart until replaced or cleared; no fixed time expiry. They are not uploaded or included in owner exports.",color=Muted,fontSize=13.sp)
+            TextButton(enabled=!state.active && !clearing,onClick={ clearing=true;scope.launch {
+                try { withContext(Dispatchers.IO) { check(!DriveBus.state.value.active) { "Stop driving before clearing diagnostics" };RoadDb(context).use { it.clearDiagnostics() } };retentionMessage="Local diagnostics cleared. Owner data was kept." }
+                catch(error: Exception) { retentionMessage=error.message ?: "Could not clear diagnostics" }
+                finally { clearing=false }
+            } }) { Text("Clear local diagnostics") }
+            if(state.active) Text("Stop driving before clearing diagnostics",color=Muted,fontSize=13.sp)
+            if(retentionMessage.isNotBlank()) Text(retentionMessage,color=Muted,fontSize=13.sp)
+        } }
         DiagnosticCard("CAMERA", listOf(
             "Public records nearby" to state.publicCameraCount.toString(),
             "Lufop UK records" to state.importedCameraCount.toString(),

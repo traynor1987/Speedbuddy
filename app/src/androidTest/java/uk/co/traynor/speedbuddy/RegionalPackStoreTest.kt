@@ -45,6 +45,7 @@ class RegionalPackStoreTest {
         assertEquals(setOf("lancashire","merseyside"),store.installed().map { it.descriptor.id }.toSet())
         store.delete("lancashire")
         assertNull(store.active("lancashire"));assertNotNull(store.active("merseyside"))
+        assertFalse("Deleted pack databases must be reclaimed",File(context.filesDir,"regional-road-packs/lancashire").exists())
         clean()
     }
     @Test fun failedUpdatePreservesThePreviouslyActiveVerifiedPack() {
@@ -96,6 +97,7 @@ class RegionalPackStoreTest {
         val (merseyside,merseysideGzip)=pack("merseyside","1")
         store.install(old,oldGzip);store.install(merseyside,merseysideGzip);store.install(newer,newGzip)
         assertEquals("new",store.installed().single { it.descriptor.id=="lancashire" }.descriptor.version)
+        assertFalse("Obsolete version must be reclaimed",File(context.filesDir,"regional-road-packs/lancashire/old").exists())
         assertEquals("1",store.installed().single { it.descriptor.id=="merseyside" }.descriptor.version)
         clean()
     }
@@ -116,4 +118,82 @@ class RegionalPackStoreTest {
         assertEquals("way/1",result.match?.road?.id)
         clean()
     }
+    @Test fun actualDatabaseReaderClosesBeforeDeleteReclaimsBytes() {
+        clean();val store=RegionalPackStore(context);val (d,gzip)=pack("lancashire","reader")
+        val installed=store.install(d,gzip);val before=store.storedBytes()
+        val pool=java.util.concurrent.Executors.newFixedThreadPool(2)
+        val opened=java.util.concurrent.CountDownLatch(1);val close=java.util.concurrent.CountDownLatch(1)
+        try {
+            val reader=pool.submit { store.reading {
+                SQLiteDatabase.openDatabase(installed.database.absolutePath,null,SQLiteDatabase.OPEN_READONLY).use { db ->
+                    opened.countDown();assertTrue(close.await(5,java.util.concurrent.TimeUnit.SECONDS))
+                    db.rawQuery("SELECT count(*) FROM roads",null).use { assertTrue(it.moveToFirst());assertEquals(1,it.getInt(0)) }
+                }
+            } }
+            assertTrue(opened.await(5,java.util.concurrent.TimeUnit.SECONDS))
+            val deleted=pool.submit<RegionalPackStore.Deletion> { RegionalPackStore(context).delete("lancashire") }
+            assertTrue(installed.database.exists());assertFalse(deleted.isDone)
+            close.countDown();reader.get(5,java.util.concurrent.TimeUnit.SECONDS)
+            val result=deleted.get(5,java.util.concurrent.TimeUnit.SECONDS)
+            assertEquals(before,result.freedBytes);assertEquals(0L,result.retainedBytes);assertFalse(installed.database.exists())
+        } finally { close.countDown();pool.shutdownNow();clean() }
+    }
+    @Test fun deleteDuringActualDownloadRejectsLateActivationAndCleansTemporaryFiles() {
+        clean();val (d,gzip)=pack("lancashire","download-race");val store=RegionalPackStore(context)
+        store.install(d,gzip)
+        val started=java.util.concurrent.CountDownLatch(1);val finish=java.util.concurrent.CountDownLatch(1)
+        val lifecycle=RegionalPackLifecycle(context,{"test"},{ url -> object: java.net.HttpURLConnection(url) {
+            override fun connect() {};override fun disconnect() {};override fun usingProxy()=false
+            override fun getResponseCode()=200
+            override fun getInputStream(): java.io.InputStream { started.countDown();check(finish.await(5,java.util.concurrent.TimeUnit.SECONDS));return gzip.inputStream() }
+        } })
+        val pool=java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val downloaded=pool.submit<Boolean> { runCatching { lifecycle.download(d) }.isFailure }
+            assertTrue(started.await(5,java.util.concurrent.TimeUnit.SECONDS));store.delete("lancashire");finish.countDown()
+            assertTrue(downloaded.get(5,java.util.concurrent.TimeUnit.SECONDS));assertNull(store.active("lancashire"))
+            assertEquals(0L,store.storedBytes())
+        } finally { finish.countDown();pool.shutdownNow();clean() }
+    }
+    @Test fun reopeningOfflineReclaimsCrashOrphansAndKeepsHealthyActivatedPack() {
+        clean();val store=RegionalPackStore(context);val (d,gzip)=pack("lancashire","restart");store.install(d,gzip)
+        val root=File(context.filesDir,"regional-road-packs")
+        File(root,".staging-abandoned/roads.sqlite").apply { parentFile.mkdirs();writeText("partial") }
+        File(root,".download-abandoned").writeText("partial")
+        File(root,"lancashire/orphan/roads.sqlite").apply { parentFile.mkdirs();writeText("unactivated") }
+        val restored=RegionalPackStore(context)
+        assertEquals("restart",restored.installed().single().descriptor.version)
+        assertFalse(File(root,".staging-abandoned").exists());assertFalse(File(root,".download-abandoned").exists());assertFalse(File(root,"lancashire/orphan").exists())
+        clean()
+    }
+    @Test fun verifiedRedownloadRepairsACorruptSameVersion() {
+        clean();val store=RegionalPackStore(context);val (d,gzip)=pack("lancashire","repair")
+        store.install(d,gzip).database.writeText("broken")
+        RegionalPackStore(context).install(d,gzip)
+        assertEquals(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,RegionalPackMatcher(context).match(Fix(GeoPoint(53.5005,-2.8),5.0,10.0,1.0,0.0,1_000)).state)
+        clean()
+    }
+
+    @Test fun damagedPointerIdentityPreservesStoredFilesForExplicitDeletion() {
+        clean();val store=RegionalPackStore(context)
+        val (lancashire,lGzip)=pack("lancashire","damaged");val (merseyside,mGzip)=pack("merseyside","healthy")
+        val db=store.install(lancashire,lGzip).database;store.install(merseyside,mGzip)
+        val root=File(context.filesDir,"regional-road-packs")
+        File(root,"active/lancashire.json").writeText(File(root,"active/merseyside.json").readText())
+        val recovered=RegionalPackStore(context)
+        assertTrue(db.exists());assertEquals(listOf("lancashire"),recovered.inventory().issues)
+        recovered.delete("lancashire");assertFalse(db.exists());assertNotNull(recovered.active("merseyside"))
+        clean()
+    }
+
+    @Test fun unavailableStorageIsReportedWithoutCrashingOfflineDiscovery() {
+        clean();File(context.filesDir,"regional-road-packs").writeText("storage blocked")
+        val store=RegionalPackStore(context)
+        assertEquals("Regional storage unavailable",store.inventory().error)
+        assertTrue(store.snapshot().unavailable)
+        val result=RegionalPackMatcher(context).match(Fix(GeoPoint(53.5005,-2.8),5.0,10.0,1.0,0.0,1_000))
+        assertEquals(RoadProviderState.SERVICE_UNAVAILABLE,result.state);assertNull(result.coverage)
+        clean()
+    }
+
 }

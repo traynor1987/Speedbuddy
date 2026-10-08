@@ -80,14 +80,26 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
         }?.let { it.upcoming.copy(distanceM=(it.upcoming.distanceM-Geo.distance(it.fix.point,fix.point)).coerceAtLeast(0.0),uncertain=true) }
         if(detected!=null) preview=Preview(detected,decision.mph,road?.road?.id,fix,now)
         else if(upcoming==null) preview=null
-        return DriveLimitResult(fix,road,source,decision,upcoming,corrected,geometryComplete)
+        val provider=when { covered -> "Regional offline";road==null -> "None";cached!=null || safeLive?.limitMph==null -> "Legacy saved OSM";else -> "Live server with legacy geometry" }
+        val fallback=if(covered) null else when(regional?.state) {
+            RoadProviderState.SERVICE_UNAVAILABLE -> "Regional packs unavailable"
+            RoadProviderState.COVERAGE_UNAVAILABLE -> "No regional coverage at this position"
+            else -> "No regional provider participated"
+        }
+        val details=RoadDataDiagnostics(provider,
+            if(covered) regional!!.state.name else if(road!=null) (safeLive?.state?.takeIf { cached==null }?.name ?: "LEGACY_MATCHED") else "NO_LOCAL_MATCH",
+            when(regional?.coverage) { true -> "Covered";false -> "Not covered";null -> "Not established" },
+            regional?.packDetails.orEmpty().map { RegionalPackInfo(it.displayName,it.id,it.version,it.osmTimestamp) },
+            fix.elapsedMs,fallback,regional?.error ?: live?.takeIf { it.state==RoadProviderState.SERVICE_UNAVAILABLE }?.let { "Live road service unavailable" },
+            regional?.contextComplete)
+        return DriveLimitResult(fix,road,source,decision,upcoming,corrected,geometryComplete,details)
     }
 }
 internal data class DriveLimitResult(val fix: Fix,val road: RoadMatch?,val source: Int?,
-    val decision: LimitDecision,val upcoming: UpcomingLimit?,val contextualRoads: List<Road> = emptyList(),val geometryComplete: Boolean=true) {
+    val decision: LimitDecision,val upcoming: UpcomingLimit?,val contextualRoads: List<Road> = emptyList(),val geometryComplete: Boolean=true,val roadData: RoadDataDiagnostics=RoadDataDiagnostics()) {
     fun applyTo(state: DriveState): DriveState {
         if(state.fix?.let { it.elapsedMs>fix.elapsedMs }==true) return state
-        return state.copy(fix=fix,roadDecisionElapsedMs=fix.elapsedMs,pendingConfirmedLimit=false,road=road,sourceLimitMph=source,limitMph=decision.mph,
+        return state.copy(roadData=roadData,fix=fix,roadDecisionElapsedMs=fix.elapsedMs,pendingConfirmedLimit=false,road=road,sourceLimitMph=source,limitMph=decision.mph,
         limitDecision=decision,upcoming=upcoming,status=when {
             decision.mph==null -> "Road limit unknown"
             state.speedMph==null && state.active -> "GPS speed unavailable"
@@ -116,6 +128,7 @@ internal object LimitDiagnostics {
             .put("upcoming",state.upcoming?.mph ?: JSONObject.NULL)
             .put("upcomingDistance",state.upcoming?.distanceM ?: JSONObject.NULL)
             .put("upcomingRoad",state.upcoming?.roadId ?: JSONObject.NULL)
+            .put("roadData",state.roadData.json(state.road?.confidence))
             .put("roadRequest",state.roadRequestKind)
             .put("subdivisionLevel",state.subdivisionLevel ?: JSONObject.NULL)
             .put("currentRegionStatus",state.currentRegionStatus)

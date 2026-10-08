@@ -1,47 +1,48 @@
-# Full Speed Buddy physical acceptance
+# Speed Buddy 0.4.0 owner acceptance
 
-Version 0.2.3 / code 12 corrects the physically rejected 0.2.2/code 11 candidate while preserving map/camera and offline work. The incomplete 0.2.1 acceptance candidate is withdrawn. PR #2 remains open, draft and unmerged until owner physical acceptance.
+Candidate: **0.4.0 / code 20**, package `uk.co.traynor.speedbuddy`, branch `feat/regional-offline-road-data-0.4.0`, PR #7 open/draft/unmerged.
 
-## Installation and backup gate
+**Physical road acceptance: PENDING.** Automated validation does not establish posted-limit accuracy, camera coverage, battery behaviour or Android Auto device acceptance. Earlier failed road tests are not superseded by green CI.
 
-If permanently signed 0.2.1 or 0.2.2 is installed: create and verify an external JSON owner backup, then install the replacement 0.2.3 APK as an update. **No uninstall is needed.** Confirm launch and your existing cameras/settings. If you have an earlier map backup, import it while stopped to recover map owner records absent from 0.2.1.
+## Exact build identity and installation
 
-For an historical ephemeral-debug installation only: create and verify its external JSON owner backup first. Uninstall only after the permanently signed exact-head APK is actually available and the backup's contents have been verified. Install that APK, confirm launch, then import the portable backup while stopped. Never restore a raw SQLite database.
+A published acceptance build must identify its exact source commit in the release notes and `owner-build.json`. The APK embeds the same public version/source identity, visible in Diagnostics. The sidecar also records the APK hash and permanent certificate. Do not confuse the latest source branch with an older installed APK. Correction cycles 2 and 3 publish source and CI reports only: no new owner APK is produced.
 
-The agent cannot observe owner backup creation or phone installation. No uninstall, restore success or physical test is assumed.
+The permanent signing certificate remains pinned in `docs/owner-signing-certificate.json`:
+`ddcf05c06ca3442774ea24273ea9a31c213bbc78520032cfa2994c2118d2f947`.
 
-| Backup version | Preserved owner data in the complete build |
-| --- | --- |
-| 1 | Personal cameras and settings present in that format |
-| 2–8 map lineage | Supported settings, personal cameras, camera corrections, suppressed IDs, numeric/typed road corrections, aliases and junction/bidirectional/member fields present in that format restore actively |
-| 9–10 offline lineage | Personal cameras/settings, directed road selections/evidence and learned boundaries; supported map records from retained v1–8 originals are reactivated |
-| 12 | All v11 fields plus durable boundary observations and local via-road boundary scope |
-| 13 | All v12 fields plus explicit sharing policy on new ordinary two-way local corrections; old directed records retain their semantics |
-| 11 combined | All above active fields and complete retained originals; retained archives are receipts and cannot resurrect deleted active records |
+For an existing permanent installation, verify an external owner backup, then update in place with the same signer. **Do not uninstall a working permanent installation.** This milestone retains code 20; an intended replacement acceptance APK with the same code may be installed manually when available. The stable-only in-app update centre does not select development prereleases or same-version candidates.
 
-Export creates portable UTF-8 JSON, filters permanent personal cameras, includes full supported settings and both correction stores, writes through Android's file picker and reads the file back before reporting success. Import validates before writes and retains/verifies the complete original first. Temporary mobile reports are deliberately excluded from owner exports; downloaded OSM/Lufop data can be recreated. Keep the original Lufop ZIP if reimport is needed.
+For an historical ephemeral debug installation, create and verify its external JSON backup before considering a clean install. Uninstall only after the intended permanently signed, exact-source APK is available and the backup has been checked. The agent cannot verify your backup or installation remotely. Never copy a raw SQLite database into the app.
 
-## Permanent signing
+## Backup and restore
 
-The permanent signer is already configured in GitHub Actions. Its public SHA-256 fingerprint is:
+Current **owner backup version 13** preserves personal cameras, camera corrections/suppression/aliases, junction membership, supported settings, map road corrections, directed and shared road selections, learned boundaries and observations. Historical versions 1–12 retain the fields supported by their format. Complete original restore files are retained as receipts; old receipts do not resurrect removed active records.
 
-`ddcf05c06ca3442774ea24273ea9a31c213bbc78520032cfa2994c2118d2f947`
+Export through Android's document picker to storage outside the app, open/check the JSON, and retain it before an installation change. Restore while stopped and verify important cameras, corrections and settings afterward. Android automatic backup is disabled.
 
-The new build uses the same signer as permanent 0.2.1. Future builds must monotonically increase versionCode and retain this identity. No signing setup is required from the owner; private material must remain outside source and release assets.
+Regional pack databases, public OSM/Lufop caches, temporary mobile reports, recent diagnostics and the regional access token are excluded from owner exports. Keep access credentials separately and keep your Lufop ZIP if needed. After a clean install, configure regional access and re-download the required packs while online; a JSON owner restore alone does not restore offline road coverage.
 
-## Owner procedure
+## Regional offline operation
 
-Do interactions while stopped or have a passenger operate the phone.
+Offline Road Data supports Lancashire and Merseyside schema-v1 packs. Downloads require configured access and connectivity. Size/hash, bounded decompression, database integrity/schema checks precede atomic activation. A failed update retains the previous healthy pack. Installed packs remain listed and usable after catalogue/authentication failure, access removal and offline restart.
 
-1. Create OLD-app backup; open/check the JSON and confirm it exists outside app storage before any uninstall.
-2. Update permanent 0.2.1/0.2.2 in place. Only for an historical debug installation, perform the backup-gated clean install described above.
-3. Confirm launch, Map, Settings, Updates, camera tools and diagnostics are present. Import a compatible historical backup if required; confirm important settings, cameras, corrections, suppression and junctions.
-4. Start Driving online; observe progressive road-data coverage and known current limits. Test no connection, app restart and saved road-data availability.
-5. Where practical, test known 30 → confidently matched unknown road. Observe `30 !` with “Assumed • not confirmed”; it must expire/drop with time, distance or uncertain matching.
-6. Tap the main sign: eight large UK choices appear without a keyboard. Correct the matched road, revisit/restart, and confirm persistence. Map editing and map-data reset tools remain available while parked.
-7. For a transition predicted early, tap the sign and select 60 while still in 60; select the new limit at the real signs. Revisit and observe old CURRENT/new UPCOMING until the saved boundary. Check reverse direction where practical; reset is available in map-data tools.
-8. Observe any brief 60 → 40 → 30 sequence: unstable matching should remain candidate/upcoming rather than rapidly authoritative. Genuine normal and short zones must still confirm, including 30 → 20; the earlier lower-limit crash must not recur.
-9. Confirm fixed/red/combined camera warnings, direction and audio, music handling and imported/personal cameras. Check mobile reports/junctions/average sections where available.
-10. Confirm background/resume, rotation and Stop/Start Driving. Report results and any incorrect limit/camera behaviour before PR acceptance.
+Delete waits for active database readers to close, deactivates the selected region and removes its stored versions. It cancels activation from an already-running download. Successful updates reclaim obsolete versions. Orphan temporary files are cleaned on recovery; an interrupted download restarts from the beginning, with no resume or delta support. Storage figures count stored regional files, not owner databases or map tiles.
 
-The 0.2.2 physical test failed. Retest the corrections using [PHYSICAL_RETEST.md](PHYSICAL_RETEST.md). Keep PR #2 draft/unmerged until the owner reports acceptance.
+Regional coverage is authoritative even for Unknown or uncertain matches. Outside usable regional coverage, saved legacy geometry and permitted live/legacy requests may participate. A server number without trustworthy local road geometry cannot establish identity. Conditional/variable/lane-specific or invalid limits remain Unknown; highway class alone does not invent a legal limit. Ordinary two-way UK corrections apply both directions by default, except asymmetric limits, explicit directional corrections, separate carriageways and uncertain identity.
+
+Diagnostics identifies provider/state, pack name/version/OSM age, actual road/confidence, regional coverage, source/owner/assumed state, fallback reason and errors. Legacy tile counters are labelled separately. Dataset age is the published OSM timestamp, not a freshness guarantee.
+
+Production pack endpoints required authentication during engineering checks, so actual production contents/coverage were not independently verified. Synthetic schema-v1 fixtures exercise matching and failures. Road signs remain authoritative. Basemap and parked map road details still use their separate online/legacy path; regional packs do not promise a fully offline map.
+
+## Local diagnostic privacy
+
+Up to **500** recent diagnostic payloads are retained locally. They may contain coordinates, heading, GPS accuracy, timestamps, matched road IDs/confidence, decisions and correction/boundary evidence. Retention is by count, not elapsed time; records survive restart and may remain indefinitely when no new records arrive. This is a bounded record of recent positions, even though there is no navigation journey logger or analytics upload.
+
+Use **Clear local diagnostics** in Diagnostics after stopping driving. It removes diagnostic rows and performs database maintenance without deleting owner cameras, corrections, learned boundaries or backups. Late diagnostic payloads captured before the clear boundary are rejected. New driving decisions can create new records. Diagnostics are not included in owner exports and no diagnostic export/upload feature is provided. Clearing is not a promise of forensic erasure from filesystem snapshots or external device backups.
+
+## Physical retest and rollback
+
+When the intended acceptance APK is explicitly produced, safely test offline restart, pack updates/deletion, known/unknown/uncertain provider transitions, both-direction corrections, actual speed-change signs, junctions/parallel roads, dense urban candidates, cameras, GPS/network loss and background/resume. Compare actual posted signs and inspect diagnostics after stopping. Do not operate controls while moving. Keep PR #7 draft/unmerged until owner acceptance.
+
+Before any rollback, export and verify the current version-13 backup. An older app may reject newer backups or database schemas; Android can also refuse a lower version code. Prefer restoring a verified compatible build in place when supported. A downgrade that requires uninstalling must be treated as a data-loss operation and requires an external verified backup plus a compatible restore plan. Preserve the current backup and APK; do not delete owner data to make a downgrade install.

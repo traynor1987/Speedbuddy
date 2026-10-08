@@ -37,6 +37,7 @@ data class DriveState(
     val roadRequestKind: String = "No request",val subdivisionLevel: Int? = null,val currentRegionStatus: String = "Idle",val completedRoadRegions: Int = 0,
     /** Passive context only: a known zone is never treated as an active mobile camera report. */
     val mobileEnforcementZones: List<MobileEnforcementZone> = emptyList(),
+    val roadData: RoadDataDiagnostics=RoadDataDiagnostics(),
 )
 object DriveBus {
     private val mutable = MutableStateFlow(DriveState())

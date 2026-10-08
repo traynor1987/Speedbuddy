@@ -146,7 +146,8 @@ jobs:
           test "$conclusion" = success
           test "$(gh api "repos/$GH_REPO/git/ref/heads/feat/regional-offline-road-data-0.4.0" --jq .object.sha)" = "$SPEED_BUDDY_SOURCE_SHA"
           tag="v0.4.0-regional-offline-${SPEED_BUDDY_SOURCE_SHA:0:12}"
+          python3 scripts/render_acceptance_notes.py --source-sha "$SPEED_BUDDY_SOURCE_SHA" --output "$RUNNER_TEMP/speedbuddy-acceptance-notes.md"
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --target "$SPEED_BUDDY_SOURCE_SHA" --prerelease --title 'Speed Buddy 0.4.0 — Regional offline road data' --notes-file docs/OWNER_ACCEPTANCE.md
+            gh release create "$tag" --target "$SPEED_BUDDY_SOURCE_SHA" --prerelease --title 'Speed Buddy 0.4.0 — Regional offline road data' --notes-file "$RUNNER_TEMP/speedbuddy-acceptance-notes.md"
           fi
           gh release upload "$tag" acceptance/SpeedBuddy-0.4.0-owner-acceptance.apk acceptance/owner-build.json --clobber

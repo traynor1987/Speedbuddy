@@ -10,7 +10,12 @@ import kotlin.math.cos
 
 /** Public tile storage is independent of owner cameras, settings and local corrections. */
 class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,5) {
-    override fun onConfigure(db: SQLiteDatabase) { db.execSQL("PRAGMA auto_vacuum=INCREMENTAL") }
+    private val diagnosticPreferences=context.getSharedPreferences("diagnostic-retention",Context.MODE_PRIVATE)
+    private val diagnosticKey=context.getDatabasePath(name).absolutePath
+    override fun onConfigure(db: SQLiteDatabase) {
+        db.execSQL("PRAGMA auto_vacuum=INCREMENTAL")
+        db.rawQuery("PRAGMA secure_delete=ON",null).use { it.moveToFirst() }
+    }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE tiles(id TEXT PRIMARY KEY,fetched INTEGER NOT NULL,bytes INTEGER NOT NULL,complete INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE tile_subdivisions(id TEXT PRIMARY KEY)")
@@ -145,7 +150,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
             if((count>maxTiles || bytes>maxBytes) && region !in protected && parent !in protected) { deleteTile(db,id);count--;bytes-=size }
         };db.setTransactionSuccessful() }
         finally { db.endTransaction() }
-        db.rawQuery("PRAGMA incremental_vacuum(2048)",null).use { }
+        maintainStorage()
     }
     data class Override(val road: String,val bearing: Double,val mph: Int,val sourceMph: Int? = null,
         val point: GeoPoint? = null,val recordedAt: Long = 0,val accuracy: Double? = null,
@@ -212,7 +217,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         })
     }
     /** Persist evidence and classification together before activating any live selection. */
-    fun saveSelection(plan: LimitSelectionPlan,diagnostic: String) {
+    fun saveSelection(plan: LimitSelectionPlan,diagnostic: String)=synchronized(diagnosticLock) {
         val db=writableDatabase;db.beginTransaction()
         try {
             plan.override?.let(::saveOverride);plan.observation?.let(::saveObservation)
@@ -233,14 +238,35 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
-    fun recordDiagnostic(payload: String) {
-        require(payload.length<=32_000);JSONObject(payload)
+    /** Count-bounded recent locations, not a time-bounded or exported journey log. */
+    fun recordDiagnostic(payload: String)=synchronized(diagnosticLock) {
+        require(payload.length<=32_000);val json=JSONObject(payload)
+        val cutoff=diagnosticPreferences.getLong(diagnosticKey,0)
+        if(json.has("at") && json.optLong("at",0)<=cutoff) return@synchronized
         val db=writableDatabase
-        db.insertOrThrow("limit_diagnostics",null,ContentValues().apply { put("payload",payload) })
-        db.execSQL("DELETE FROM limit_diagnostics WHERE id NOT IN (SELECT id FROM limit_diagnostics ORDER BY id DESC LIMIT 500)")
+        db.beginTransaction()
+        try {
+            db.insertOrThrow("limit_diagnostics",null,ContentValues().apply { put("payload",payload) })
+            db.execSQL("DELETE FROM limit_diagnostics WHERE id NOT IN (SELECT id FROM limit_diagnostics ORDER BY id DESC LIMIT 500)")
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
     fun diagnostics(): List<String> = readableDatabase.rawQuery("SELECT payload FROM limit_diagnostics ORDER BY id DESC",null).use { c ->
         buildList { while(c.moveToNext()) add(c.getString(0)) }
+    }
+    fun clearDiagnostics()=synchronized(diagnosticLock) {
+        check(diagnosticPreferences.edit().putLong(diagnosticKey,System.currentTimeMillis()).commit()) { "Could not save diagnostic clear boundary" }
+        writableDatabase.delete("limit_diagnostics",null,null)
+        maintainStorage()
+    }
+    /** Old databases need VACUUM once to enable incremental mode; never run inside a transaction. */
+    fun maintainStorage() {
+        val db=writableDatabase
+        check(!db.inTransaction()) { "Storage maintenance requires a closed transaction" }
+        val mode=db.rawQuery("PRAGMA auto_vacuum",null).use { it.moveToFirst();it.getInt(0) }
+        if(mode!=2) { db.execSQL("PRAGMA auto_vacuum=INCREMENTAL");db.execSQL("VACUUM") }
+        val free=db.rawQuery("PRAGMA freelist_count",null).use { it.moveToFirst();it.getInt(0) }
+        if(free>0) db.rawQuery("PRAGMA incremental_vacuum(2048)",null).use { c -> while(c.moveToNext()) { /* stepping executes maintenance */ } }
     }
     fun deleteOwnerCorrections(road: String) {
         val db=writableDatabase;db.beginTransaction()
@@ -272,6 +298,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         } finally { db.endTransaction() }
     }
     companion object {
+        private val diagnosticLock=Any()
         fun selectOverride(overrides: List<Override>,road: String,bearing: Double?): Int? {
             val matching=overrides.filter { RoadIdentity.same(it.road,road) &&
                 (it.sharedAcrossDirections || bearing?.let { b -> Geo.difference(it.bearing,b)<45 }==true) }
