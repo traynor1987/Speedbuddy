@@ -41,6 +41,19 @@ class LimitPresentationTest {
         assertFalse(d.resolve(f.copy(elapsedMs=1600),match(old),known(30),listOf(old),true).assumed)
         assertNull(d.resolve(f.copy(elapsedMs=5000),null,LimitDecision(null,reason="Expired"),listOf(old),true).mph)
     }
+    @Test fun boundaryCandidatePreservesEngineEvidenceWithoutDisplayingPreviousRoadNumber() {
+        val pipeline=DrivingLimitPipeline()
+        val approach=old.copy(points=listOf(p,Geo.ahead(p,0.0,200.0)),tags=mapOf("maxspeed" to "60 mph"))
+        val exit=outgoing(0.0).copy(points=listOf(Geo.ahead(p,0.0,200.0),Geo.ahead(p,0.0,1500.0)),tags=mapOf("maxspeed" to "40 mph"))
+        fun evaluate(m: Double,t: Long,roads: List<Road>)=pipeline.evaluate(fix(Geo.ahead(p,0.0,m),t),roads,emptyList(),emptyMap(),emptyList(),emptyList(),t,10_000+t)
+        assertEquals(60,evaluate(180.0,1000,listOf(approach,exit)).presentation.mph)
+        assertEquals(60,evaluate(190.0,2000,emptyList()).presentation.mph)
+        val candidate=evaluate(225.0,3000,listOf(approach,exit))
+        assertEquals(60,candidate.decision.mph);assertEquals(40,candidate.decision.upcoming!!.mph)
+        assertNull(candidate.presentation.mph);assertTrue(candidate.presentation.changing)
+        evaluate(240.0,4000,listOf(approach,exit))
+        assertEquals(40,evaluate(260.0,5000,listOf(approach,exit)).presentation.mph)
+    }
     @Test fun connectedLeftRightAndStraightTransitionsExpireWithoutRestarting() {
         for(b in listOf(270.0,90.0,0.0)) {
             val d=LimitPresentation();val next=outgoing(b);val roads=listOf(old,next)

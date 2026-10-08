@@ -111,7 +111,8 @@ class RegionalInventoryUiTest {
         try {
             compose.setContent { key(generation.intValue) { MaterialTheme { OfflineRoadDataScreen(context,if(generation.intValue==0) original else recreated,{}) } } }
             awaitText("Installed 20261006-1");compose.runOnIdle { generation.intValue=1 }
-            assertTrue(entered.await(10,TimeUnit.SECONDS));awaitText("Lancashire")
+            // The replacement effect starts after recomposition. Pump frames while awaiting the real scan.
+            compose.waitUntil(10_000) { entered.count==0L };awaitText("Lancashire")
             assertUnresolved();compose.onNodeWithText("Download").performScrollTo().assertIsNotEnabled()
             finish.countDown();awaitText("Installed 20261006-1")
             assertEquals("20261006-1",RegionalPackStore(context).inventory().installed.single().descriptor.version)

@@ -4,6 +4,7 @@ import android.content.res.Configuration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -16,10 +17,19 @@ class DrivingUiTest {
     @Test fun unknownUsesQuestionSignAndChangingHasNoUnverifiedNumber() {
         var state by mutableStateOf(DriveState())
         compose.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{}) } }
-        compose.onNodeWithText("?").assertIsDisplayed()
-        compose.onNodeWithText("Limit unknown").assertIsDisplayed()
+        // The correction target intentionally clears child semantics. Check its
+        // rendered sign, rather than querying a glyph hidden from accessibility.
+        val pixels=compose.onNodeWithTag("current-road-limit").performScrollTo().assertIsDisplayed().captureToImage().toPixelMap()
+        val ring=pixels[(pixels.width*.04).toInt(),pixels.height/2]
+        val face=pixels[(pixels.width*.20).toInt(),pixels.height/2]
+        assertTrue(ring.red>.7f && ring.green<.3f && ring.blue<.3f)
+        assertTrue(face.red>.95f && face.green>.95f && face.blue>.95f)
+        assertTrue((pixels.width/3 until pixels.width*2/3).any { x ->
+            (pixels.height/4 until pixels.height*3/4).any { y -> pixels[x,y].let { it.red<.15f && it.green<.15f && it.blue<.15f } }
+        })
+        compose.onNodeWithText("Limit unknown").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { state=state.copy(limitDecision=LimitDecision(null,reason="Resolving junction",changing=true)) }
-        compose.onNodeWithText("Limit changing…").assertIsDisplayed()
+        compose.onNodeWithText("Limit changing…").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("?").assertDoesNotExist()
         compose.onNodeWithText("Limit unknown").assertDoesNotExist()
     }
