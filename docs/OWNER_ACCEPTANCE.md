@@ -6,7 +6,7 @@ Candidate: **0.4.0 / code 20**, package `uk.co.traynor.speedbuddy`, branch `feat
 
 ## Exact build identity and installation
 
-A published acceptance build must identify its exact source commit in the release notes and `owner-build.json`. The APK embeds the same public version/source identity, visible in Diagnostics. The sidecar also records the APK hash and permanent certificate. Do not confuse the latest source branch with an older installed APK. Correction cycles 2 and 3 publish source and CI reports only: no new owner APK is produced.
+A published acceptance build must identify its exact source commit in the release notes and `owner-build.json`. The APK embeds the same public version/source identity, visible in Diagnostics. The sidecar also records the APK hash and permanent certificate. Do not confuse the latest source branch with an older installed APK. Correction cycles 2 and 3 published source and CI reports only. Cycle 4 produces an exact-source, permanently signed prerelease acceptance candidate after push and PR validation. Physical acceptance remains pending.
 
 The permanent signing certificate remains pinned in `docs/owner-signing-certificate.json`:
 `ddcf05c06ca3442774ea24273ea9a31c213bbc78520032cfa2994c2118d2f947`.
@@ -33,7 +33,7 @@ Regional coverage is authoritative even for Unknown or uncertain matches. Outsid
 
 Diagnostics identifies provider/state, pack name/version/OSM age, actual road/confidence, regional coverage, source/owner/assumed state, fallback reason and errors. Legacy tile counters are labelled separately. Dataset age is the published OSM timestamp, not a freshness guarantee.
 
-Production pack endpoints required authentication during engineering checks, so actual production contents/coverage were not independently verified. Synthetic schema-v1 fixtures exercise matching and failures. Road signs remain authoritative. Basemap and parked map road details still use their separate online/legacy path; regional packs do not promise a fully offline map.
+Cycle 4 rechecked the production catalogue and Merseyside/Lancashire manifest endpoints: all returned HTTP 401 without credentials. Production pack endpoints required authentication during engineering checks, so actual production contents/coverage were not independently verified. Synthetic schema-v1 fixtures exercise matching and failures. Road signs remain authoritative. Basemap and parked map road details still use their separate online/legacy path; regional packs do not promise a fully offline map.
 
 ## Local diagnostic privacy
 
@@ -46,3 +46,21 @@ Use **Clear local diagnostics** in Diagnostics after stopping driving. It remove
 When the intended acceptance APK is explicitly produced, safely test offline restart, pack updates/deletion, known/unknown/uncertain provider transitions, both-direction corrections, actual speed-change signs, junctions/parallel roads, dense urban candidates, cameras, GPS/network loss and background/resume. Compare actual posted signs and inspect diagnostics after stopping. Do not operate controls while moving. Keep PR #7 draft/unmerged until owner acceptance.
 
 Before any rollback, export and verify the current version-13 backup. An older app may reject newer backups or database schemas; Android can also refuse a lower version code. Prefer restoring a verified compatible build in place when supported. A downgrade that requires uninstalling must be treated as a data-loss operation and requires an external verified backup plus a compatible restore plan. Preserve the current backup and APK; do not delete owner data to make a downgrade install.
+
+
+## Final phone candidate and device checks
+
+Android Auto host discovery is deliberately unavailable in this candidate. The passive prototype previously advertised NAVIGATION without providing routes or turn guidance; its discovery, permission and service registration are removed. Retained presentation code owns no GPS/audio and rejects untrusted hosts. No real vehicle or DHU validation was available; Google Maps coexistence and car audio routing are physical checks, not accepted claims. See [Android Auto status](ANDROID_AUTO_EXPERIMENT.md).
+
+Driving remains explicitly started by the owner: foreground service while driving, no silent GPS restart after process death or force stop. A fresh start discovers installed packs and durable owner evidence; transient road/camera/audio state is recomputed from fresh GPS. After interruption, reopen the app and start driving while safely stopped.
+
+Physical checklist (use a passenger or inspect records after stopping):
+
+- Verify Diagnostics version/code, exact source and signer against the release sidecar; export/check an external owner backup before updating.
+- Install Merseyside and Lancashire online; restart without network and verify local pack visibility, regional provenance and known/unknown limits within actual coverage.
+- Compare posted signs in both travel directions, ordinary shared owner corrections, directional exceptions, speed changes, junction turns and nearby parallel carriageways. Unknown/uncertain roads must remain visibly unconfirmed.
+- Exercise fixed, red-light, combined and average cameras where safely available; confirm approach/close/speeding warnings, sustained warning display and saved camera/correction persistence.
+- Test GPS/network loss, tunnels, stationary road identification, provider boundaries, phone locking/background/resume and process restart; verify stale results do not replace newer positions.
+- Test speech startup/failure, voice settings, music ducking/resumption, calls/audio-focus interruptions and coexistence with Google Maps guidance. Confirm no stale or duplicate warnings.
+- While stopped, check portrait/landscape, large text, fold/unfold, map/editor and correction-picker recreation, backup/restore and pack update/delete recovery.
+- Retain the current APK, sidecar and backups; record discrepancies before any stable-release decision. PR #7 remains draft and unmerged.

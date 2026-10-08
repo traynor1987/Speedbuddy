@@ -406,8 +406,13 @@ class MainActivity : ComponentActivity() {
     onAdd: () -> Unit, onQuick: (CameraType) -> Unit, onUnknownLimit: () -> Unit,
     onReportMobile: () -> Unit = {}, onMobileFeedback: (String,Boolean) -> Unit = { _,_-> },
     onFeedback: (String,Int?,String?) -> Unit = { _,_,_-> }) {
-    var pickerFor by remember { mutableStateOf<DriveState?>(null) }
-    pickerFor?.let { LimitCorrectionPicker(it,{pickerFor=null},onFeedback) }
+    var pickerRoadId by rememberSaveable { mutableStateOf<String?>(null) }
+    val pickerFor=state.takeIf { pickerRoadId!=null && it.road?.road?.id==pickerRoadId &&
+        it.active && it.roadDecisionElapsedMs==it.fix?.elapsedMs }
+    pickerFor?.let { LimitCorrectionPicker(it,{pickerRoadId=null},onFeedback) }
+    LaunchedEffect(state.road?.road?.id,state.active) {
+        if(!state.active || pickerRoadId!=state.road?.road?.id) pickerRoadId=null
+    }
     val speed = state.speedMph
     val moving = state.active && (speed == null || speed >= 5.0)
     val fix = state.fix
@@ -424,7 +429,7 @@ class MainActivity : ComponentActivity() {
         state.sourceLimitMph == state.limitMph && state.limitDecision?.ownerApplied != true && state.limitDecision?.boundaryApplied != true && (
         tags?.get("maxspeed:type")?.startsWith("GB:nsl") == true ||
         tags?.get("maxspeed")?.startsWith("GB:nsl") == true || tags?.get("maxspeed") == "GB:motorway")
-    val compact=LocalConfiguration.current.screenHeightDp<800
+    val compact=LocalConfiguration.current.let { it.screenHeightDp<800 || it.fontScale>1.15f }
     val correctionAvailable = state.road != null && state.roadDecisionElapsedMs==state.fix?.elapsedMs
     Column(Modifier.fillMaxSize().then(if(compact) Modifier.verticalScroll(rememberScrollState()) else Modifier)
         .padding(horizontal = 22.dp, vertical = if(compact) 6.dp else 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -453,7 +458,7 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.fillMaxWidth().height(mainSize), contentAlignment = Alignment.Center) {
                     Box(Modifier.size(mainSize).testTag("current-road-limit")
                         .semantics { contentDescription="Correct road speed limit" }
-                        .clickable(enabled=state.active && correctionAvailable) { pickerFor=state }) {
+                        .clickable(enabled=state.active && correctionAvailable) { pickerRoadId=state.road?.road?.id }) {
                         LimitSign(state.limitMph, national, Modifier.fillMaxSize().clearAndSetSemantics {})
                         if(state.limitDecision?.assumed==true) AssumedLimitBadge(
                             Modifier.align(Alignment.TopEnd).offset(x=14.dp))
@@ -466,7 +471,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 if (state.limitMph == null) Surface(
-                    onClick = { if(state.active && correctionAvailable) pickerFor=state else onUnknownLimit() },
+                    onClick = { if(state.active && correctionAvailable) pickerRoadId=state.road?.road?.id else onUnknownLimit() },
                     modifier = Modifier.align(Alignment.BottomCenter).size(48.dp)
                         .semantics { contentDescription = "Set this road's speed limit" },
                     shape = CircleShape, color = Accent, contentColor = Background,

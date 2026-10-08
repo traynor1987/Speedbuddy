@@ -13,6 +13,22 @@ import org.junit.runner.RunWith
 class CameraDbTest {
     @Before fun createIsolatedTestDatabase() { InstrumentationRegistry.getInstrumentation().targetContext.deleteDatabase("speedbuddy-tests.db") }
     @After fun removeIsolatedTestDatabase() { InstrumentationRegistry.getInstrumentation().targetContext.deleteDatabase("speedbuddy-tests.db") }
+    @Test fun editDuringDrivingSnapshotReadCannotPublishOldOwnerCamera() = kotlinx.coroutines.runBlocking {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        CameraDb(context,"speedbuddy-tests.db").use { db ->
+            val owner=db.create(GeoPoint(53.0,-2.0),CameraType.SPEED,mph=30)
+            val stale=readCurrentOwnerSnapshot({OwnerDataRevision.cameras}) {
+                val old=db.effectiveInBounds(52.0,-3.0,54.0,-1.0,emptyList())
+                db.delete(owner.id)
+                old
+            }
+            assertNull(stale)
+            val fresh=readCurrentOwnerSnapshot({OwnerDataRevision.cameras}) {
+                db.effectiveInBounds(52.0,-3.0,54.0,-1.0,emptyList())
+            }
+            assertTrue(fresh!!.second.isEmpty())
+        }
+    }
     @Test fun offline021SchemaTwoReopensAsFullSchemaTenWithoutLosingOwnerOrImportedData() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val databaseFile = context.getDatabasePath("speedbuddy-tests.db")

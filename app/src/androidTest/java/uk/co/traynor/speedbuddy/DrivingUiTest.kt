@@ -125,6 +125,53 @@ class DrivingUiTest {
         }
         compose.onNode(hasText("Start driving mode") and hasClickAction()).performScrollTo().assertIsDisplayed()
     }
+    @Test fun correctionPickerRetainsCurrentRoadAfterRecreation() {
+        val restoration=StateRestorationTester(compose)
+        val p=GeoPoint(53.5,-2.8)
+        val road=Road("way/restore",null,listOf(p,Geo.ahead(p,0.0,400.0)),emptyMap())
+        var selected: String?=null
+        restoration.setContent { MaterialTheme { DriveScreen(DriveState(active=true,road=RoadMatch(road,0.0,0.0,.95),fix=Fix(p,5.0,0.0,null,null,1000),roadDecisionElapsedMs=1000),{},{},{},{},{},{},{},{},
+            onFeedback={_,_,id->selected=id}) } }
+        compose.onNodeWithContentDescription("Set this road's speed limit").performClick()
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Choose the real limit").assertIsDisplayed()
+        compose.onNodeWithContentDescription("40 mph").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals("way/restore",selected) }
+    }
+    @Test fun restoredPickerCannotCorrectAChangedRoad() {
+        val restoration=StateRestorationTester(compose)
+        val p=GeoPoint(53.5,-2.8)
+        val road=Road("way/first",null,listOf(p,Geo.ahead(p,0.0,400.0)),emptyMap())
+        var state by mutableStateOf(DriveState(active=true,road=RoadMatch(road,0.0,0.0,.95),fix=Fix(p,5.0,0.0,null,null,1000),roadDecisionElapsedMs=1000))
+        restoration.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{}) } }
+        compose.onNodeWithContentDescription("Set this road's speed limit").performClick()
+        compose.runOnIdle { state=state.copy(road=state.road!!.copy(road=road.copy(id="way/second"))) }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Choose the real limit").assertDoesNotExist()
+    }
+    @Test fun restoredPickerWaitsForNewGpsFrameToBeMatched() {
+        val restoration=StateRestorationTester(compose)
+        val p=GeoPoint(53.5,-2.8)
+        val road=Road("way/pending-restored",null,listOf(p,Geo.ahead(p,0.0,400.0)),emptyMap())
+        var state by mutableStateOf(DriveState(active=true,road=RoadMatch(road,0.0,0.0,.95),
+            fix=Fix(p,5.0,0.0,null,null,1000),roadDecisionElapsedMs=1000))
+        restoration.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{}) } }
+        compose.onNodeWithContentDescription("Set this road's speed limit").performClick()
+        compose.runOnIdle { state=state.copy(fix=state.fix!!.copy(elapsedMs=2000)) }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("Choose the real limit").assertDoesNotExist()
+    }
+    @Test fun tallLargeTextLayoutCanReachDrivingControls() {
+        compose.setContent {
+            val config=Configuration(LocalConfiguration.current).apply { screenHeightDp=900;screenWidthDp=600;fontScale=2f }
+            val density=androidx.compose.ui.platform.LocalDensity.current
+            CompositionLocalProvider(LocalConfiguration provides config,
+                androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density,2f)) {
+                MaterialTheme { DriveScreen(DriveState(),{},{},{},{},{},{},{},{}) }
+            }
+        }
+        compose.onNode(hasText("Start driving mode") and hasClickAction()).performScrollTo().assertIsDisplayed()
+    }
     @Test fun cameraEditorRetainsOwnerInputAfterRecreation() {
         val restoration=StateRestorationTester(compose)
         restoration.setContent { MaterialTheme { CameraEditor(null,GeoPoint(53.0,-2.0),false,{}) { _,_,_,_,_,_-> } } }

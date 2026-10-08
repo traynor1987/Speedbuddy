@@ -68,10 +68,7 @@ class CameraVoice(context: Context, private val fallbackBeep: () -> Unit) {
                                     main.post { finishUtterance(utteranceId) }
                                 }
                                 override fun onError(utteranceId: String?) {
-                                    main.post {
-                                        val alreadyBeeped = activeHadBeep
-                                        if (finishUtterance(utteranceId) && !closed && !alreadyBeeped) fallbackBeep()
-                                    }
+                                    main.post { failUtterance(utteranceId) }
                                 }
                                 override fun onStop(utteranceId: String?, interrupted: Boolean) {
                                     main.post { finishUtterance(utteranceId) }
@@ -167,6 +164,11 @@ class CameraVoice(context: Context, private val fallbackBeep: () -> Unit) {
             engine?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
         }.onFailure { Log.w("SpeedBuddy", "Camera speech unavailable", it) }.getOrNull()
         if (result != TextToSpeech.SUCCESS) { finishUtterance(id); if (!alreadyBeeped) fallbackBeep() }
+    }
+
+    private fun failUtterance(id: String?) {
+        val allowed=!closed && !activeHadBeep && activeRelevant() && activeVoiceAllowed()
+        if(finishUtterance(id) && allowed) fallbackBeep()
     }
 
     private fun finishUtterance(id: String?): Boolean {

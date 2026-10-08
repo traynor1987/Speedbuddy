@@ -1,4 +1,4 @@
-"""Fail closed if the Android Auto launcher-discovery contract is removed."""
+"""Guard the phone candidate against unsupported car discovery and host bypasses."""
 from pathlib import Path
 import struct
 import zlib
@@ -8,15 +8,16 @@ ROOT=Path(__file__).resolve().parents[2]
 MANIFEST=ROOT/"app/src/main/AndroidManifest.xml"; DESCRIPTOR=ROOT/"app/src/main/res/xml/automotive_app_desc.xml"
 SERVICE=ROOT/"app/src/main/java/uk/co/traynor/speedbuddy/SpeedBuddyCarAppService.kt"
 class AndroidAutoDiscoveryTest(unittest.TestCase):
-    def test_template_descriptor_and_service_are_declared(self):
+    def test_phone_candidate_does_not_impersonate_navigation_or_expose_experiment(self):
         manifest=ET.parse(MANIFEST).getroot(); android="{http://schemas.android.com/apk/res/android}"; application=manifest.find("application")
-        descriptor=next((x for x in application.findall("meta-data") if x.get(android+"name")=="com.google.android.gms.car.application"),None)
-        self.assertIsNotNone(descriptor); self.assertEqual("@xml/automotive_app_desc",descriptor.get(android+"resource"))
-        service=next((x for x in application.findall("service") if x.get(android+"name")==".SpeedBuddyCarAppService"),None)
-        self.assertIsNotNone(service); self.assertEqual("true",service.get(android+"exported"))
-        f=service.find("intent-filter"); self.assertEqual("androidx.car.app.CarAppService",f.find("action").get(android+"name")); self.assertEqual("androidx.car.app.category.NAVIGATION",f.find("category").get(android+"name"))
-    def test_descriptor_declares_car_app_library_templates(self):
-        descriptor=ET.parse(DESCRIPTOR).getroot(); self.assertEqual(["template"],[x.get("name") for x in descriptor.findall("uses")])
+        self.assertFalse(any(x.get(android+"name")=="com.google.android.gms.car.application" for x in application.findall("meta-data")))
+        self.assertFalse(any(x.get(android+"name")==".SpeedBuddyCarAppService" for x in application.findall("service")))
+        self.assertFalse(any("NAVIGATION" in x.get(android+"name", "") for x in manifest.findall("uses-permission")))
+        self.assertIsNotNone(next(x for x in application.findall("service") if x.get(android+"name")==".DrivingService"))
+    def test_retained_experiment_rejects_untrusted_hosts(self):
+        source=SERVICE.read_text()
+        self.assertNotIn("ALLOW_ALL_HOSTS_VALIDATOR",source)
+        self.assertIn("HostValidator.Builder(this).build()",source)
     def test_limit_sign_assets_have_transparent_corners(self):
         assets=ROOT/"app/src/main/res/drawable-nodpi"
         for name in ("20","30","40","50","60","70","unknown"):

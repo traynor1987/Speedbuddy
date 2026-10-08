@@ -9,6 +9,7 @@ internal class DrivingFixQueue {
         latestElapsedMs?.let { fix.elapsedMs>it } != false
     fun offer(fix: Fix, speed: Double?) { latestElapsedMs=fix.elapsedMs;pending=Frame(fix,speed) }
     fun retry(frame: Frame) { if(frame.fix.elapsedMs==latestElapsedMs && pending==null) pending=frame }
+    fun takeWhenReady(ready: Boolean): Frame? = if(ready) take() else null
     fun take(): Frame? = pending.also { pending=null }
     fun current(fix: Fix, now: Long) = fix.elapsedMs==latestElapsedMs && now-fix.elapsedMs in 0..5000
 }

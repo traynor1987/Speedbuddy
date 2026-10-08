@@ -98,6 +98,7 @@ class DrivingService : Service(), LocationListener {
     private var observations: List<BoundaryObservation> = emptyList()
     private var ready = false
     private var stopped = false
+    private var stopStatus = "Driving mode stopped"
     private var fetching = false
     private var offline = false
     private var refreshDelayed = false
@@ -151,6 +152,7 @@ class DrivingService : Service(), LocationListener {
                 overrides = withContext(Dispatchers.IO) { roads.overrides() }
                 observations=withContext(Dispatchers.IO) { roads.observations() }
                 ready = true; mapStatus = "Saved road data ready"
+                startProcessing()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 mapStatus = "Local road store unavailable: ${e.message}"
@@ -177,15 +179,16 @@ class DrivingService : Service(), LocationListener {
             if (Build.VERSION.SDK_INT >= 29) startForeground(42, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
             else startForeground(42, notification)
         } catch (_: RuntimeException) {
-            DriveBus.set(DriveState(status="Driving mode needs location permission while the app is open"))
+            stopStatus="Driving mode needs location permission while the app is open"
+            DriveBus.set(DriveState(status=stopStatus))
             stopSelf(); return START_NOT_STICKY
         }
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            DriveBus.set(DriveState(status = "Precise location required")); stopSelf(); return START_NOT_STICKY
+            stopStatus="Precise location required";DriveBus.set(DriveState(status = stopStatus)); stopSelf(); return START_NOT_STICKY
         }
         if (tick == null) {
             try { locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this, Looper.getMainLooper()) }
-            catch (_: Exception) { DriveBus.set(DriveState(status = "GPS unavailable")); stopSelf(); return START_NOT_STICKY }
+            catch (_: Exception) { stopStatus="GPS unavailable";DriveBus.set(DriveState(status = stopStatus)); stopSelf(); return START_NOT_STICKY }
             tick = scope.launch { while (isActive) { delay(1000); val state = DriveBus.state.value
                 if (state.fix != null && SystemClock.elapsedRealtime() - state.fix.elapsedMs > 5000) {
                     speedFilter.current(SystemClock.elapsedRealtime()); matcher.reset(); limitEngine.reset()
@@ -244,7 +247,7 @@ class DrivingService : Service(), LocationListener {
         if (processing?.isActive == true) return
         processing = scope.launch {
             while(isActive) {
-                val frame=fixQueue.take() ?: break
+                val frame=fixQueue.takeWhenReady(ready) ?: break
                 processFix(frame)
             }
         }
@@ -261,7 +264,7 @@ class DrivingService : Service(), LocationListener {
             if(!fixQueue.current(fix,SystemClock.elapsedRealtime())) return
             regional=freshRegional;regionalFixElapsedMs=fix.elapsedMs
             if (localGeneration != generation || cameraRevision!=OwnerDataRevision.cameras || now-localAt > 5000 || localPoint?.let { Geo.distance(it,fix.point)>150 } != false) {
-                val result = withContext(Dispatchers.IO) {
+                val snapshot = readCurrentOwnerSnapshot({OwnerDataRevision.cameras}) { withContext(Dispatchers.IO) {
                     val nearby=runCatching { roadRepository.nearby(fix.point,RoadTile.at(fix.point) in coverage) }
                         .getOrElse { Log.w("SpeedBuddy","Optional legacy geometry unavailable",it);LocalRoads(emptyList(),emptyList()) }
                     val personal = db.userCameras()
@@ -270,11 +273,13 @@ class DrivingService : Service(), LocationListener {
                     val effective=db.effectiveInBounds(fix.point.lat-.015,fix.point.lon-.025,
                         fix.point.lat+.015,fix.point.lon+.025,nearby.cameras)
                     listOf(nearby,personal,lufop,count,effective)
-                }
+                } }
                 if(!fixQueue.current(fix,SystemClock.elapsedRealtime())) return
+                if(snapshot==null) { fixQueue.retry(frame);return }
+                val result=snapshot.second
                 @Suppress("UNCHECKED_CAST")
                 run { local = result[0] as LocalRoads;userCameras = result[1] as List<Camera>;imported = result[2] as List<Camera>;importedCount = result[3] as Int;effectiveCameras=result[4] as List<Camera> }
-                localPoint=fix.point;localAt=now;localGeneration=generation;cameraRevision=OwnerDataRevision.cameras
+                localPoint=fix.point;localAt=now;localGeneration=generation;cameraRevision=snapshot.first
             }
             if(roadRevision!=OwnerDataRevision.roads) {
                 val loadedRevision=OwnerDataRevision.roads
@@ -553,6 +558,6 @@ class DrivingService : Service(), LocationListener {
         stopped=true;tick?.cancel();cameraVoice.close();scope.cancel();locationManager.removeUpdates(this)
         // Blocking HTTP/database work may still be unwinding. Close after all children finish.
         CoroutineScope(Dispatchers.IO).launch { scope.coroutineContext[Job]?.join();db.close();roads.close() }
-        DriveBus.set(DriveState(status = "Driving mode stopped")); super.onDestroy()
+        DriveBus.set(DriveState(status = stopStatus)); super.onDestroy()
     }
 }

@@ -26,8 +26,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
+/** Retained prototype, deliberately unregistered until a supported category exists. */
 class SpeedBuddyCarAppService : CarAppService() {
-    override fun createHostValidator(): HostValidator = HostValidator.ALLOW_ALL_HOSTS_VALIDATOR
+    override fun createHostValidator(): HostValidator = HostValidator.Builder(this).build()
     override fun onCreateSession(): Session = SpeedBuddyCarSession()
 }
 private class SpeedBuddyCarSession : Session() {
