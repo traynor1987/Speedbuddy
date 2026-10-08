@@ -52,6 +52,7 @@ import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.math.roundToInt
 
 private val Ink: Color @Composable get() = MaterialTheme.colorScheme.onSurface
@@ -688,6 +689,8 @@ class MainActivity : ComponentActivity() {
     var configured by remember { mutableStateOf(access.credential()!=null) }
     var credentialInput by rememberSaveable { mutableStateOf("") }
     var catalogueRevision by remember { mutableIntStateOf(0) }
+    val downloadProgress=remember { MutableStateFlow<RegionalPackLifecycle.DownloadProgress?>(null) }
+    val progress by downloadProgress.collectAsState()
     LaunchedEffect(catalogueRevision) { runCatching { withContext(Dispatchers.IO) { lifecycle.catalogue() } }.onSuccess { catalogue=it;message="" }.onFailure { message=it.message ?: "Catalogue unavailable" } }
     Page("Offline Road Data",back) { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom=24.dp)) {
         Text("Verified regional packs",color=Muted,modifier=Modifier.padding(16.dp),fontSize=14.sp)
@@ -707,7 +710,11 @@ class MainActivity : ComponentActivity() {
             val current=installed.firstOrNull { it.descriptor.id==pack.id }
             Surface(shape=RoundedCornerShape(20.dp),color=Panel,modifier=Modifier.padding(horizontal=16.dp,vertical=6.dp)) { Column(Modifier.padding(16.dp)) {
                 Text(pack.displayName,color=Ink,fontSize=18.sp);Text("${pack.downloadBytes/1_048_576} MB · ${if(current==null) "Not installed" else "Installed ${current.descriptor.version}"}",color=Muted,fontSize=13.sp)
-                Button(onClick={ scope.launch { message="Downloading ${pack.displayName}…";runCatching { withContext(Dispatchers.IO) { lifecycle.download(pack) } }.onSuccess { installed=lifecycle.installed();message="${pack.displayName} is ready offline" }.onFailure { message="${pack.displayName}: ${it.message ?: "download failed"}" } } }) { Text(if(current==null) "Download" else if(current.descriptor.version!=pack.version) "Update" else "Re-download") }
+                progress?.takeIf { it.regionId==pack.id }?.let { currentProgress ->
+                    Spacer(Modifier.height(10.dp));LinearProgressIndicator(progress={ currentProgress.fraction },modifier=Modifier.fillMaxWidth())
+                    Text(currentProgress.label,color=Muted,fontSize=13.sp,modifier=Modifier.padding(top=6.dp))
+                }
+                Button(enabled=progress==null,onClick={ scope.launch { message="";runCatching { withContext(Dispatchers.IO) { lifecycle.download(pack) { downloadProgress.value=it } } }.onSuccess { installed=lifecycle.installed();message="${pack.displayName} is ready offline" }.onFailure { message="${pack.displayName}: ${it.message ?: "download failed"}" }.also { downloadProgress.value=null } } }) { Text(if(current==null) "Download" else if(current.descriptor.version!=pack.version) "Update" else "Re-download") }
                 if(current!=null) TextButton(onClick={ scope.launch { withContext(Dispatchers.IO) { lifecycle.delete(pack.id) };installed=lifecycle.installed();message="${pack.displayName} removed. Owner corrections were kept." } }) { Text("Delete") }
             } }
         }

@@ -54,6 +54,9 @@ dependencies {
     implementation("androidx.car.app:app:1.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.maplibre.gl:android-sdk-opengl:13.6.0")
+    // Regional production packs use a real SQLite RTree. Bundle a consistent RTree-enabled
+    // SQLite implementation instead of depending on an OEM platform SQLite module.
+    implementation("com.github.requery:sqlite-android:3.50.4")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")

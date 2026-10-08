@@ -1,7 +1,7 @@
 package uk.co.traynor.speedbuddy
 
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
+import io.requery.android.database.sqlite.SQLiteDatabase
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -14,6 +14,7 @@ internal class RegionalPackStore(private val context: Context) {
     private val root = File(context.filesDir, "regional-road-packs").apply { mkdirs() }
     private val active = File(root, "active")
     data class Installed(val descriptor: RegionalPackDescriptor, val database: File)
+    enum class InstallStage { VERIFYING_DOWNLOAD, DECOMPRESSING, VERIFYING_DATABASE, ACTIVATING }
     fun installed(): List<Installed> = active.listFiles { file -> file.extension == "json" }?.mapNotNull { pointer ->
         val region=pointer.nameWithoutExtension
         val descriptor=runCatching { RegionalRoadCatalogue.parse("{\"catalogueVersion\":1,\"generatedAt\":\"local\",\"regions\":[${pointer.readText()}]}").single() }.getOrNull()
@@ -27,12 +28,14 @@ internal class RegionalPackStore(private val context: Context) {
         ?.let { RegionalRoadCatalogue.parse("{\"catalogueVersion\":1,\"generatedAt\":\"local\",\"regions\":[$it]}").single() }
         ?.let { descriptor -> File(root, "$region/${descriptor.version}/roads.sqlite").takeIf(File::isFile) }
     /** Validates a complete downloaded gzip then atomically changes only this region's pointer. */
-    fun install(descriptor: RegionalPackDescriptor, gzip: File): Installed {
+    fun install(descriptor: RegionalPackDescriptor, gzip: File, progress: (InstallStage) -> Unit = {}): Installed {
+        progress(InstallStage.VERIFYING_DOWNLOAD)
         require(gzip.length() == descriptor.downloadBytes) { "Pack size mismatch" }
         require(sha256(gzip) == descriptor.sha256) { "Pack checksum mismatch" }
         val staging = File(root, ".staging-${UUID.randomUUID()}").apply { mkdirs() }
         val database = File(staging, "roads.sqlite")
         try {
+            progress(InstallStage.DECOMPRESSING)
             GZIPInputStream(FileInputStream(gzip)).use { input -> FileOutputStream(database).use { output ->
                 val buffer=ByteArray(64*1024); var total=0L
                 while(true) { val count=input.read(buffer); if(count<0) break; total+=count
@@ -41,7 +44,9 @@ internal class RegionalPackStore(private val context: Context) {
                 require(total==descriptor.uncompressedBytes) { "Pack raw size mismatch" }
             } }
             require(sha256(database)==descriptor.uncompressedSha256) { "Pack raw checksum mismatch" }
+            progress(InstallStage.VERIFYING_DATABASE)
             validateDatabase(database,descriptor)
+            progress(InstallStage.ACTIVATING)
             val target=File(root,"${descriptor.id}/${descriptor.version}").apply { parentFile?.mkdirs() }
             require(!target.exists() || File(target,"roads.sqlite").let { it.isFile && sha256(it)==descriptor.uncompressedSha256 }) { "Conflicting immutable pack" }
             if(!target.exists()) require(staging.renameTo(target)) { "Could not activate pack files" }

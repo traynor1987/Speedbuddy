@@ -1,6 +1,6 @@
 package uk.co.traynor.speedbuddy
 
-import android.database.sqlite.SQLiteDatabase
+import io.requery.android.database.sqlite.SQLiteDatabase
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
@@ -23,10 +23,12 @@ class RegionalPackStoreTest {
         execSQL("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)")
         execSQL("INSERT INTO metadata VALUES('formatVersion','1')")
         execSQL("INSERT INTO metadata VALUES('matcherVersion','1')")
-        execSQL("INSERT INTO metadata VALUES('coverage','{}')")
+        execSQL("INSERT INTO metadata VALUES('coverage','[[[[-3.0,53.0],[-2.0,53.0],[-2.0,54.0],[-3.0,54.0],[-3.0,53.0]]]]')")
         execSQL("INSERT INTO metadata VALUES('dataset','{\"region\":\"$id\"}')")
-        execSQL("CREATE TABLE roads_rtree(osm_way_id INTEGER)")
-        execSQL("INSERT INTO roads_rtree VALUES(1)")
+        execSQL("CREATE TABLE roads(osm_way_id INTEGER PRIMARY KEY,coordinates TEXT NOT NULL,tags TEXT NOT NULL)")
+        execSQL("INSERT INTO roads VALUES(1,'[[-2.8,53.5],[-2.8,53.501]]','{\"highway\":\"residential\",\"maxspeed\":\"30 mph\"}')")
+        execSQL("CREATE VIRTUAL TABLE roads_rtree USING rtree(osm_way_id,min_lon,max_lon,min_lat,max_lat)")
+        execSQL("INSERT INTO roads_rtree VALUES(1,-2.8,-2.8,53.5,53.501)")
     }
     private fun customPack(id: String, version: String, populate: SQLiteDatabase.() -> Unit): Pair<RegionalPackDescriptor,File> {
         val raw=File(context.cacheDir,"$id-$version.sqlite");raw.delete()
@@ -95,6 +97,14 @@ class RegionalPackStoreTest {
         store.install(old,oldGzip);store.install(merseyside,merseysideGzip);store.install(newer,newGzip)
         assertEquals("new",store.installed().single { it.descriptor.id=="lancashire" }.descriptor.version)
         assertEquals("1",store.installed().single { it.descriptor.id=="merseyside" }.descriptor.version)
+        clean()
+    }
+    @Test fun productionFormatRtreePackValidatesAndReturnsSpatialRoadCandidates() {
+        clean();val store=RegionalPackStore(context);val (pack,gzip)=pack("lancashire","rtree-live")
+        store.install(pack,gzip)
+        val result=RegionalPackMatcher(context).match(Fix(GeoPoint(53.5005,-2.8),5.0,10.0,1.0,0.0,1_000))
+        assertEquals(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,result.state)
+        assertEquals("osm:1",result.match?.road?.id)
         clean()
     }
 }

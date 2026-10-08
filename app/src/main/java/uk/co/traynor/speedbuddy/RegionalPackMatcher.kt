@@ -1,7 +1,7 @@
 package uk.co.traynor.speedbuddy
 
 import android.content.Context
-import android.database.sqlite.SQLiteDatabase
+import io.requery.android.database.sqlite.SQLiteDatabase
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.cos
