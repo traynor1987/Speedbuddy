@@ -16,6 +16,7 @@ The agent cannot observe owner backup creation or phone installation. No uninsta
 | 2–8 map lineage | Supported settings, personal cameras, camera corrections, suppressed IDs, numeric/typed road corrections, aliases and junction/bidirectional/member fields present in that format restore actively |
 | 9–10 offline lineage | Personal cameras/settings, directed road selections/evidence and learned boundaries; supported map records from retained v1–8 originals are reactivated |
 | 12 | All v11 fields plus durable boundary observations and local via-road boundary scope |
+| 13 | All v12 fields plus explicit sharing policy on new ordinary two-way local corrections; old directed records retain their semantics |
 | 11 combined | All above active fields and complete retained originals; retained archives are receipts and cannot resurrect deleted active records |
 
 Export creates portable UTF-8 JSON, filters permanent personal cameras, includes full supported settings and both correction stores, writes through Android's file picker and reads the file back before reporting success. Import validates before writes and retains/verifies the complete original first. Temporary mobile reports are deliberately excluded from owner exports; downloaded OSM/Lufop data can be recreated. Keep the original Lufop ZIP if reimport is needed.

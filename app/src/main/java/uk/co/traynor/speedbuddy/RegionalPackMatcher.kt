@@ -15,6 +15,7 @@ internal class RegionalPackMatcher(context: Context) {
     /** Candidates are context for bounded continuity only; they never bypass authority. */
     data class Result(val state: RoadProviderState, val match: RoadMatch?, val generation: String? = null, val candidates: List<Road> = emptyList())
 
+    @Synchronized
     fun match(fix: Fix): Result {
         // Accurate stationary fixes are valid spatial evidence; RoadMatcher rejects ambiguity.
         if (fix.accuracyM !in 1.0..25.0)
@@ -51,7 +52,7 @@ internal class RegionalPackMatcher(context: Context) {
             buildList { while (cursor.moveToNext()) {
                 val tags = JSONObject(cursor.getString(2)).let { json -> json.keys().asSequence().associateWith { json.optString(it) } }
                 val points = JSONArray(cursor.getString(1)).let { array -> List(array.length()) { i -> array.getJSONArray(i).let { GeoPoint(it.getDouble(1), it.getDouble(0)) } } }
-                if (points.size >= 2) add(Road("osm:${cursor.getLong(0)}", tags["name"], points, tags))
+                if (points.size >= 2) add(Road("way/${cursor.getLong(0)}", tags["name"], points, tags))
             } }
         }
     }
@@ -75,9 +76,14 @@ internal class RegionalPackMatcher(context: Context) {
 internal object PackSpeedLimits {
     fun mph(tags: Map<String,String>, bearing: Double?, match: RoadMatch): Int? {
         if (listOf("maxspeed:conditional","maxspeed:variable","maxspeed:lanes").any(tags::containsKey)) return null
-        if (bearing == null && ("maxspeed:forward" in tags || "maxspeed:backward" in tags)) return null
-        val forward = match.headingDifference?.let { it <= 45.0 } == true
-        val key = if (forward) "maxspeed:forward" else "maxspeed:backward"
+        if ("maxspeed:forward" !in tags && "maxspeed:backward" !in tags) return parse(tags["maxspeed"])
+        // headingDifference folds both directions for matching. The original segment tangent
+        // retains OSM node order, including reverse geometry and oneway=-1.
+        val key = when (WayTravelDirection.from(match,bearing)) {
+            WayTravelDirection.FORWARD -> "maxspeed:forward"
+            WayTravelDirection.BACKWARD -> "maxspeed:backward"
+            null -> return null
+        }
         return parse(tags[key] ?: tags["maxspeed"])
     }
     private fun parse(raw: String?): Int? {

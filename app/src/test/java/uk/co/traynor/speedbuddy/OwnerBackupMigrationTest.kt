@@ -4,6 +4,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class OwnerBackupMigrationTest {
+    @Test fun sharedCorrectionExportRestoresAlongsideOldDirectionalRecords() {
+        val root=current().put("version",13).put("boundaryObservations",org.json.JSONArray())
+            .put("junctions",org.json.JSONArray()).put("cameraCorrections",org.json.JSONArray())
+            .put("roadLimits",org.json.JSONObject()).put("suppressedCameraIds",org.json.JSONArray())
+            .put("roadCorrections",org.json.JSONArray()).put("cameraAliases",org.json.JSONArray())
+            .put("roadOverrides",org.json.JSONArray().put(RoadJson.override(RoadDb.Override("osm:123",0.0,20,sharedAcrossDirections=true)))
+                .put(org.json.JSONObject().put("road","way/456").put("bearing",180).put("mph",50)))
+        val rows=OwnerBackupCodec.parse(root.toString()).roadOverrides
+        assertTrue(rows[0].sharedAcrossDirections);assertFalse(rows[1].sharedAcrossDirections)
+        assertEquals("osm:123",rows[0].road)
+        assertEquals(20,RoadDb.selectOverride(rows,"way/123",180.0))
+        assertNull(RoadDb.selectOverride(rows,"way/456",0.0))
+        root.getJSONArray("roadOverrides").getJSONObject(0).put("shared","yes")
+        assertThrows(IllegalArgumentException::class.java) { OwnerBackupCodec.parse(root.toString()) }
+    }
     @Test fun legacyV8RestoresMapOwnerFieldsFromPortableJson() {
         val backup = OwnerBackupCodec.parse(legacy)
         assertEquals("owner-one", backup.cameras.single().id)

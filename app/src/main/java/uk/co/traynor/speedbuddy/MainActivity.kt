@@ -423,7 +423,7 @@ class MainActivity : ComponentActivity() {
         tags?.get("maxspeed:type")?.startsWith("GB:nsl") == true ||
         tags?.get("maxspeed")?.startsWith("GB:nsl") == true || tags?.get("maxspeed") == "GB:motorway")
     val compact=LocalConfiguration.current.screenHeightDp<800
-    val correctionAvailable = state.road != null
+    val correctionAvailable = state.road != null && state.roadDecisionElapsedMs==state.fix?.elapsedMs
     Column(Modifier.fillMaxSize().then(if(compact) Modifier.verticalScroll(rememberScrollState()) else Modifier)
         .padding(horizontal = 22.dp, vertical = if(compact) 6.dp else 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -829,7 +829,7 @@ class MainActivity : ComponentActivity() {
                     Surface(shape=RoundedCornerShape(12.dp),color=Panel) { Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         val label=when(correction.mph) { OWNER_UNKNOWN->"Unknown";OWNER_NATIONAL->"National Speed Limit";else->"${correction.mph} mph" }
                         Text("$label · ${correction.road}",color=Ink)
-                        Text("Directed correction · ${correction.bearing.roundToInt()}°",color=Muted,style=MaterialTheme.typography.bodySmall)
+                        Text(if(correction.sharedAcrossDirections) "Both directions · local correction" else "Directed correction · ${correction.bearing.roundToInt()}°",color=Muted,style=MaterialTheme.typography.bodySmall)
                         TextButton(onClick={confirm="roadEdit:${correction.road}"},enabled=parked) { Text("Remove correction") }
                     } }
                 }

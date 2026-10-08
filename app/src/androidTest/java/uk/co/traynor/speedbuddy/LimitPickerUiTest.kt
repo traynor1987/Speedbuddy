@@ -18,8 +18,9 @@ class LimitPickerUiTest {
         val instrumentation=InstrumentationRegistry.getInstrumentation()
         val p=GeoPoint(53.5,-2.8)
         val road=Road("way/ui-current","Test",listOf(p,Geo.ahead(p,0.0,400.0)),mapOf("maxspeed" to "30 mph"))
+        val elapsed=SystemClock.elapsedRealtime()
         DriveBus.set(DriveState(active=true,speedMph=20.0,limitMph=30,
-            fix=Fix(p,5.0,10.0,1.0,0.0,SystemClock.elapsedRealtime()),road=RoadMatch(road,0.0,0.0,.95),
+            fix=Fix(p,5.0,10.0,1.0,0.0,elapsed),road=RoadMatch(road,0.0,0.0,.95),roadDecisionElapsedMs=elapsed,
             limitDecision=LimitDecision(30,reason="UI fixture")))
         val activity=instrumentation.startActivitySync(Intent(instrumentation.targetContext,MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

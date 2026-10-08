@@ -21,7 +21,7 @@ data class Camera(
     val mobileReport: MobileReport? = null,
     val junction: CameraJunction? = null,
 ) : java.io.Serializable
-data class RoadMatch(val road: Road, val distanceM: Double, val headingDifference: Double?, val confidence: Double)
+data class RoadMatch(val road: Road, val distanceM: Double, val headingDifference: Double?, val confidence: Double, val wayHeading: Double? = null)
 data class CameraDecision(val camera: Camera?, val distanceM: Double?, val accepted: Boolean, val reason: String, val bearingDifference: Double? = null)
 data class CameraWarning(val announceApproach: Boolean, val closeReminder: Boolean,
     val speeding: Boolean, val limitMph: Int?) {
@@ -107,6 +107,7 @@ class RoadLimitStabilizer {
     private var candidateId: String? = null
     private var candidateSince = 0L
     private var candidateCount = 0
+    private var candidateFixElapsedMs: Long? = null
     fun resolve(fix: Fix, match: RoadMatch?, limit: Int?, nowMs: Long, roads: List<Road> = emptyList()): Int? {
         if (match != null) {
             if (limit != null) {
@@ -116,11 +117,13 @@ class RoadLimitStabilizer {
                     (fix.bearing == null && (fix.accuracyM>8 || match.distanceM>fix.accuracyM || match.confidence<.85)))) return null
                 if (prior != null && lastLimit != limit) {
                     val candidate = "${match.road.id}|$limit"
-                    if (candidateId != candidate) { candidateId = candidate; candidateSince = nowMs; candidateCount = 0 }
+                    if (candidateId != candidate) { candidateId = candidate; candidateSince = nowMs; candidateCount = 0; candidateFixElapsedMs = null }
                     // Weak/side-road matches never become authoritative just because time passed.
                     // Strong, aligned fixes may confirm a real short zone in a few seconds.
                     if (fix.accuracyM <= 20 && match.confidence >= .8 &&
-                        (match.headingDifference ?: 90.0) <= 25 && fix.bearing != null) candidateCount++ else {
+                        (match.headingDifference ?: 90.0) <= 25 && fix.bearing != null) {
+                        if(candidateFixElapsedMs!=fix.elapsedMs) { candidateCount++;candidateFixElapsedMs=fix.elapsedMs }
+                    } else {
                         candidateCount = 0; candidateSince = nowMs
                     }
                     val junction = listOf(prior.road.points.first(),prior.road.points.last()).flatMap { a -> listOf(match.road.points.first(),match.road.points.last()).map { b -> a to b } }
@@ -289,7 +292,8 @@ class RoadMatcher {
         if (candidates.size > 1 && candidates[1].third.second - first.third.second < 8.0 && first.first.id != previous) return null
         previous = first.first.id
         return RoadMatch(first.first, first.second, first.third.first,
-            (1.0 - first.second / 40.0 - (first.third.first ?: 0.0) / 120.0).coerceIn(0.0, 1.0))
+            (1.0 - first.second / 40.0 - (first.third.first ?: 0.0) / 120.0).coerceIn(0.0, 1.0),
+            Geo.projection(fix.point, first.first.points).second)
     }
     fun reset() { previous = null }
 }

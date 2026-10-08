@@ -22,7 +22,7 @@ data class RoadLimitCorrection(val id: String, val kind: RoadLimitKind, val mph:
         })
     }
     fun apply(road: Road): Road {
-        if (road.id != id) return road
+        if (!RoadIdentity.same(road.id,id)) return road
         val tags = road.tags - setOf("maxspeed", "maxspeed:type", "source:maxspeed",
             "source:maxspeed:local")
         val value = when (kind) {
@@ -44,9 +44,11 @@ internal object OwnerRoadLimits {
         if(road==null) return null
         // A sign tap is local ground truth. Explicit map edits and older records without
         // a captured position retain their existing whole-road semantics.
-        val local=directed.filter { point==null || it.point==null || Geo.distance(point,it.point)<=150 }
+        val local=directed.filter { point==null || it.point==null || Geo.distance(point,it.point)<=150 }.map {
+            if(it.sharedAcrossDirections && !CorrectionDirectionPolicy.ordinaryTwoWay(road)) it.copy(sharedAcrossDirections=false) else it
+        }
         RoadDb.selectOverride(local,road.id,bearing)?.let { return SelectedOwnerLimit(it,it==OWNER_NATIONAL) }
-        return mapCorrections[road.id]?.let {
+        return mapCorrections[RoadIdentity.canonical(road.id)]?.let {
             SelectedOwnerLimit(if(it.kind==RoadLimitKind.UNKNOWN) OWNER_UNKNOWN else it.mph!!,
                 it.kind in listOf(RoadLimitKind.NATIONAL_SINGLE,RoadLimitKind.NATIONAL_DUAL))
         }

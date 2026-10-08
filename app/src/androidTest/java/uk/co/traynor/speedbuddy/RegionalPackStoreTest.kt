@@ -104,7 +104,7 @@ class RegionalPackStoreTest {
         store.install(pack,gzip)
         val result=RegionalPackMatcher(context).match(Fix(GeoPoint(53.5005,-2.8),5.0,10.0,1.0,0.0,1_000))
         assertEquals(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,result.state)
-        assertEquals("osm:1",result.match?.road?.id)
+        assertEquals("way/1",result.match?.road?.id)
         clean()
     }
     @Test fun accurateStationaryFixStillMatchesAnUnambiguousRegionalRoad() {
@@ -113,7 +113,7 @@ class RegionalPackStoreTest {
         // This is the owner-device case: a fresh 4 m fix at rest has no movement-derived heading.
         val result=RegionalPackMatcher(context).match(Fix(GeoPoint(53.5005,-2.8),4.0,0.0,0.5,null,1_000))
         assertEquals(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,result.state)
-        assertEquals("osm:1",result.match?.road?.id)
+        assertEquals("way/1",result.match?.road?.id)
         clean()
     }
 }

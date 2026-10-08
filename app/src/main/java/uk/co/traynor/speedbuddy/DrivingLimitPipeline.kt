@@ -9,6 +9,8 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
     private val upcomingDetector=UpcomingLimitDetector()
     private data class Preview(val upcoming: UpcomingLimit,val current: Int?,val roadId: String?,val fix: Fix,val at: Long)
     private var preview: Preview? = null
+    private var latestEvaluatedAt: Long? = null
+    private var previousWayDirection: Pair<String,WayTravelDirection>? = null
     /** Called only after the owner's selection was durably saved. */
     fun acceptSavedSelection(plan: LimitSelectionPlan?) {
         if(plan?.observation==null) engine.reset()
@@ -20,12 +22,15 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
         boundaries: List<BoundaryCorrection>,observations: List<BoundaryObservation>,now: Long,wallNow: Long,
         regional: RegionalPackMatcher.Result? = null, live: LiveRoadState? = null): DriveLimitResult {
         // Reject before either matcher or engine can mutate state after delayed IO.
-        if(now-fix.elapsedMs !in 0..5000) return DriveLimitResult(fix,null,null,
+        if(now-fix.elapsedMs !in 0..5000 || latestEvaluatedAt?.let { fix.elapsedMs<it }==true) return DriveLimitResult(fix,null,null,
             LimitDecision(null,reason="Unavailable: stale GPS fix; decision history unchanged"),null)
         // A covered regional pack is authoritative even when it says Unknown or uncertain.
         // Legacy cache is only considered when no usable regional provider participated.
-        val contextualRoads=(roads+regional?.candidates.orEmpty()).distinctBy { it.id }
-        val road=regional?.match ?: matcher.match(fix,contextualRoads)
+        latestEvaluatedAt=fix.elapsedMs
+        val covered=regional!=null && regional.state !in setOf(RoadProviderState.COVERAGE_UNAVAILABLE,RoadProviderState.SERVICE_UNAVAILABLE)
+        val contextualRoads=(if(covered) regional?.candidates.orEmpty()+roads else roads+regional?.candidates.orEmpty())
+            .map(RoadIdentity::road).distinctBy { it.id }
+        val road=if(covered) regional?.match?.let { it.copy(road=RoadIdentity.road(it.road)) } else matcher.match(fix,contextualRoads)
         val regionalState=regional?.let { result -> LiveRoadState(result.state,result.match!=null,
             if(result.state==RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN) result.match?.let { PackSpeedLimits.mph(it.road.tags,fix.bearing,it) } else null,
             result.state.permitsOverpass) }
@@ -33,8 +38,22 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
         // Owner corrections remain inside LimitDecisionEngine; this resolver selects
         // only the non-owner authority and keeps Unknown/uncertain terminal.
         val source=RoadProviderResolver.resolveProviderStates(null,regionalState,cached,live).limitMph
-        val owner=OwnerRoadLimits.select(road?.road,fix.bearing,overrides,corrections,fix.point)
-        val decision=engine.decide(fix,road,source,owner?.mph,boundaries,now,observations,wallNow).let {
+        val direction=road?.takeIf { it.confidence>=.7 && fix.accuracyM<=20 &&
+            (it.headingDifference ?: 90.0)<=30 }?.let { WayTravelDirection.from(it,fix.bearing) }
+        val previous=previousWayDirection
+        if(road!=null && direction!=null && previous!=null && RoadIdentity.same(road.road.id,previous.first) &&
+            road.road.tags.keys.any { it.startsWith("maxspeed:forward") || it.startsWith("maxspeed:backward") } &&
+            direction!=previous.second) {
+            // Opposite-direction limits are separate authorities, never a same-road transition
+            // whose identical endpoints must be crossed before the lower limit can display.
+            engine.reset();preview=null
+        }
+        if(road!=null && direction!=null) previousWayDirection=road.road.id to direction
+        val ownerRoad=road?.takeIf { it.confidence>=.7 && fix.accuracyM<=20 &&
+            if(fix.bearing!=null) (it.headingDifference ?: 90.0)<=30
+            else fix.accuracyM<=8 && it.distanceM<=fix.accuracyM && it.confidence>=.85 }
+        val owner=OwnerRoadLimits.select(ownerRoad?.road,fix.bearing,overrides,corrections,fix.point)
+        val decision=engine.decide(fix,road,source,owner?.mph,boundaries.map(RoadIdentity::boundary),now,observations.map(RoadIdentity::observation),wallNow).let {
             if(owner?.national==true) it.copy(national=true) else it
         }
         val corrected=contextualRoads.map { corrections[it.id]?.apply(it) ?: it }
@@ -54,12 +73,15 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
 }
 internal data class DriveLimitResult(val fix: Fix,val road: RoadMatch?,val source: Int?,
     val decision: LimitDecision,val upcoming: UpcomingLimit?) {
-    fun applyTo(state: DriveState)=state.copy(fix=fix,road=road,sourceLimitMph=source,limitMph=decision.mph,
+    fun applyTo(state: DriveState): DriveState {
+        if(state.fix?.let { it.elapsedMs>fix.elapsedMs }==true) return state
+        return state.copy(fix=fix,roadDecisionElapsedMs=fix.elapsedMs,road=road,sourceLimitMph=source,limitMph=decision.mph,
         limitDecision=decision,upcoming=upcoming,status=when {
             decision.mph==null -> "Road limit unknown"
             state.speedMph==null && state.active -> "GPS speed unavailable"
             else -> ""
         })
+    }
 }
 
 /** Bounded diagnostic receipts; none of these fields appear in the normal driving controls. */

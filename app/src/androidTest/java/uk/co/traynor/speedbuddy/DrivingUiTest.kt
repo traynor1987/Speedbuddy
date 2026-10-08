@@ -80,6 +80,17 @@ class DrivingUiTest {
         compose.onNodeWithText("Choose the real limit").assertDoesNotExist()
         compose.runOnIdle { assertNull(correction) }
     }
+    @Test fun retainedSpeechGeometryCannotBeUsedAsNewGpsCorrectionTarget() {
+        val elapsed=android.os.SystemClock.elapsedRealtime()
+        val p=GeoPoint(53.5,-2.8)
+        val road=Road("way/pending",null,listOf(p,Geo.ahead(p,0.0,400.0)),mapOf("maxspeed" to "30 mph"))
+        val state=DriveState(active=true,limitMph=30,road=RoadMatch(road,0.0,0.0,.95),
+            fix=Fix(p,5.0,10.0,1.0,0.0,elapsed),roadDecisionElapsedMs=elapsed-1000,
+            limitDecision=LimitDecision(30,reason=PendingDrivingEvidence.reason,assumed=true))
+        compose.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{}) } }
+        compose.onNodeWithContentDescription("Correct road speed limit").performClick()
+        compose.onNodeWithText("Choose the real limit").assertDoesNotExist()
+    }
     @Test fun mobileWarningShowsMinimalActionsAndKeepsMainSignCentred() {
         var reported=false;var feedback: Boolean?=null
         val now=System.currentTimeMillis();val elapsed=android.os.SystemClock.elapsedRealtime()

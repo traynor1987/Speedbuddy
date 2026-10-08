@@ -148,7 +148,8 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         db.rawQuery("PRAGMA incremental_vacuum(2048)",null).use { }
     }
     data class Override(val road: String,val bearing: Double,val mph: Int,val sourceMph: Int? = null,
-        val point: GeoPoint? = null,val recordedAt: Long = 0,val accuracy: Double? = null)
+        val point: GeoPoint? = null,val recordedAt: Long = 0,val accuracy: Double? = null,
+        val sharedAcrossDirections: Boolean = false)
     fun overrides(): List<Override> = readableDatabase.rawQuery("SELECT road,bearing,mph,payload FROM overrides",null).use { c ->
         buildList { while(c.moveToNext()) add(if(c.isNull(3)) Override(c.getString(0),c.getDouble(1),c.getInt(2)) else RoadJson.decodeOverride(JSONObject(c.getString(3)))) }
     }
@@ -158,7 +159,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         require(road.isNotBlank() && bearing.isFinite() && bearing in 0.0..<360.0)
         val db=writableDatabase;db.beginTransaction()
         try {
-            overrides().filter { it.road==road && Geo.difference(it.bearing,bearing)<45 }.forEach { db.delete("overrides","road=? AND bearing=?",arrayOf(road,it.bearing.toString())) }
+            overrides().filter { RoadIdentity.same(it.road,road) && (it.sharedAcrossDirections || Geo.difference(it.bearing,bearing)<45) }.forEach { db.delete("overrides","road=? AND bearing=?",arrayOf(it.road,it.bearing.toString())) }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -169,7 +170,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         require(row.recordedAt>=0 && (row.accuracy==null || row.accuracy.isFinite() && row.accuracy in 0.0..20.0))
         val db=writableDatabase;db.beginTransaction()
         try {
-            overrides().filter { it.road==row.road && Geo.difference(it.bearing,row.bearing)<45 }.forEach {
+            overrides().filter { RoadIdentity.same(it.road,row.road) && Geo.difference(it.bearing,row.bearing)<45 }.forEach {
                 db.delete("overrides","road=? AND bearing=?",arrayOf(it.road,it.bearing.toString()))
             }
             db.insertOrThrow("overrides",null,ContentValues().apply {
@@ -182,7 +183,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         require(validPoint(b.predicted) && validPoint(b.observed) && b.oldMph in 5..100 && b.newMph in 5..100 && b.fromId!=b.toId)
         val db=writableDatabase;db.beginTransaction()
         try {
-            boundaries().filter { it.fromId==b.fromId && it.toId==b.toId && Geo.difference(it.bearing,b.bearing)<45 }.forEach {
+            boundaries().filter { RoadIdentity.same(it.fromId,b.fromId) && RoadIdentity.same(it.toId,b.toId) && Geo.difference(it.bearing,b.bearing)<45 }.forEach {
                 db.delete("boundaries","key=?",arrayOf(boundaryKey(it)))
             }
             db.insertOrThrow("boundaries",null,ContentValues().apply { put("key",boundaryKey(b));put("payload",RoadJson.boundary(b).toString()) })
@@ -203,7 +204,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         observations().filter { o.recordedAt-it.recordedAt>120_000 }.forEach {
             writableDatabase.delete("boundary_observations","key=?",arrayOf(observationKey(it)))
         }
-        observations().filter { it.from.id==o.from.id && it.to.id==o.to.id && Geo.difference(it.bearing,o.bearing)<45 }.forEach {
+        observations().filter { RoadIdentity.same(it.from.id,o.from.id) && RoadIdentity.same(it.to.id,o.to.id) && Geo.difference(it.bearing,o.bearing)<45 }.forEach {
             writableDatabase.delete("boundary_observations","key=?",arrayOf(observationKey(it)))
         }
         writableDatabase.insertOrThrow("boundary_observations",null,ContentValues().apply {
@@ -216,14 +217,18 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         try {
             plan.override?.let(::saveOverride);plan.observation?.let(::saveObservation)
             val retired=plan.boundary?.let { b -> overrides().filter {
-                it.road in b.viaIds+b.toId && Geo.difference(it.bearing,b.bearing)<45 &&
+                RoadIdentity.canonical(it.road) in (b.viaIds+b.toId).map(RoadIdentity::canonical) &&
+                    (it.sharedAcrossDirections && b.sharedAcrossDirections || Geo.difference(it.bearing,b.bearing)<45) &&
                     (it.point==null || Geo.distance(it.point,b.observed)<=600)
             } } ?: emptyList()
             plan.boundary?.let { b ->
                 // The owner's newer local boundary replaces the candidate's whole-segment tap.
                 retired.forEach { setOverride(it.road,it.bearing,null) };saveBoundary(b)
             }
-            plan.consumed?.let { db.delete("boundary_observations","key=?",arrayOf(observationKey(it))) }
+            plan.consumed?.let { consumed -> observations().filter {
+                RoadIdentity.same(it.from.id,consumed.from.id) && RoadIdentity.same(it.to.id,consumed.to.id) &&
+                    it.bearing==consumed.bearing && it.recordedAt==consumed.recordedAt
+            }.forEach { db.delete("boundary_observations","key=?",arrayOf(observationKey(it))) } }
             recordDiagnostic(JSONObject(diagnostic).put("retiredSegmentOverrides",JSONArray(retired.map(RoadJson::override))).toString())
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
@@ -240,11 +245,11 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
     fun deleteOwnerCorrections(road: String) {
         val db=writableDatabase;db.beginTransaction()
         try {
-            db.delete("overrides","road=?",arrayOf(road))
-            boundaries().filter { it.fromId==road || it.toId==road }.forEach {
+            overrides().filter { RoadIdentity.same(it.road,road) }.forEach { db.delete("overrides","road=? AND bearing=?",arrayOf(it.road,it.bearing.toString())) }
+            boundaries().filter { RoadIdentity.same(it.fromId,road) || RoadIdentity.same(it.toId,road) }.forEach {
                 db.delete("boundaries","key=?",arrayOf(boundaryKey(it)))
             }
-            observations().filter { it.from.id==road || it.to.id==road }.forEach {
+            observations().filter { RoadIdentity.same(it.from.id,road) || RoadIdentity.same(it.to.id,road) }.forEach {
                 db.delete("boundary_observations","key=?",arrayOf(observationKey(it)))
             }
             db.setTransactionSuccessful()
@@ -267,8 +272,12 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         } finally { db.endTransaction() }
     }
     companion object {
-        fun selectOverride(overrides: List<Override>,road: String,bearing: Double?): Int? = bearing?.let { heading ->
-            overrides.filter { it.road==road && Geo.difference(it.bearing,heading)<45 }.minByOrNull { Geo.difference(it.bearing,heading) }?.mph
+        fun selectOverride(overrides: List<Override>,road: String,bearing: Double?): Int? {
+            val matching=overrides.filter { RoadIdentity.same(it.road,road) &&
+                (it.sharedAcrossDirections || bearing?.let { b -> Geo.difference(it.bearing,b)<45 }==true) }
+            // Explicit directional records retain priority in their own direction.
+            return matching.sortedWith(compareBy<Override> { it.sharedAcrossDirections }
+                .thenByDescending { it.recordedAt }.thenBy { bearing?.let { b -> Geo.difference(it.bearing,b) } ?: 0.0 }).firstOrNull()?.mph
         }
     }
 }
@@ -276,10 +285,10 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
 internal object RoadJson {
     fun override(o: RoadDb.Override)=JSONObject().put("road",o.road).put("bearing",o.bearing).put("mph",o.mph)
         .put("source",o.sourceMph?:JSONObject.NULL).put("point",o.point?.let(::point)?:JSONObject.NULL)
-        .put("at",o.recordedAt).put("accuracy",o.accuracy?:JSONObject.NULL)
+        .put("at",o.recordedAt).put("accuracy",o.accuracy?:JSONObject.NULL).put("shared",o.sharedAcrossDirections)
     fun decodeOverride(j: JSONObject)=RoadDb.Override(j.getString("road"),j.getDouble("bearing"),j.getInt("mph"),
         if(j.isNull("source")) null else j.getInt("source"),if(j.isNull("point")) null else point(j.getJSONArray("point")),
-        j.optLong("at",0),if(j.isNull("accuracy")) null else j.getDouble("accuracy"))
+        j.optLong("at",0),if(j.isNull("accuracy")) null else j.getDouble("accuracy"),j.optBoolean("shared",false))
     fun point(p: GeoPoint)=JSONArray().put(p.lat).put(p.lon)
     fun point(a: JSONArray)=GeoPoint(a.getDouble(0),a.getDouble(1))
     fun encode(r: Road)=JSONObject().put("id",r.id).put("name",r.name?:JSONObject.NULL).put("points",JSONArray().apply { r.points.forEach { put(point(it)) } }).put("tags",JSONObject(r.tags))

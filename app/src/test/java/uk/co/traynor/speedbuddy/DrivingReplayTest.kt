@@ -2,8 +2,12 @@ package uk.co.traynor.speedbuddy
 
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
 
 class DrivingReplayTest {
+    @Before fun resetBefore()=DriveBus.set(DriveState())
+    @After fun resetAfter()=DriveBus.set(DriveState())
     private val origin=GeoPoint(53.5,-2.8)
     private fun road(id:String, mph:Int?)=Road(id,id,listOf(origin,Geo.ahead(origin,0.0,1000.0)),mapOf("highway" to "residential")+(mph?.let { mapOf("maxspeed" to "$it mph") } ?: emptyMap()))
     private fun frame(road:Road, at:Long, regional:RegionalPackMatcher.Result?=null, live:LiveRoadState?=null)=ReplayFrame(

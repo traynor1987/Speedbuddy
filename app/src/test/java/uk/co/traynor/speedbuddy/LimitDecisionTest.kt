@@ -4,8 +4,8 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LimitDecisionTest {
-    private val old = Road("way/1", "High Street", listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)), mapOf("maxspeed" to "30 mph"))
-    private val next = old.copy(id = "way/2", points = listOf(GeoPoint(53.003, -2.0), GeoPoint(53.02, -2.0)), tags = mapOf("maxspeed" to "20 mph"))
+    private val old = Road("way/1", "High Street", listOf(GeoPoint(53.0, -2.0), GeoPoint(53.003, -2.0)), mapOf("highway" to "residential","maxspeed" to "30 mph"))
+    private val next = old.copy(id = "way/2", points = listOf(GeoPoint(53.003, -2.0), GeoPoint(53.02, -2.0)), tags = mapOf("highway" to "residential","maxspeed" to "20 mph"))
     private fun fix(lat: Double, time: Long, bearing: Double = 0.0) = Fix(GeoPoint(lat, -2.0), 5.0, 10.0, 1.0, bearing, time)
     private fun match(road: Road) = RoadMatch(road, 0.0, 0.0, .95)
     @Test fun previewAndJitterDoNotPromoteNewLimit() {

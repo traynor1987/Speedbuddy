@@ -160,8 +160,7 @@ class LimitDecisionEngine {
         return copy(fromId=toId,toId=fromId,oldMph=newMph,newMph=oldMph,bearing=(bearing+180.0)%360.0)
     }
     private fun shareable(from: Road,to: Road): Boolean {
-        fun ordinary(road: Road) = road.tags["oneway"] !in setOf("yes","1","-1") &&
-            road.tags["highway"]?.endsWith("_link") != true
+        fun ordinary(road: Road) = CorrectionDirectionPolicy.ordinaryTwoWay(road)
         return ordinary(from) && ordinary(to) && from.name!=null && from.name==to.name &&
             from.tags["highway"]==to.tags["highway"] && connectedRoads(from,to)
     }
@@ -234,8 +233,10 @@ class LimitDecisionEngine {
             .put("predicted",RoadJson.point(t.fix.point)).put("accuracy",t.fix.accuracyM).put("at",t.at)
     }
     fun planSelection(fix: Fix,match: RoadMatch?,source: Int?,selected: Int,targetRoad: String,now: Long,
-        wallNow: Long,observations: List<BoundaryObservation>): LimitSelectionPlan? {
-        val row=QuickLimitCorrection.capture(fix,match,source,selected,targetRoad,now) ?: return null
+        wallNow: Long,observations: List<BoundaryObservation>,directionSpecific: Boolean = false): LimitSelectionPlan? {
+        val row=QuickLimitCorrection.capture(fix,match,source,selected,targetRoad,now,directionSpecific) ?: return null
+        if(directionSpecific) return LimitSelectionPlan(override=row,kind="directional road limit override",
+            message=when(selected) { OWNER_UNKNOWN -> "Unknown confirmed in this direction";OWNER_NATIONAL -> "National limit confirmed in this direction";else -> "$selected confirmed in this direction" })
         val o=observations.filter { it.applies(fix,match,wallNow) }.maxByOrNull { it.recordedAt }
         if(o!=null && selected>0) {
             if(selected==o.oldMph) return LimitSelectionPlan(observation=o.copy(stillPoint=fix.point,
@@ -248,7 +249,7 @@ class LimitDecisionEngine {
                 val b=BoundaryCorrection(o.from.id,match.road.id,o.oldMph,selected,o.predicted,fix.point,
                     o.bearing,o.predictedAccuracy,fix.accuracyM,match.confidence,match.distanceM,wallNow,
                     viaIds=if(match.road.id!=o.to.id) listOf(o.to.id) else emptyList(),stillPoint=o.stillPoint,
-                    sharedAcrossDirections=match.road.id==o.to.id && shareable(o.from,o.to))
+                    sharedAcrossDirections=!directionSpecific && match.road.id==o.to.id && shareable(o.from,o.to))
                 return LimitSelectionPlan(boundary=b,consumed=o,kind="boundary correction",message="$selected starts here")
             }
             // Ambiguous second tap is not permission to overwrite the upcoming road.
@@ -263,7 +264,7 @@ class LimitDecisionEngine {
             return LimitSelectionPlan(observation=observation,kind="boundary observation",message="$selected confirmed here")
         }
         if(t!=null && selected==t.new && selected==source) startsHere(fix,now)?.let {
-            return LimitSelectionPlan(boundary=it.copy(recordedAt=wallNow),kind="boundary correction",message="$selected starts here")
+            return LimitSelectionPlan(boundary=it.copy(recordedAt=wallNow,sharedAcrossDirections=it.sharedAcrossDirections && !directionSpecific),kind="boundary correction",message="$selected starts here")
         }
         return LimitSelectionPlan(override=row,consumed=o,kind="road limit override",message=when(selected) {
             OWNER_UNKNOWN -> "Unknown confirmed here"

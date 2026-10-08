@@ -17,10 +17,11 @@ object OwnerLimit {
 
 /** The picker sends its road identity; the service validates it against a fresh live match. */
 object QuickLimitCorrection {
-    fun capture(fix: Fix,match: RoadMatch?,source: Int?,selected: Int,targetRoad: String,now: Long): RoadDb.Override? {
-        if(match==null || match.road.id!=targetRoad || !OwnerLimit.valid(selected) ||
+    fun capture(fix: Fix,match: RoadMatch?,source: Int?,selected: Int,targetRoad: String,now: Long,directionSpecific: Boolean = false): RoadDb.Override? {
+        if(match==null || !RoadIdentity.same(match.road.id,targetRoad) || !OwnerLimit.valid(selected) ||
             !correctionReady(fix, match, now)) return null
-        return RoadDb.Override(match.road.id,fix.bearing ?: return null,selected,source,fix.point,System.currentTimeMillis(),fix.accuracyM)
+        return RoadDb.Override(match.road.id,fix.bearing ?: return null,selected,source,fix.point,System.currentTimeMillis(),fix.accuracyM,
+            sharedAcrossDirections=!directionSpecific && CorrectionDirectionPolicy.ordinaryTwoWay(match.road))
     }
 }
 
