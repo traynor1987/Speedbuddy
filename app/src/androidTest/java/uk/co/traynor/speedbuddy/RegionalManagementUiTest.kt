@@ -77,9 +77,14 @@ class RegionalManagementUiTest {
         compose.onNodeWithText("Legacy coverage tiles").assertExists()
     }
     @Test fun failedRedownloadKeepsOldPackAndReenablesManagementControls() {
-        install("lancashire");install("merseyside");RegionalRoadDataAccess(base).save("test-token")
+        val d=install("lancashire");install("merseyside");RegionalRoadDataAccess(base).save("test-token")
         val lifecycle=RegionalPackLifecycle(context,{"expired"},{ url -> object: java.net.HttpURLConnection(url) {
-            override fun connect() {};override fun disconnect() {};override fun usingProxy()=false;override fun getResponseCode()=401
+            override fun connect() {};override fun disconnect() {};override fun usingProxy()=false;override fun getResponseCode()=if(url.path.endsWith("manifest.json")) 200 else 401
+            override fun getInputStream(): java.io.InputStream = JSONObject().put("format","speedbuddy-roadpack-sqlite-v1")
+                .put("formatVersion",1).put("schemaVersion",1).put("matcherVersion",RegionalPackManifest.MATCHER)
+                .put("region",d.id).put("packVersion",d.version).put("coordinateSystem","EPSG:4326")
+                .put("download",JSONObject().put("bytes",d.downloadBytes).put("uncompressedBytes",d.uncompressedBytes)
+                    .put("sha256",d.sha256).put("uncompressedSha256",d.uncompressedSha256)).toString().byteInputStream()
         } })
         compose.setContent { MaterialTheme { OfflineRoadDataScreen(context,lifecycle,{}) } };awaitPacks()
         compose.onAllNodesWithText("Re-download")[0].performScrollTo().performClick()
@@ -89,4 +94,16 @@ class RegionalManagementUiTest {
         assertEquals(2,RegionalPackStore(context).installed().size)
     }
 
+    @Test fun failedManifestKeepsOldPackAndReenablesManagementControls() {
+        install("lancashire");install("merseyside");RegionalRoadDataAccess(base).save("test-token")
+        val lifecycle=RegionalPackLifecycle(context,{"expired"},{ url -> object: java.net.HttpURLConnection(url) {
+            override fun connect() {};override fun disconnect() {};override fun usingProxy()=false;override fun getResponseCode()=401
+        } })
+        compose.setContent { MaterialTheme { OfflineRoadDataScreen(context,lifecycle,{}) } };awaitPacks()
+        compose.onAllNodesWithText("Re-download")[0].performScrollTo().performClick()
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Lancashire: Regional manifest unavailable (HTTP 401)").fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithText("Delete")[0].assertIsEnabled()
+        compose.onAllNodesWithText("Re-download")[0].assertIsEnabled()
+        assertEquals(2,RegionalPackStore(context).installed().size)
+    }
 }

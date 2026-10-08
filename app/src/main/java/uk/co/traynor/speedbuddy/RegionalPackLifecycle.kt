@@ -27,7 +27,7 @@ internal class RegionalPackLifecycle(private val context: Context, private val c
     fun catalogue(): List<RegionalPackDescriptor> = requestText("https://api.jtwebsolutions.co.uk/speedbuddy/v1/regions").let(RegionalRoadCatalogue::parse)
         .filter { it.id in supportedRegions }
     fun download(descriptor: RegionalPackDescriptor, onProgress: (DownloadProgress) -> Unit = {}): RegionalPackStore.Installed = store.downloading(descriptor.id) { revision ->
-        RegionalPackManifest.verify(requestText(descriptor.manifestUrl),descriptor)
+        RegionalPackManifest.verify(requestText(descriptor.manifestUrl,"Regional manifest"),descriptor)
         val staging=store.temporaryDownload()
         try {
             val token=credential()?.takeIf(String::isNotBlank) ?: error("Sign in to download regional road data")
@@ -54,12 +54,12 @@ internal class RegionalPackLifecycle(private val context: Context, private val c
     }
     fun delete(region: String)=store.delete(region)
     fun storedBytes()=store.storedBytes()
-    private fun requestText(url: String): String {
+    private fun requestText(url: String, operation: String="Regional catalogue"): String {
         val token=credential()?.takeIf(String::isNotBlank) ?: error("Sign in to check regional road data")
         val connection=open(URL(url))
         try { connection.instanceFollowRedirects=false;connection.requestMethod="GET";connection.connectTimeout=10_000;connection.readTimeout=15_000
             connection.setRequestProperty("Authorization","Bearer $token")
-            require(connection.responseCode in 200..299) { "Regional catalogue unavailable (HTTP ${connection.responseCode})" }
+            require(connection.responseCode in 200..299) { "$operation unavailable (HTTP ${connection.responseCode})" }
             return connection.inputStream.bufferedReader().use { it.readText() }
         } finally { connection.disconnect() }
     }
