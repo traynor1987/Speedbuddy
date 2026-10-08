@@ -50,6 +50,15 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
             LiveRoadState(RoadProviderState.ROAD_MATCH_UNCERTAIN,false,null,false,error="Live road identity does not agree with fresh local geometry")
         }
         val resolved=RoadProviderResolver.resolveProviderStates(null,regionalState,cached,safeLive)
+        if(resolved.source==RoadSource.LIVE && resolved.state==RoadProviderState.ROAD_MATCH_UNCERTAIN) {
+            // Conflicting identities cannot authorize owner rules, assumed continuity or geometry-dependent alerts.
+            engine.reset();matcher.reset();preview=null;previousWayDirection=null
+            val reason=safeLive?.error ?: "Live road selection uncertain"
+            return DriveLimitResult(fix,null,null,LimitDecision(null,reason="Unavailable: $reason"),null,
+                contextualRoads,false,RoadDataDiagnostics("Live server",resolved.state.name,
+                    when(regional?.coverage) { true -> "Covered";false -> "Not covered";null -> "Not established" },
+                    sampleElapsedMs=fix.elapsedMs,error=reason,contextComplete=false))
+        }
         val source=resolved.limitMph
         val direction=road?.takeIf { it.confidence>=.7 && fix.accuracyM<=20 &&
             (it.headingDifference ?: 90.0)<=30 }?.let { WayTravelDirection.from(it,fix.bearing) }

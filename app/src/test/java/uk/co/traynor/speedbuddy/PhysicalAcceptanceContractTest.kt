@@ -99,4 +99,17 @@ class PhysicalAcceptanceContractTest {
         assertTrue(RegionalRefreshPolicy.permitsAfterLive(absent,LiveRoadState(RoadProviderState.SERVICE_UNAVAILABLE,false,null,true)))
         assertFalse(RegionalRefreshPolicy.permitsAfterLive(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,LiveRoadState(RoadProviderState.SERVICE_UNAVAILABLE,false,null,true)))
     }
+
+    @Test fun contradictoryLiveIdentityClearsOwnerAndPriorAssumptionsImmediately() {
+        val p=GeoPoint(53.0,-2.0)
+        val road=Road("way/123","Test",listOf(p,Geo.ahead(p,0.0,1000.0)),mapOf("highway" to "primary","maxspeed" to "30 mph"))
+        val f=Fix(Geo.ahead(p,0.0,100.0),5.0,10.0,1.0,0.0,1000)
+        val pipeline=DrivingLimitPipeline()
+        assertEquals(30,pipeline.evaluate(f,listOf(road),emptyList(),emptyMap(),emptyList(),emptyList(),1000,10000).decision.mph)
+        val conflict=pipeline.evaluate(f.copy(elapsedMs=1500),listOf(road),listOf(RoadDb.Override(road.id,0.0,20)),emptyMap(),emptyList(),emptyList(),1500,10500,
+            live=LiveRoadState(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,true,40,false,"way/999"))
+        assertNull(conflict.decision.mph);assertNull(conflict.road)
+        assertFalse(conflict.decision.assumed);assertFalse(conflict.decision.ownerApplied)
+        assertFalse(conflict.geometryComplete)
+    }
 }
