@@ -152,4 +152,16 @@ class RoadDbTest {
             assertEquals(40,it.overrideFor(road.id,0.0))
         }
     }
+    @Test fun cleanupUsesAQueryApiForIncrementalVacuumAndKeepsTheSavedTile() {
+        context.deleteDatabase("road-cleanup-query-api.db")
+        RoadDb(context,"road-cleanup-query-api.db").use { db ->
+            db.replace(RoadTileData(tile,1000,listOf(road),emptyList()))
+            // Android 15 rejects PRAGMA incremental_vacuum through execSQL with
+            // “Queries can be performed using SQLiteDatabase query or rawQuery”.
+            // The real maintenance path must complete through rawQuery instead.
+            db.cleanup(setOf(tile),maxTiles=1)
+            assertEquals(road.id,db.nearby(point).roads.single().road.id)
+        }
+        context.deleteDatabase("road-cleanup-query-api.db")
+    }
 }

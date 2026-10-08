@@ -245,4 +245,13 @@ class CoreTest {
         assertEquals(30, stable.resolve(start, RoadMatch(road, 18.0, 55.0, .2), null, 2000,
             listOf(road)))
     }
+    @Test fun stationarySpatialMatchNeedsOneClearlyBestRoadButNoHeading() {
+        val stationary=fix(53.005).copy(accuracyM=4.0,speedMps=0.0,bearing=null)
+        assertEquals("way/1",RoadMatcher().match(stationary,listOf(road))?.road?.id)
+        val parallel=road.copy(id="way/parallel",points=road.points.map { it.copy(lon=it.lon+.00004) })
+        assertNull(RoadMatcher().match(stationary,listOf(road,parallel)))
+        val junction=Road("way/junction","Side road",listOf(GeoPoint(53.005,-2.0),GeoPoint(53.005,-1.9995)),road.tags)
+        assertNull(RoadMatcher().match(stationary,listOf(road,junction)))
+        assertEquals("way/1",RoadMatcher().match(stationary.copy(speedMps=2.0,bearing=0.0),listOf(road,junction))?.road?.id)
+    }
 }
