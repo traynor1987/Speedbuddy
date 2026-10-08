@@ -145,7 +145,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
             if((count>maxTiles || bytes>maxBytes) && region !in protected && parent !in protected) { deleteTile(db,id);count--;bytes-=size }
         };db.setTransactionSuccessful() }
         finally { db.endTransaction() }
-        db.execSQL("PRAGMA incremental_vacuum(2048)")
+        db.rawQuery("PRAGMA incremental_vacuum(2048)",null).use { }
     }
     data class Override(val road: String,val bearing: Double,val mph: Int,val sourceMph: Int? = null,
         val point: GeoPoint? = null,val recordedAt: Long = 0,val accuracy: Double? = null)

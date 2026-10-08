@@ -24,9 +24,10 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
             LimitDecision(null,reason="Unavailable: stale GPS fix; decision history unchanged"),null)
         // A covered regional pack is authoritative even when it says Unknown or uncertain.
         // Legacy cache is only considered when no usable regional provider participated.
-        val road=regional?.match ?: matcher.match(fix,roads)
+        val contextualRoads=(roads+regional?.candidates.orEmpty()).distinctBy { it.id }
+        val road=regional?.match ?: matcher.match(fix,contextualRoads)
         val regionalState=regional?.let { result -> LiveRoadState(result.state,result.match!=null,
-            if(result.state==RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN) result.match?.let { PackSpeedLimits.mph(it.road.tags,fix.bearing ?: return@let null,it) } else null,
+            if(result.state==RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN) result.match?.let { PackSpeedLimits.mph(it.road.tags,fix.bearing,it) } else null,
             result.state.permitsOverpass) }
         val cached=if(regionalState==null || regionalState.state in setOf(RoadProviderState.COVERAGE_UNAVAILABLE,RoadProviderState.SERVICE_UNAVAILABLE)) limits.limit(road) else null
         // Owner corrections remain inside LimitDecisionEngine; this resolver selects
@@ -36,7 +37,7 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
         val decision=engine.decide(fix,road,source,owner?.mph,boundaries,now,observations,wallNow).let {
             if(owner?.national==true) it.copy(national=true) else it
         }
-        val corrected=roads.map { corrections[it.id]?.apply(it) ?: it }
+        val corrected=contextualRoads.map { corrections[it.id]?.apply(it) ?: it }
         val detected=decision.upcoming ?: upcomingDetector.detect(fix,road,decision.mph,corrected)
         val prior=preview
         val upcoming=detected ?: prior?.takeIf {

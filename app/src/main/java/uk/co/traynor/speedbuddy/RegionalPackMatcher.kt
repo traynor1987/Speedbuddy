@@ -12,10 +12,12 @@ internal class RegionalPackMatcher(context: Context) {
     private val packs = RegionalPackStore(context)
     private val matcher = RoadMatcher()
 
-    data class Result(val state: RoadProviderState, val match: RoadMatch?, val generation: String? = null)
+    /** Candidates are context for bounded continuity only; they never bypass authority. */
+    data class Result(val state: RoadProviderState, val match: RoadMatch?, val generation: String? = null, val candidates: List<Road> = emptyList())
 
     fun match(fix: Fix): Result {
-        if (fix.accuracyM !in 1.0..25.0 || fix.speedMps?.let { it < 2.0 } == true || fix.bearing?.let { it in 0.0..<360.0 } != true)
+        // Accurate stationary fixes are valid spatial evidence; RoadMatcher rejects ambiguity.
+        if (fix.accuracyM !in 1.0..25.0)
             return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN, null)
         val databases = packs.activeDatabases()
         if (databases.isEmpty()) return Result(RoadProviderState.COVERAGE_UNAVAILABLE, null)
@@ -31,12 +33,11 @@ internal class RegionalPackMatcher(context: Context) {
             }
         }
         if (!covered) return Result(RoadProviderState.COVERAGE_UNAVAILABLE, null)
-        if (candidates.size > 64) return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN, null)
-        val match = matcher.match(fix, candidates.distinctBy { it.id })
-            ?: return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN, null)
-        val limit = PackSpeedLimits.mph(match.road.tags, fix.bearing!!, match)
-        return Result(if (limit == null) RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN else RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,
-            match, generation)
+        val unique=candidates.distinctBy { it.id }
+        if (unique.size > 64) return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN, null, generation)
+        val match = matcher.match(fix, unique) ?: return Result(RoadProviderState.ROAD_MATCH_UNCERTAIN, null, generation, unique)
+        val limit = PackSpeedLimits.mph(match.road.tags, fix.bearing, match)
+        return Result(if (limit == null) RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN else RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN, match, generation, unique)
     }
 
     private fun roadsNear(db: SQLiteDatabase, fix: Fix): List<Road> {
@@ -72,8 +73,9 @@ internal class RegionalPackMatcher(context: Context) {
 }
 
 internal object PackSpeedLimits {
-    fun mph(tags: Map<String,String>, bearing: Double, match: RoadMatch): Int? {
+    fun mph(tags: Map<String,String>, bearing: Double?, match: RoadMatch): Int? {
         if (listOf("maxspeed:conditional","maxspeed:variable","maxspeed:lanes").any(tags::containsKey)) return null
+        if (bearing == null && ("maxspeed:forward" in tags || "maxspeed:backward" in tags)) return null
         val forward = match.headingDifference?.let { it <= 45.0 } == true
         val key = if (forward) "maxspeed:forward" else "maxspeed:backward"
         return parse(tags[key] ?: tags["maxspeed"])

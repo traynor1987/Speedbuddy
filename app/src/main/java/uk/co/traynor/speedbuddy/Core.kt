@@ -112,7 +112,8 @@ class RoadLimitStabilizer {
             if (limit != null) {
                 val prior = lastMatch
                 if(prior==null && (match.confidence<.7 || fix.accuracyM>20 ||
-                    (match.headingDifference ?: 90.0)>30 || fix.bearing==null)) return null
+                    (fix.bearing != null && (match.headingDifference ?: 90.0)>30) ||
+                    (fix.bearing == null && (fix.accuracyM>8 || match.distanceM>fix.accuracyM || match.confidence<.85)))) return null
                 if (prior != null && lastLimit != limit) {
                     val candidate = "${match.road.id}|$limit"
                     if (candidateId != candidate) { candidateId = candidate; candidateSince = nowMs; candidateCount = 0 }
