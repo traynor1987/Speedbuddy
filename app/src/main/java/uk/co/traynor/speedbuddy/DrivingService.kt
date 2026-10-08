@@ -197,7 +197,7 @@ class DrivingService : Service(), LocationListener {
                 val now = SystemClock.elapsedRealtime()
                 DriveBus.set(current.copy(roadDataStatus = roadStatus(now), tooEarlyAvailable = limitEngine.canReport(now),boundaryAvailable=limitEngine.canMarkBoundary(now),
                     correctionMessage=feedbackMessage.takeIf { now-feedbackAt in 0..6000 } ?: ""))
-                current.fix?.takeIf { now-it.elapsedMs in 0..5000 }?.let { refresh(it) }
+                current.fix?.takeIf { now-it.elapsedMs in 0..5000 && RegionalRefreshPolicy.permitsLegacyRefresh(regional.state) }?.let { refresh(it) }
             } }
         }
         DriveBus.set(DriveBus.state.value.copy(active = true, status = "Waiting for GPS"))
@@ -295,7 +295,7 @@ class DrivingService : Service(), LocationListener {
                 val cameraLimit=alert?.let { CameraLimits.resolve(it.camera,road,alertLimit) }
                 val cameraCoversSpeeding=cameraLimit!=null && speed!=null && speed>cameraLimit+tolerance.coerceAtLeast(0)
                 if(overspeedSignal && !cameraCoversSpeeding && warning?.doubleBeep!=true) signal(true,settings.getBoolean("vibrate",true))
-                refresh(fix)
+                if (RegionalRefreshPolicy.permitsLegacyRefresh(regional.state)) refresh(fix)
             } catch(e: Exception) {
                 if(e is CancellationException) throw e
                 Log.e("SpeedBuddy","Local road decision failed",e)
