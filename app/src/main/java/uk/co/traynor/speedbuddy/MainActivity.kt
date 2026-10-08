@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
@@ -680,12 +681,27 @@ class MainActivity : ComponentActivity() {
     }
 }
 @Composable private fun OfflineRoadDataScreen(context: Context, back: () -> Unit) {
-    val scope=rememberCoroutineScope(); val lifecycle=remember { RegionalPackLifecycle(context,credential = { context.getSharedPreferences("settings",Context.MODE_PRIVATE).getString("speedBuddyCredential",null) }) }
+    val scope=rememberCoroutineScope(); val access=remember { RegionalRoadDataAccess(context) }
+    val lifecycle=remember { RegionalPackLifecycle(context,credential = access::credential) }
     var catalogue by remember { mutableStateOf<List<RegionalPackDescriptor>>(emptyList()) }
     var installed by remember { mutableStateOf(lifecycle.installed()) }; var message by remember { mutableStateOf("Checking the production catalogue…") }
-    LaunchedEffect(Unit) { runCatching { withContext(Dispatchers.IO) { lifecycle.catalogue() } }.onSuccess { catalogue=it;message="" }.onFailure { message=it.message ?: "Catalogue unavailable" } }
+    var configured by remember { mutableStateOf(access.credential()!=null) }
+    var credentialInput by rememberSaveable { mutableStateOf("") }
+    var catalogueRevision by remember { mutableIntStateOf(0) }
+    LaunchedEffect(catalogueRevision) { runCatching { withContext(Dispatchers.IO) { lifecycle.catalogue() } }.onSuccess { catalogue=it;message="" }.onFailure { message=it.message ?: "Catalogue unavailable" } }
     Page("Offline Road Data",back) { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom=24.dp)) {
         Text("Verified regional packs",color=Muted,modifier=Modifier.padding(16.dp),fontSize=14.sp)
+        Surface(shape=RoundedCornerShape(20.dp),color=Panel,modifier=Modifier.padding(horizontal=16.dp,vertical=6.dp)) { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("Regional road data access",color=Ink,fontSize=18.sp,fontWeight=FontWeight.SemiBold)
+            if(configured) {
+                Text("Access is configured on this device. It is used only for Speed Buddy regional packs and live road-state requests.",color=Muted,fontSize=13.sp)
+                TextButton(onClick={ access.clear();configured=false;catalogue=emptyList();message="Regional road data access removed." }) { Text("Remove access") }
+            } else {
+                Text("Enter the access token provided for your Speed Buddy regional road data. It stays in this app’s private storage and is never shown here.",color=Muted,fontSize=13.sp)
+                OutlinedTextField(value=credentialInput,onValueChange={ credentialInput=it },singleLine=true,label={ Text("Access token") },visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),modifier=Modifier.fillMaxWidth())
+                Button(onClick={ runCatching { access.save(credentialInput) }.onSuccess { credentialInput="";configured=true;message="Checking the production catalogue…";catalogueRevision++ }.onFailure { message=it.message ?: "Could not save access token" } }) { Text("Save and check packs") }
+            }
+        } }
         if(message.isNotBlank()) Text(message,color=Muted,modifier=Modifier.padding(horizontal=16.dp,vertical=8.dp))
         catalogue.forEach { pack ->
             val current=installed.firstOrNull { it.descriptor.id==pack.id }
