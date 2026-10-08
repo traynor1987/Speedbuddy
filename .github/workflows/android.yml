@@ -133,6 +133,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          DIAGNOSTIC_BUILD: ${{ contains(github.event.head_commit.message, '[diagnostic apk]') }}
         run: |
           # Validation jobs for this push have passed; also require the independent PR run.
           for attempt in $(seq 1 80); do
@@ -147,7 +148,21 @@ jobs:
           test "$(gh api "repos/$GH_REPO/git/ref/heads/feat/regional-offline-road-data-0.4.0" --jq .object.sha)" = "$SPEED_BUDDY_SOURCE_SHA"
           tag="v0.4.0-regional-offline-${SPEED_BUDDY_SOURCE_SHA:0:12}"
           python3 scripts/render_acceptance_notes.py --source-sha "$SPEED_BUDDY_SOURCE_SHA" --output "$RUNNER_TEMP/speedbuddy-acceptance-notes.md"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --target "$SPEED_BUDDY_SOURCE_SHA" --prerelease --title 'Speed Buddy 0.4.0 — Regional offline road data' --notes-file "$RUNNER_TEMP/speedbuddy-acceptance-notes.md"
+          title='Speed Buddy 0.4.0 — Regional offline road data'
+          apk=acceptance/SpeedBuddy-0.4.0-owner-acceptance.apk
+          if [ "$DIAGNOSTIC_BUILD" = true ]; then
+            tag="v0.4.0-diagnostic-${SPEED_BUDDY_SOURCE_SHA:0:12}"
+            title='Speed Buddy 0.4.0 — DIAGNOSTIC ONLY — physical acceptance failed'
+            apk=acceptance/SpeedBuddy-0.4.0-diagnostic.apk
+            cp acceptance/SpeedBuddy-0.4.0-owner-acceptance.apk "$apk"
+            python3 - <<'PYNOTES'
+          import os
+          from pathlib import Path
+          notes = Path(os.environ['RUNNER_TEMP']) / 'speedbuddy-acceptance-notes.md'
+          notes.write_text('Exact source commit: `' + os.environ['SPEED_BUDDY_SOURCE_SHA'] + '`\n\n' + Path('docs/DIAGNOSTIC_APK.md').read_text())
+          PYNOTES
           fi
-          gh release upload "$tag" acceptance/SpeedBuddy-0.4.0-owner-acceptance.apk acceptance/owner-build.json --clobber
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$SPEED_BUDDY_SOURCE_SHA" --prerelease --title "$title" --notes-file "$RUNNER_TEMP/speedbuddy-acceptance-notes.md"
+          fi
+          gh release upload "$tag" "$apk" acceptance/owner-build.json --clobber
