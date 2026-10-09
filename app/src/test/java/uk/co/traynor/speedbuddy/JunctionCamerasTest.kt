@@ -66,10 +66,10 @@ class JunctionCamerasTest {
     }
 
     @Test fun speechNamesTheJunctionAndKeepsTypeAndEnforcedLimit() {
-        assertEquals("Warning, speeding. Red light and speed camera ahead at Fiveways junction. Speed limit 30 miles per hour.",
+        assertEquals("Warning, speeding. Red light and speed camera ahead at Fiveways junction. Camera limit 30 miles per hour.",
             CameraAnnouncement.text(camera("first"),30,true))
         val named=camera("second").copy(junction=junction.copy(name="Fiveways Junction"))
-        assertEquals("Red light and speed camera ahead at Fiveways Junction. Speed limit 30 miles per hour.",
+        assertEquals("Red light and speed camera ahead at Fiveways Junction. Camera limit 30 miles per hour.",
             CameraAnnouncement.text(named,30))
     }
 

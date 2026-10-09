@@ -8,6 +8,10 @@ The owner physically downloaded and installed Lancashire and Merseyside producti
 
 ## Diagnostic checks
 
+### Audio and display correlation
+
+Numeric speech now appears in the existing recorder with its category, evidence source and age, originating GPS generation, scheduling display, observed playback display and cancellation/result. Camera-specific numeric speech says **“Camera limit…”**. Current-road speech is cancelled when a newer publication invalidates it and checked again at TTS start; a fresh confirmed legal limit remains eligible for immediate display. See `docs/AUDIO_DISPLAY_CORRECTIONS.md` for established code causes and the limits of the evidence. During the owner retest, export the report promptly after any numeric speech with an Unknown sign; the report can distinguish a camera event from stale current-road speech. Actual handset playback and physical acceptance remain pending.
+
 ### Capture rapid changes
 
 This build adds **Road Decision Monitor** to Diagnostics. It records up to 500 meaningful events in memory before StateFlow or rendering can skip intermediate publications. Separate GPS, regional-match, pipeline-evidence, presentation and publication stages have monotonic timestamps, sequence/fix identifiers, previous/new state, matching confidence and privacy-safe reasons. An unevaluated stage is explicitly marked; it is not an Unknown road decision.

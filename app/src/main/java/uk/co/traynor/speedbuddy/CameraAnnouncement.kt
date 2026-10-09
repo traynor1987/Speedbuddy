@@ -23,7 +23,7 @@ object CameraAnnouncement {
             cameraPhrase.removeSuffix(".") + " at $name."
         } ?: cameraPhrase
         val limit = camera.enforcedMph ?: matchedRoadLimitMph
-        val message = if (limit != null && limit > 0) "$prefix Speed limit $limit miles per hour." else prefix
+        val message = if (limit != null && limit > 0) "$prefix Camera limit $limit miles per hour." else prefix
         return if (speeding && limit != null && limit > 0) "Warning, speeding. $message" else message
     }
 }

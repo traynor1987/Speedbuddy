@@ -32,9 +32,18 @@ class CameraVoice(context: Context, private val fallbackBeep: () -> Unit) {
     private var failed = false
     private var closed = false
     private var pending: QueuedCameraSpeech? = null
+    private var activeTicket: FlightSpeechTicket?=null
+    private var activeSubmittedAtMs=0L
+    private var activePlaybackStarted=false
+    private var delayedTicket: FlightSpeechTicket?=null
+    private val knownUtterances=linkedMapOf<String,FlightSpeechTicket>()
+    private fun receipt(ticket: FlightSpeechTicket?,outcome: SpeechOutcome) {
+        if(ticket!=null) RoadDecisionFlight.recorder.speech(ticket,outcome,DriveBus.state.value,SystemClock.elapsedRealtime())
+    }
     private val pendingTimeout = Runnable {
         val queued = pending
         pending = null
+        receipt(queued?.ticket,SpeechOutcome.EXPIRED)
         if (queued != null && !queued.alreadyBeeped && queued.relevant() && queued.voiceAllowed()) fallbackBeep()
     }
     private var utteranceId = 0L
@@ -63,7 +72,7 @@ class CameraVoice(context: Context, private val fallbackBeep: () -> Unit) {
                         if (language != TextToSpeech.LANG_MISSING_DATA && language != TextToSpeech.LANG_NOT_SUPPORTED) {
                             tts.setAudioAttributes(audioAttributes)
                             tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                                override fun onStart(utteranceId: String?) = Unit
+                                override fun onStart(utteranceId: String?) { main.post { beginUtterance(utteranceId) } }
                                 override fun onDone(utteranceId: String?) {
                                     main.post { finishUtterance(utteranceId) }
                                 }
@@ -71,7 +80,7 @@ class CameraVoice(context: Context, private val fallbackBeep: () -> Unit) {
                                     main.post { failUtterance(utteranceId) }
                                 }
                                 override fun onStop(utteranceId: String?, interrupted: Boolean) {
-                                    main.post { finishUtterance(utteranceId) }
+                                    main.post { finishUtterance(utteranceId,SpeechOutcome.STOPPED) }
                                 }
                             })
                             ready = true
@@ -91,21 +100,29 @@ class CameraVoice(context: Context, private val fallbackBeep: () -> Unit) {
 
     fun say(text: String) = play(CameraAudioCue(text, false))
 
-    fun play(cue: CameraAudioCue, relevant: () -> Boolean = { true }, voiceAllowed: () -> Boolean = { true }) {
-        if (closed) return
-        if (!relevant()) return
+    fun play(cue: CameraAudioCue, relevant: () -> Boolean = { true }, voiceAllowed: () -> Boolean = { true }) =
+        playTracked(cue,relevant,voiceAllowed,null)
+
+    internal fun playTracked(cue: CameraAudioCue,relevant: () -> Boolean,voiceAllowed: () -> Boolean,ticket: FlightSpeechTicket?) {
+        val tracked=ticket ?: cue.numericLimit?.takeIf { cue.speech!=null }?.let { mph ->
+            RoadDecisionFlight.recorder.scheduleSpeech(cue.category ?: LimitSpeechCategory.CAMERA,mph,
+                cue.evidenceSource ?: LimitSpeechSource.OTHER,DriveBus.state.value,SystemClock.elapsedRealtime())
+        }
+        if (closed) { receipt(tracked,SpeechOutcome.CLOSED);return }
+        if (!relevant()) { receipt(tracked,SpeechOutcome.CANCELLED_INVALID);return }
         if (cue.speech == null && !cue.doubleBeep) return
         // A new spoken warning supersedes old speech; a proximity beep does not cut it off.
-        if (cue.speech != null) cancelAudio()
-        if (!requestFocus()) { fallbackBeep(); return }
+        if (cue.speech != null) cancelAudio(SpeechOutcome.SUPERSEDED)
+        if (!requestFocus()) { receipt(tracked,SpeechOutcome.FOCUS_DENIED);fallbackBeep(); return }
         if (cue.doubleBeep) {
-            releaseTone()
+            receipt(delayedTicket,SpeechOutcome.SUPERSEDED)
+            releaseTone();delayedTicket=tracked
             try {
                 tone = ToneGenerator(AudioManager.STREAM_MUSIC, 75)
                 beepRelevant = relevant
                 var beepPlayed = tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 160) == true
                 main.postAtTime({
-                    if (!relevant()) { releaseTone(); if (activeUtterance == null) releaseFocus() }
+                    if (!relevant()) { receipt(delayedTicket,SpeechOutcome.CANCELLED_INVALID);delayedTicket=null;releaseTone(); if (activeUtterance == null) releaseFocus() }
                     else {
                         val played = runCatching { tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 160) == true }
                             .onFailure { Log.w("SpeedBuddy", "Second camera beep unavailable", it) }.getOrDefault(false)
@@ -113,18 +130,18 @@ class CameraVoice(context: Context, private val fallbackBeep: () -> Unit) {
                     }
                 }, beepToken, SystemClock.uptimeMillis() + 270)
                 main.postAtTime({
-                    releaseTone()
-                    if (cue.speech != null) speakNow(cue.speech, beepPlayed, relevant, voiceAllowed)
+                    delayedTicket=null;releaseTone()
+                    if (cue.speech != null) speakNow(cue.speech, beepPlayed, relevant, voiceAllowed,tracked)
                     else if (!beepPlayed && relevant()) { fallbackBeep(); if (activeUtterance == null) releaseFocus() }
                     else if (activeUtterance == null) releaseFocus()
                 }, beepToken, SystemClock.uptimeMillis() + 500)
             } catch (error: Exception) {
                 Log.w("SpeedBuddy", "Double camera beep unavailable", error)
-                releaseTone()
-                if (cue.speech != null) speakNow(cue.speech, false, relevant, voiceAllowed)
+                delayedTicket=null;releaseTone()
+                if (cue.speech != null) speakNow(cue.speech, false, relevant, voiceAllowed,tracked)
                 else { fallbackBeep(); if (activeUtterance == null) releaseFocus() }
             }
-        } else if (cue.speech != null) speakNow(cue.speech, false, relevant, voiceAllowed)
+        } else if (cue.speech != null) speakNow(cue.speech, false, relevant, voiceAllowed,tracked)
     }
 
     private fun requestFocus(): Boolean {
@@ -140,39 +157,52 @@ class CameraVoice(context: Context, private val fallbackBeep: () -> Unit) {
     }
 
     private fun speakNow(text: String, alreadyBeeped: Boolean = false,
-        relevant: () -> Boolean = { true }, voiceAllowed: () -> Boolean = { true }) {
-        if (closed) return
-        if (!relevant() || !voiceAllowed()) { if (tone == null && activeUtterance == null) releaseFocus(); return }
+        relevant: () -> Boolean = { true }, voiceAllowed: () -> Boolean = { true },ticket: FlightSpeechTicket?=null) {
+        if (closed) { receipt(ticket,SpeechOutcome.CLOSED);return }
+        if (!relevant() || !voiceAllowed()) { receipt(ticket,if(voiceAllowed()) SpeechOutcome.CANCELLED_INVALID else SpeechOutcome.MUTED);if (tone == null && activeUtterance == null) releaseFocus(); return }
         if (!ready && !failed) {
-            pending = QueuedCameraSpeech(text, SystemClock.elapsedRealtime(), alreadyBeeped, relevant, voiceAllowed)
+            pending = QueuedCameraSpeech(text, SystemClock.elapsedRealtime(), alreadyBeeped, relevant, voiceAllowed,ticket)
             main.removeCallbacks(pendingTimeout)
             main.postDelayed(pendingTimeout, 10_000)
             if (tone == null && activeUtterance == null) releaseFocus()
             return
         }
         if (failed) {
+            receipt(ticket,SpeechOutcome.FAILED)
             if (!alreadyBeeped) fallbackBeep()
             releaseFocus(); return
         }
-        if (!requestFocus()) { if (!alreadyBeeped) fallbackBeep(); return }
+        if (!requestFocus()) { receipt(ticket,SpeechOutcome.FOCUS_DENIED);if (!alreadyBeeped) fallbackBeep(); return }
         val id = "camera-${++utteranceId}"
         activeUtterance = id
+        activeTicket=ticket;activeSubmittedAtMs=SystemClock.elapsedRealtime();activePlaybackStarted=false
+        if(ticket!=null) { knownUtterances[id]=ticket;if(knownUtterances.size>32) knownUtterances.remove(knownUtterances.keys.first()) }
+        receipt(ticket,SpeechOutcome.SUBMITTED)
         activeHadBeep = alreadyBeeped
         activeRelevant = relevant
         activeVoiceAllowed = voiceAllowed
         val result = runCatching {
             engine?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
         }.onFailure { Log.w("SpeedBuddy", "Camera speech unavailable", it) }.getOrNull()
-        if (result != TextToSpeech.SUCCESS) { finishUtterance(id); if (!alreadyBeeped) fallbackBeep() }
+        if (result != TextToSpeech.SUCCESS) { finishUtterance(id,SpeechOutcome.FAILED); if (!alreadyBeeped) fallbackBeep() }
     }
 
     private fun failUtterance(id: String?) {
         val allowed=!closed && !activeHadBeep && activeRelevant() && activeVoiceAllowed()
-        if(finishUtterance(id) && allowed) fallbackBeep()
+        if(finishUtterance(id,SpeechOutcome.FAILED) && allowed) fallbackBeep()
     }
 
-    private fun finishUtterance(id: String?): Boolean {
+    private fun beginUtterance(id: String?) {
+        if(id==null || id!=activeUtterance) { receipt(knownUtterances[id],SpeechOutcome.LATE_START_REJECTED);return }
+        if(closed || !activeRelevant() || !activeVoiceAllowed() || !activePlaybackStarted && SystemClock.elapsedRealtime()-activeSubmittedAtMs !in 0..10_000) {
+            cancelAudio(if(!activeVoiceAllowed()) SpeechOutcome.MUTED else SpeechOutcome.CANCELLED_INVALID);return
+        }
+        activePlaybackStarted=true;receipt(activeTicket,SpeechOutcome.PLAYBACK_STARTED)
+    }
+    private fun finishUtterance(id: String?): Boolean=finishUtterance(id,SpeechOutcome.COMPLETED)
+    private fun finishUtterance(id: String?,outcome: SpeechOutcome): Boolean {
         if (id == null || id != activeUtterance) return false
+        receipt(activeTicket,outcome);activeTicket=null
         activeUtterance = null
         if (tone == null) releaseFocus()
         return true
@@ -198,21 +228,25 @@ class CameraVoice(context: Context, private val fallbackBeep: () -> Unit) {
         pending = null
         main.removeCallbacks(pendingTimeout)
         if (queued?.playableAt(SystemClock.elapsedRealtime()) == true)
-            speakNow(queued.text, queued.alreadyBeeped, queued.relevant, queued.voiceAllowed)
+            speakNow(queued.text, queued.alreadyBeeped, queued.relevant, queued.voiceAllowed,queued.ticket)
+        else if(queued!=null) receipt(queued.ticket,SpeechOutcome.CANCELLED_INVALID)
     }
 
-    fun revalidate() {
-        if (pending?.playableAt(SystemClock.elapsedRealtime()) == false) {
-            pending = null; main.removeCallbacks(pendingTimeout)
+    fun revalidate(currentRoadOnly: Boolean=false) {
+        if ((!currentRoadOnly || pending?.ticket?.category==LimitSpeechCategory.CURRENT) && pending?.playableAt(SystemClock.elapsedRealtime()) == false) {
+            receipt(pending?.ticket,SpeechOutcome.CANCELLED_INVALID);pending = null; main.removeCallbacks(pendingTimeout)
         }
-        if (activeUtterance != null && (!activeRelevant() || !activeVoiceAllowed())) {
-            activeUtterance = null; engine?.stop()
+        if ((!currentRoadOnly || activeTicket?.category==LimitSpeechCategory.CURRENT) && activeUtterance != null && (!activeRelevant() || !activeVoiceAllowed() || !activePlaybackStarted && SystemClock.elapsedRealtime()-activeSubmittedAtMs !in 0..10_000)) {
+            receipt(activeTicket,if(activeVoiceAllowed()) SpeechOutcome.CANCELLED_INVALID else SpeechOutcome.MUTED)
+            activeTicket=null;activeUtterance = null; engine?.stop()
         }
-        if (tone != null && !beepRelevant()) releaseTone()
+        if ((!currentRoadOnly || delayedTicket?.category==LimitSpeechCategory.CURRENT) && tone != null && !beepRelevant()) { receipt(delayedTicket,SpeechOutcome.CANCELLED_INVALID);delayedTicket=null;releaseTone() }
         if (tone == null && activeUtterance == null) releaseFocus()
     }
 
-    private fun cancelAudio() {
+    private fun cancelAudio(outcome: SpeechOutcome=SpeechOutcome.STOPPED) {
+        receipt(pending?.ticket,outcome);receipt(activeTicket,outcome);receipt(delayedTicket,outcome)
+        activeTicket=null;delayedTicket=null
         pending = null
         main.removeCallbacks(pendingTimeout)
         activeUtterance = null
@@ -223,7 +257,8 @@ class CameraVoice(context: Context, private val fallbackBeep: () -> Unit) {
 
     fun close() {
         closed = true
-        cancelAudio()
+        cancelAudio(SpeechOutcome.CLOSED)
+        knownUtterances.clear()
         engine?.shutdown()
         engine = null
     }

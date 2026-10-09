@@ -44,6 +44,9 @@ data class DriveState(
 object DriveBus {
     private val mutable = MutableStateFlow(DriveState())
     val state = mutable.asStateFlow()
+    private val publicationListeners=mutableSetOf<(DriveState)->Unit>()
+    @Synchronized internal fun addPublicationListener(listener: (DriveState)->Unit) { publicationListeners.add(listener) }
+    @Synchronized internal fun removePublicationListener(listener: (DriveState)->Unit) { publicationListeners.remove(listener) }
     @Synchronized internal fun freezeDiagnostics() {
         DiagnosticsInspection.freeze(mutable.value,RoadDecisionFlight.recorder.snapshot(),SystemClock.elapsedRealtime(),System.currentTimeMillis())
     }
@@ -57,6 +60,8 @@ object DriveBus {
         // Capture before StateFlow conflation; no UI collector owns the history.
         RoadDecisionFlight.recorder.record(FlightStage.PUBLISHED,state,cause,SystemClock.elapsedRealtime())
         mutable.value=state
+        // Service-owned audio observes every publication, before UI conflation and without waiting for IO.
+        publicationListeners.toList().forEach { it(state) }
     }
 
     @Synchronized fun expirePending(now: Long) {
@@ -115,7 +120,12 @@ class DrivingService : Service(), LocationListener {
     private val matcher get()=limitPipeline.matcher
     private val limitEngine get()=limitPipeline.engine
     private lateinit var cameraVoice: CameraVoice
-    private val limitVoiceGate = DeferredLimitVoice()
+    private val limitVoiceGate = CurrentRoadVoice()
+    private val voicePublication: (DriveState)->Unit = { state ->
+        limitVoiceGate.onPublication(state,SystemClock.elapsedRealtime())
+        if(Looper.myLooper()==Looper.getMainLooper()) cameraVoice.revalidate(currentRoadOnly=true)
+        else Handler(Looper.getMainLooper()).post { if(!stopped) cameraVoice.revalidate(currentRoadOnly=true) }
+    }
     private val sectionTracker = AverageSectionTracker()
     private val turnDetector = TurnLimitDetector()
     private var cameraRevision = -1L
@@ -174,6 +184,7 @@ class DrivingService : Service(), LocationListener {
         roadRepository=DrivingRoadRepository(roads,OsmDataSource(this)::cachedRegional)
         regionalMatcher=RegionalPackMatcher(this)
         cameraVoice = CameraVoice(this) { signal(true,false) }
+        DriveBus.addPublicationListener(voicePublication)
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -603,10 +614,11 @@ class DrivingService : Service(), LocationListener {
     }
     private fun announceLimitIfReady(settings: android.content.SharedPreferences) {
         val current = DriveBus.state.value
-        val limit = limitVoiceGate.update(current.limitMph.takeUnless { current.limitDecision?.assumed==true }, cameraVoice.busy, settings.getBoolean("limitVoice", true))
-        if (limit != null) cameraVoice.play(CameraAudioCue("Speed limit $limit miles per hour.", false),
-            relevant = { PendingDrivingEvidence.limitSpeechRelevant(DriveBus.state.value,limit,SystemClock.elapsedRealtime()) },
-            voiceAllowed = { settings.getBoolean("limitVoice", true) })
+        val ticket=limitVoiceGate.update(current,SystemClock.elapsedRealtime(),cameraVoice.busy,settings.getBoolean("limitVoice",true))
+        if(ticket!=null) cameraVoice.playTracked(CameraAudioCue("Speed limit ${ticket.mph} miles per hour.",false,
+            ticket.mph,LimitSpeechCategory.CURRENT,ticket.source),
+            relevant={ PendingDrivingEvidence.limitSpeechRelevant(DriveBus.state.value,ticket.mph,SystemClock.elapsedRealtime()) },
+            voiceAllowed={ settings.getBoolean("limitVoice",true) },ticket=ticket)
     }
     private fun cameraEnabled(camera: Camera, settings: android.content.SharedPreferences) = CameraAlertPolicy.enabled(
         camera.type,settings.getBoolean("fixedCamera",true),settings.getBoolean("mobileCamera",true),
@@ -626,7 +638,9 @@ class DrivingService : Service(), LocationListener {
         }.onFailure { Log.w("SpeedBuddy", "Vibration alert unavailable", it) }
     }
     override fun onDestroy() {
-        stopped=true;tick?.cancel();cameraVoice.close();scope.cancel();locationManager.removeUpdates(this)
+        stopped=true;DriveBus.removePublicationListener(voicePublication)
+        limitVoiceGate.close(DriveBus.state.value,SystemClock.elapsedRealtime())
+        tick?.cancel();cameraVoice.close();scope.cancel();locationManager.removeUpdates(this)
         // Blocking HTTP/database work may still be unwinding. Close after all children finish.
         CoroutineScope(Dispatchers.IO).launch { scope.coroutineContext[Job]?.join();db.close();roads.close() }
         DriveBus.set(DriveState(status = stopStatus)); super.onDestroy()

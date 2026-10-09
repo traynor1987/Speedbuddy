@@ -1076,6 +1076,7 @@ class MainActivity : ComponentActivity() {
                 Text("${event.previous?.decision?.label() ?: "No previous state"} → ${event.new.decision.label()}",fontSize=12.sp)
                 Text("Presentation: ${event.new.presentation.label()} · shown ${if(event.new.displayRecorded) event.new.displayedMph ?: "Unknown" else "Not evaluated"}",fontSize=12.sp)
                 Text("${event.cause} · fix ${event.new.fixSequence ?: "—"} · confidence ${event.new.matchConfidence ?: "—"}",fontSize=12.sp)
+                event.speech?.let { speech -> Text("Speech: ${speech.category} · ${speech.mph} mph · ${speech.outcome} · ${speech.source}",fontSize=12.sp) }
                 Text(event.new.decision.reason,color=Muted,fontSize=12.sp)
             } }
         }

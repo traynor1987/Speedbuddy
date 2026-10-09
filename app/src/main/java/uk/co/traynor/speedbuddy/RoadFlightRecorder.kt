@@ -7,7 +7,7 @@ import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.UUID
 
-internal enum class FlightStage { GPS, REGIONAL, DECISION, PRESENTATION, PUBLISHED, REJECTED }
+internal enum class FlightStage { GPS, REGIONAL, DECISION, PRESENTATION, PUBLISHED, REJECTED, SPEECH }
 
 /** A whitelist, not a copy of DriveState: no points, names, tags, credentials or free text. */
 internal data class FlightDecision(val mph: Int?,val status: String,val assumed: Boolean,
@@ -48,13 +48,14 @@ internal data class FlightState(val fixId: Long?,val fixSequence: Long?,val fixA
         presentation.copy(evidenceAgeMs=null,evidenceDistanceM=null),displayedMph)
 }
 internal data class FlightEvent(val sequence: Long,val atMs: Long,val stage: FlightStage,val previous: FlightState?,
-    val new: FlightState,val cause: String,val decisionChanged: Boolean) {
+    val new: FlightState,val cause: String,val decisionChanged: Boolean,val speech: FlightSpeech?=null) {
     fun json()=JSONObject().put("sequence",sequence).put("monotonicMs",atMs).put("stage",stage.name)
         .put("previous",previous?.json() ?: JSONObject.NULL).put("new",new.json()).put("cause",cause).put("decisionChanged",decisionChanged)
+        .put("speech",speech?.json() ?: JSONObject.NULL)
 }
 internal data class FlightHistory(val capturedAtMs: Long,val events: List<FlightEvent>,val current: FlightState?,val previousDecision: FlightState?) {
     fun decisionChanges(now: Long=capturedAtMs)=events.count { it.decisionChanged && now-it.atMs in 0..30_000 }
-    fun report(): String=JSONObject().put("schema","speedbuddy-road-flight-v1").put("capturedMonotonicMs",capturedAtMs)
+    fun report(): String=JSONObject().put("schema","speedbuddy-road-flight-v2").put("capturedMonotonicMs",capturedAtMs)
         .put("retention","Process-local rolling 500 meaningful events; reset on process exit or clear")
         .put("privacy","No precise coordinates, road names, raw road IDs, credentials or personal identifiers; road IDs are session-salted")
         .put("current",current?.json() ?: JSONObject.NULL).put("events",JSONArray(events.map { it.json() })).toString(2)
@@ -69,6 +70,7 @@ internal class RoadFlightRecorder(private val capacity: Int=500,private val cloc
     private val fixIds=linkedMapOf<Long,Long>()
     private var fixSequence=0L
     private var sequence=0L
+    private var speechSequence=0L
     private var lastAt=0L
     private var current: FlightState?=null
     private var previousDecision: FlightState?=null
@@ -84,7 +86,7 @@ internal class RoadFlightRecorder(private val capacity: Int=500,private val cloc
         hashed
     }
     private fun finite(value: Double?)=value?.takeIf { it.isFinite() }
-    @Synchronized fun record(stage: FlightStage,state: DriveState,cause: String,now: Long,generation: String?=null) {
+    private fun capture(stage: FlightStage,state: DriveState,now: Long,generation: String?=null): FlightState {
         val fix=state.fix
         val id=fix?.elapsedMs
         val fixNumber=id?.let { fixIds.getOrPut(it) { ++fixSequence } }
@@ -92,7 +94,7 @@ internal class RoadFlightRecorder(private val capacity: Int=500,private val cloc
         val decisions=stage in setOf(FlightStage.DECISION,FlightStage.PRESENTATION,FlightStage.PUBLISHED)
         val presents=stage in setOf(FlightStage.PRESENTATION,FlightStage.PUBLISHED)
         val unevaluated=FlightDecision(null,"not evaluated",false,false,false,"Not evaluated at this stage",null,null)
-        val next=FlightState(id,fixNumber,fix?.let { now-it.elapsedMs },finite(fix?.speedMps?.times(MPS_TO_MPH)),
+        return FlightState(id,fixNumber,fix?.let { now-it.elapsedMs },finite(fix?.speedMps?.times(MPS_TO_MPH)),
             finite(fix?.accuracyM),fix?.bearing?.let { it.isFinite() && it in 0.0..360.0 }==true,finite(fix?.bearing),
             if(stage in setOf(FlightStage.GPS,FlightStage.REJECTED)) "Not captured at this stage" else state.roadData.provider.takeIf { it in FlightReasons.providers } ?: "Other provider",
             state.roadData.providerState.takeIf { it in FlightReasons.providerStates } ?: "Not evaluated",
@@ -102,6 +104,9 @@ internal class RoadFlightRecorder(private val capacity: Int=500,private val cloc
             state.limitMph.takeIf { presents },id!=null && state.roadDecisionElapsedMs==id,
             FlightReasons.safe(state.roadData.fallbackReason ?: state.roadData.error),decisions,presents,presents,
             finite(state.speedMph),stage in setOf(FlightStage.GPS,FlightStage.PUBLISHED))
+    }
+    @Synchronized fun record(stage: FlightStage,state: DriveState,cause: String,now: Long,generation: String?=null) {
+        val next=capture(stage,state,now,generation)
         val prior=last[stage]
         if(prior?.meaning()==next.meaning()) return
         val changed=stage==FlightStage.PUBLISHED && current!=null && current!!.decisionMeaning()!=next.decisionMeaning()
@@ -109,6 +114,28 @@ internal class RoadFlightRecorder(private val capacity: Int=500,private val cloc
         last[stage]=next
         val at=maxOf(clock(),lastAt);lastAt=at
         events.addLast(FlightEvent(++sequence,at,stage,prior,next,FlightReasons.cause(cause),changed))
+        while(events.size>capacity) events.removeFirst()
+        revision.value++
+    }
+    @Synchronized fun scheduleSpeech(category: LimitSpeechCategory,mph: Int,source: LimitSpeechSource,state: DriveState,now: Long): FlightSpeechTicket {
+        require(mph>0)
+        val origin=capture(FlightStage.PUBLISHED,state,now)
+        val evidence=if(source==LimitSpeechSource.CAMERA_TAG) state.fix?.elapsedMs
+            else state.limitDecision?.evidenceElapsedMs ?: state.roadDecisionElapsedMs
+        val ticket=FlightSpeechTicket(++speechSequence,category,mph,source,origin,now,evidence,
+            opaque(state.alert?.camera?.let { CameraEncounters.key(it) },"camera-"))
+        speech(ticket,SpeechOutcome.SCHEDULED,state,now)
+        return ticket
+    }
+    @Synchronized fun speech(ticket: FlightSpeechTicket,outcome: SpeechOutcome,state: DriveState,now: Long) {
+        if(ticket.lastOutcome==outcome) return
+        val next=capture(FlightStage.PUBLISHED,state,now)
+        if(outcome==SpeechOutcome.PLAYBACK_STARTED) ticket.playback=next
+        val receipt=FlightSpeech(ticket.id,ticket.category,ticket.mph,ticket.source,outcome,ticket.scheduledElapsedMs,
+            ticket.evidenceElapsedMs,ticket.evidenceElapsedMs?.let { now-it },ticket.origin,ticket.playback,ticket.cameraId)
+        val at=maxOf(clock(),lastAt);lastAt=at
+        events.addLast(FlightEvent(++sequence,at,FlightStage.SPEECH,ticket.lastState,next,"numeric speech lifecycle",false,receipt))
+        ticket.lastState=next;ticket.lastOutcome=outcome
         while(events.size>capacity) events.removeFirst()
         revision.value++
     }

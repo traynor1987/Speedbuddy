@@ -29,6 +29,11 @@ internal object PendingDrivingEvidence {
             state.limitDecision?.assumed==true && !current(state,now)
         })
     }
-    fun limitSpeechRelevant(state: DriveState, limit: Int, now: Long = state.fix?.elapsedMs ?: 0) = state.active && state.limitMph==limit &&
-        (state.limitDecision?.assumed!=true || current(state,now))
+    fun limitSpeechRelevant(state: DriveState, limit: Int, now: Long = state.fix?.elapsedMs ?: 0): Boolean {
+        val fix=state.fix ?: return false
+        val presentation=state.limitPresentation ?: state.limitDecision ?: return false
+        return state.active && now-fix.elapsedMs in 0..5000 && state.limitMph==limit &&
+            presentation.mph==limit && !presentation.changing &&
+            (state.limitDecision?.let { it.mph==limit && !it.assumed }==true && state.roadDecisionElapsedMs==fix.elapsedMs || current(state,now))
+    }
 }

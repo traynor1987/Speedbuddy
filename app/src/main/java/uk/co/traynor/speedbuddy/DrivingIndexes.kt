@@ -26,6 +26,8 @@ class LimitChangeGate {
 class DeferredLimitVoice {
     private val changes = LimitChangeGate()
     private var pending: Int? = null
+    internal val deferredLimit: Int? get()=pending
+    internal fun discardPending() { pending=null }
     fun update(limit: Int?, busy: Boolean, enabled: Boolean): Int? {
         val changed = changes.update(limit)
         if (!enabled || limit == null) { pending = null; return null }
