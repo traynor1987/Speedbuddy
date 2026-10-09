@@ -12,4 +12,11 @@ class DrivingCacheFallbackTest {
     @Test fun completeTileWithLocalRoadsAvoidsOlderRegionalFallback() {
         assertFalse(DrivingCacheFallback.needsRegion(true,LocalRoads(listOf(SavedRoad(unrelated,2000)),emptyList())))
     }
+    @Test fun verifiedRegionalCoverageSuppressesUnrelatedLegacyTileRefreshes() {
+        assertFalse(RegionalRefreshPolicy.permitsLegacyRefresh(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN))
+        assertFalse(RegionalRefreshPolicy.permitsLegacyRefresh(RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN))
+        assertFalse(RegionalRefreshPolicy.permitsLegacyRefresh(RoadProviderState.ROAD_MATCH_UNCERTAIN))
+        assertTrue(RegionalRefreshPolicy.permitsLegacyRefresh(RoadProviderState.COVERAGE_UNAVAILABLE))
+        assertTrue(RegionalRefreshPolicy.permitsLegacyRefresh(RoadProviderState.SERVICE_UNAVAILABLE))
+    }
 }

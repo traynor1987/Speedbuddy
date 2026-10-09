@@ -70,7 +70,7 @@ object OwnerBackupCodec {
         roadCorrections.forEach { item -> roadRecords.put(JSONObject().put("id", item.id)
             .put("kind", item.kind.name).put("mph", item.mph ?: JSONObject.NULL)
             .put("sourceValue", item.sourceValue ?: JSONObject.NULL).put("updated", item.updatedAtMs)) }
-        val text = JSONObject().put("format", "speed-buddy-owner-backup").put("version", 12)
+        val text = JSONObject().put("format", "speed-buddy-owner-backup").put("version", 13)
             .put("roadOverrides", JSONArray(roadOverrides.map(RoadJson::override)))
             .put("boundaries", JSONArray(boundaries.map(RoadJson::boundary)))
             .put("boundaryObservations",JSONArray(boundaryObservations.map(RoadJson::observation)))
@@ -90,7 +90,7 @@ object OwnerBackupCodec {
         require(text.length <= MAX_CHARS) { "Backup is too large" }
         val root = JSONObject(text)
         val version = root.getInt("version")
-        require(root.getString("format") == "speed-buddy-owner-backup" && version in 1..12) {
+        require(root.getString("format") == "speed-buddy-owner-backup" && version in 1..13) {
             "Unsupported Speed Buddy backup"
         }
         val mapFields = version <= 8 || version >= 11
@@ -237,7 +237,8 @@ object OwnerBackupCodec {
             require(array.length() <= 10_000)
             (0 until array.length()).map { i -> val item = array.getJSONObject(i)
                 requireExactInteger(item, "mph"); requireExactInteger(item, "source"); requireExactInteger(item, "at")
-                requireKnownKeys(item, if(version==9) setOf("road", "bearing", "mph") else setOf("road","bearing","mph","source","point","at","accuracy"))
+                requireKnownKeys(item, if(version==9) setOf("road", "bearing", "mph") else setOf("road","bearing","mph","source","point","at","accuracy") + if(version>=13) setOf("shared") else emptySet())
+                if(item.has("shared")) require(item.get("shared") is Boolean) { "Invalid override direction policy" }
                 RoadJson.decodeOverride(item).also {
                     require(it.road.isNotBlank() && it.road.length <= 100 && it.bearing.isFinite() &&
                         it.bearing in 0.0..<360.0 && (if(version==9) it.mph in 5..100 else OwnerLimit.valid(it.mph)) &&

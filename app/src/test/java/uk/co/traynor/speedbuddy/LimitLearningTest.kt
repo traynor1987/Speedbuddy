@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LimitLearningTest {
+    @Test fun `unmatched correction explains the exact next safe action`() {
+        assertEquals(
+            "Waiting for a reliable road match. The + control becomes available when Speed Buddy has identified this road; then, when safely stopped, tap the large round limit sign.",
+            unmatchedCorrectionMessage(),
+        )
+    }
     private val start = GeoPoint(53.0, -2.0)
     private fun road(id: String, from: Double, to: Double, mph: Int?) = Road(id, "Main Road",
         listOf(Geo.ahead(start, 0.0, from), Geo.ahead(start, 0.0, to)),
@@ -13,18 +19,25 @@ class LimitLearningTest {
     private fun fix(m: Double, at: Long, accuracy: Double = 5.0, bearing: Double = 0.0) =
         Fix(Geo.ahead(start, 0.0, m), accuracy, 10.0, 1.0, bearing, at)
     private fun match(r: Road, confidence: Double = .95, heading: Double = 0.0) = RoadMatch(r, 0.0, heading, confidence)
+
+    @Test fun `road correction is unavailable until the current road is reliably matched`() {
+        val f = fix(220.0, 2_000)
+        assertFalse(correctionReady(f, null, 2_000))
+        assertFalse(correctionReady(f.copy(accuracyM = 25.0), match(next), 2_000))
+        assertFalse(correctionReady(f, match(next, confidence = .6), 2_000))
+        assertTrue(correctionReady(f, match(next), 2_000))
+    }
     private fun decide(e: LimitDecisionEngine, r: Road, m: Double, at: Long, confidence: Double = .95,
         accuracy: Double = 5.0, owner: Int? = null) =
         e.decide(fix(m, at, accuracy), match(r, confidence), SpeedLimits.mph(r.tags), owner, emptyList(), at)
 
-    @Test fun confirmedThirtyAndSixtyAreTemporarilyInheritedOnConnectedUnknownRoad() {
+    @Test fun connectedUnknownRoadDoesNotInheritAcrossTheThirtyMetreBoundary() {
         for (mph in listOf(30, 60)) {
             val e = LimitDecisionEngine()
             decide(e, old.copy(tags = mapOf("maxspeed" to "$mph mph", "highway" to "primary")), 180.0, 1000)
             val result = decide(e, next, 220.0, 2000)
-            assertEquals(mph, result.mph)
-            assertTrue(result.reason.contains("Assumed"))
-            assertTrue(result.reason.contains("way/1"))
+            assertNull(result.mph)
+            assertFalse(result.assumed)
         }
     }
     @Test fun assumptionDoesNotRenewItselfAndExpiresByTimeAndDistance() {
@@ -40,7 +53,10 @@ class LimitLearningTest {
         decide(e, next, 220.0, 2000)
         val tagged=next.copy(tags = mapOf("maxspeed" to "40 mph"))
         val candidate=decide(e,tagged,240.0,3000)
-        assertEquals(60,candidate.mph);assertEquals(40,candidate.upcoming?.mph)
+        // The earlier unknown road is beyond the 30 m / 2 s inheritance
+        // window, so this is a fresh strong source, not a deferred assumed
+        // transition from the abandoned 60 mph road.
+        assertEquals(40,candidate.mph);assertNull(candidate.upcoming)
         decide(e,tagged,255.0,4000)
         assertEquals(40,decide(e,tagged,270.0,5000).mph)
         val owner = LimitDecisionEngine(); decide(owner, old, 180.0, 1000)

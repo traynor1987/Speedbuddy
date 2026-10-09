@@ -1,5 +1,7 @@
 package uk.co.traynor.speedbuddy
 
+import org.json.JSONObject
+
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -43,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
@@ -51,6 +54,7 @@ import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.math.roundToInt
 
 private val Ink: Color @Composable get() = MaterialTheme.colorScheme.onSurface
@@ -275,7 +279,8 @@ class MainActivity : ComponentActivity() {
                             { if (!backupBusy && !state.active) importBackup.launch(arrayOf("application/json", "text/plain")) else message = "Stop Driving and wait for backup work to finish." }, importedInfo,
                             { if (moving) message = "Import cameras while parked."
                               else importLufop.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
-                            { page = "map" }, { page = "mapData" }, { page = "updates" }) }
+                            { page = "map" }, { page = "mapData" }, { page = "updates" }, { page = "offlineRoadData" }) }
+                        "offlineRoadData" -> OfflineRoadDataScreen(this@MainActivity) { page = "settings" }
                         "updates" -> UpdateCenterScreen(this@MainActivity, moving) { page = "settings" }
                         "map" -> CameraMapScreen(db, state.fix?.point, moving,
                             (importedInfo?.importedAtMs ?: 0L) xor state.roadCacheRevision, importedInfo?.count ?: 0) { page = "drive" }
@@ -346,10 +351,11 @@ class MainActivity : ComponentActivity() {
                     Offset(size.width * .82f, size.height * .18f), strokeWidth = size.width * .14f)
             }
         }
-        limit == null -> BoxWithConstraints(circle.border(2.dp, Line, CircleShape).background(Panel),
-            contentAlignment = Alignment.Center) {
-            val diameter = minOf(maxWidth, maxHeight).value
-            Text("--", fontSize = (diameter * .44f).sp, fontWeight = FontWeight.Bold, color = Muted)
+        limit == null -> BoxWithConstraints(circle.background(Color.White),contentAlignment=Alignment.Center) {
+            val diameter=minOf(maxWidth,maxHeight).value
+            Box(Modifier.fillMaxSize().border((diameter*.09f).dp,Color(0xFFDC282B),CircleShape),contentAlignment=Alignment.Center) {
+                Text("?",fontSize=(diameter*.50f).sp,fontWeight=FontWeight.Black,color=Color(0xFF111111))
+            }
         }
         else -> BoxWithConstraints(circle.background(Color.White), contentAlignment = Alignment.Center) {
             val diameter = minOf(maxWidth, maxHeight).value
@@ -401,8 +407,14 @@ class MainActivity : ComponentActivity() {
     onAdd: () -> Unit, onQuick: (CameraType) -> Unit, onUnknownLimit: () -> Unit,
     onReportMobile: () -> Unit = {}, onMobileFeedback: (String,Boolean) -> Unit = { _,_-> },
     onFeedback: (String,Int?,String?) -> Unit = { _,_,_-> }) {
-    var pickerFor by remember { mutableStateOf<DriveState?>(null) }
-    pickerFor?.let { LimitCorrectionPicker(it,{pickerFor=null},onFeedback) }
+    var pickerRoadId by rememberSaveable { mutableStateOf<String?>(null) }
+    val pickerFor=state.takeIf { pickerRoadId!=null && it.road?.road?.id==pickerRoadId &&
+        it.active && it.roadDecisionElapsedMs==it.fix?.elapsedMs }
+    pickerFor?.let { LimitCorrectionPicker(it,{pickerRoadId=null},onFeedback) }
+    LaunchedEffect(state.road?.road?.id,state.active) {
+        if(!state.active || pickerRoadId!=state.road?.road?.id) pickerRoadId=null
+    }
+    val displayDecision=state.limitPresentation ?: state.limitDecision
     val speed = state.speedMph
     val moving = state.active && (speed == null || speed >= 5.0)
     val fix = state.fix
@@ -415,11 +427,12 @@ class MainActivity : ComponentActivity() {
         else -> "GPS FIX · ${fix.accuracyM.roundToInt()} M"
     }
     val tags = state.road?.road?.tags
-    val national = state.limitDecision?.national==true || state.limitMph != null && state.limitDecision?.assumed!=true &&
-        state.sourceLimitMph == state.limitMph && state.limitDecision?.ownerApplied != true && state.limitDecision?.boundaryApplied != true && (
+    val national = displayDecision?.national==true || state.limitMph != null && displayDecision?.assumed!=true &&
+        state.sourceLimitMph == state.limitMph && displayDecision?.ownerApplied != true && displayDecision?.boundaryApplied != true && (
         tags?.get("maxspeed:type")?.startsWith("GB:nsl") == true ||
         tags?.get("maxspeed")?.startsWith("GB:nsl") == true || tags?.get("maxspeed") == "GB:motorway")
-    val compact=LocalConfiguration.current.screenHeightDp<800
+    val compact=LocalConfiguration.current.let { it.screenHeightDp<800 || it.fontScale>1.15f }
+    val correctionAvailable = state.road != null && state.roadDecisionElapsedMs==state.fix?.elapsedMs
     Column(Modifier.fillMaxSize().then(if(compact) Modifier.verticalScroll(rememberScrollState()) else Modifier)
         .padding(horizontal = 22.dp, vertical = if(compact) 6.dp else 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -447,10 +460,12 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.fillMaxWidth().height(mainSize), contentAlignment = Alignment.Center) {
                     Box(Modifier.size(mainSize).testTag("current-road-limit")
                         .semantics { contentDescription="Correct road speed limit" }
-                        .clickable(enabled=state.active && (state.fix!=null || state.road!=null)) { pickerFor=state }) {
-                        LimitSign(state.limitMph, national, Modifier.fillMaxSize().clearAndSetSemantics {})
-                        if(state.limitDecision?.assumed==true) Text("⚠",color=Warning,fontSize=32.sp,fontWeight=FontWeight.Black,
-                            modifier=Modifier.align(Alignment.TopEnd).offset(x=14.dp))
+                        .clickable(enabled=state.active && correctionAvailable) { pickerRoadId=state.road?.road?.id }) {
+                        if(displayDecision?.changing==true) Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {
+                            Text("Limit changing…",color=Ink,fontSize=20.sp,fontWeight=FontWeight.Bold,textAlign=TextAlign.Center)
+                        } else LimitSign(state.limitMph, national && displayDecision?.assumed!=true, Modifier.fillMaxSize().clearAndSetSemantics {})
+                        if(displayDecision?.assumed==true) AssumedLimitBadge(
+                            Modifier.align(Alignment.TopEnd).offset(x=14.dp))
                     }
                     state.turns.firstOrNull { it.direction == TurnDirection.LEFT }?.let {
                         TurnLimitPreview(it, Modifier.align(Alignment.CenterStart).width(72.dp))
@@ -459,8 +474,8 @@ class MainActivity : ComponentActivity() {
                         TurnLimitPreview(it, Modifier.align(Alignment.CenterEnd).width(72.dp))
                     }
                 }
-                if (state.limitMph == null) Surface(
-                    onClick = { if(state.active && (state.fix!=null || state.road!=null)) pickerFor=state else onUnknownLimit() },
+                if (state.limitMph == null && displayDecision?.changing!=true) Surface(
+                    onClick = { if(state.active && correctionAvailable) pickerRoadId=state.road?.road?.id else onUnknownLimit() },
                     modifier = Modifier.align(Alignment.BottomCenter).size(48.dp)
                         .semantics { contentDescription = "Set this road's speed limit" },
                     shape = CircleShape, color = Accent, contentColor = Background,
@@ -471,7 +486,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        state.upcoming?.let { next ->
+        if(displayDecision?.assumed==true) Text("⚠ ASSUMED",color=Color(0xFFDC282B),fontSize=15.sp,fontWeight=FontWeight.Bold,modifier=Modifier.padding(top=9.dp))
+        state.upcoming?.takeIf { it.isCredibleUpcoming(state.limitMph) }?.let { next ->
             Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("UPCOMING", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -480,14 +496,16 @@ class MainActivity : ComponentActivity() {
             }
         }
         Spacer(Modifier.height(9.dp))
-        Text(when {
-            state.limitDecision?.assumed==true -> "Assumed • not confirmed"
+        if(displayDecision?.assumed!=true) Text(when {
+            displayDecision?.changing==true -> "Resolving the new road"
             national -> "National speed limit" + (state.limitMph?.let { " · $it mph" } ?: "")
             state.limitMph == null -> "Limit unknown"
             else -> "${state.limitMph} mph"
         }, color = Muted, fontSize = 15.sp)
         if (state.roadDataStatus.isNotBlank()) Text(state.roadDataStatus, color = Muted, fontSize = 11.sp)
         if(state.awaitingBoundary) Text("Tap the limit at the real sign",color=Accent,fontSize=13.sp)
+        if(state.limitMph == null && displayDecision?.changing!=true && state.active)
+            Text("Waiting to verify this road",color=Accent,fontSize=13.sp)
         if(state.correctionMessage.isNotBlank()) Text(state.correctionMessage,color=Accent,fontSize=13.sp)
         if(compact) Spacer(Modifier.height(12.dp)) else Spacer(Modifier.weight(1f))
         state.averageSection?.let { section->
@@ -552,6 +570,12 @@ class MainActivity : ComponentActivity() {
             shape = RoundedCornerShape(18.dp)) { Text(if (state.active) "Stop driving mode" else "Start driving mode", fontWeight = FontWeight.Bold) }
     }
 }
+@Composable private fun AssumedLimitBadge(modifier: Modifier = Modifier) {
+    Surface(modifier.size(38.dp), shape=CircleShape, color=Color.White,
+        border=BorderStroke(4.dp, Color(0xFFE5272D)), contentColor=Color.Black) {
+        Box(contentAlignment=Alignment.Center) { Text("!",fontSize=25.sp,fontWeight=FontWeight.Black) }
+    }
+}
 
 @Composable private fun SectionLabel(text: String) {
     Text(text, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp,
@@ -567,7 +591,7 @@ class MainActivity : ComponentActivity() {
 @Composable private fun SettingsScreen(prefs: android.content.SharedPreferences, back: () -> Unit,
     cameras: () -> Unit, diagnostics: () -> Unit, exportBackup: () -> Unit, importBackup: () -> Unit,
     imported: CameraDb.ImportedInfo?, importLufop: () -> Unit, openMap: () -> Unit,
-    openMapData: () -> Unit, openUpdates: () -> Unit) {
+    openMapData: () -> Unit, openUpdates: () -> Unit, openOfflineRoadData: () -> Unit) {
     var version by remember { mutableIntStateOf(0) }
     Page("Settings", back) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
@@ -626,6 +650,8 @@ class MainActivity : ComponentActivity() {
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     MenuRow("Map & road data", "Camera database, cache and local corrections", openMapData)
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
+                    MenuRow("Offline Road Data", "Download verified Lancashire and Merseyside road packs", openOfflineRoadData)
+                    HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     MenuRow("Manage my cameras", "View, edit or delete saved cameras", cameras)
                     HorizontalDivider(color = Line, modifier = Modifier.padding(horizontal = 16.dp))
                     MenuRow("Back up owner data", "Cameras, settings, road corrections and retained archives", exportBackup)
@@ -666,6 +692,91 @@ class MainActivity : ComponentActivity() {
                 color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
         }
     }
+}
+@Composable internal fun OfflineRoadDataScreen(context: Context, providedLifecycle: RegionalPackLifecycle?=null, back: () -> Unit) {
+    val scope=rememberCoroutineScope(); val access=remember { RegionalRoadDataAccess(context) }
+    val lifecycle=remember { providedLifecycle ?: RegionalPackLifecycle(context,credential = access::credential) }
+    var catalogue by remember { mutableStateOf<List<RegionalPackDescriptor>>(emptyList()) }
+    val inventoryState by lifecycle.inventoryState.collectAsState()
+    val inventory=when(val value=inventoryState) {
+        is RegionalInventoryState.Ready -> value.inventory
+        is RegionalInventoryState.Checking -> value.previous
+        is RegionalInventoryState.Error -> value.previous
+    }
+    val inventoryReady=inventoryState is RegionalInventoryState.Ready
+    val installed=inventory?.installed.orEmpty()
+    val inventoryIssues=inventory?.issues.orEmpty()
+    val storedBytes=inventory?.takeIf { it.error==null }?.storedBytes
+    val storageError=(inventoryState as? RegionalInventoryState.Error)?.message
+    var message by remember { mutableStateOf("Checking the production catalogue…") }
+    var configured by remember { mutableStateOf(access.credential()!=null) }
+    var credentialInput by rememberSaveable { mutableStateOf("") }
+    var catalogueRevision by remember { mutableIntStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+    val downloadProgress=remember { MutableStateFlow<RegionalPackLifecycle.DownloadProgress?>(null) }
+    val progress by downloadProgress.collectAsState()
+    suspend fun refreshInstalled() { lifecycle.refreshInventory() }
+    fun deletePack(id: String,name: String) { busy=true;scope.launch {
+        try { val deletion=withContext(Dispatchers.IO) { lifecycle.delete(id) };refreshInstalled()
+            message="$name removed · ${"%.1f".format(Locale.UK,deletion.freedBytes/1_048_576.0)} MB freed. Owner corrections were kept." }
+        catch(error: Exception) { runCatching { refreshInstalled() };message="Could not remove $name: ${error.message ?: "storage unavailable"}" }
+        finally { busy=false }
+    } }
+    LaunchedEffect(Unit) {
+        while(true) { runCatching { refreshInstalled() }.onFailure { message="Local pack inventory unavailable" };kotlinx.coroutines.delay(5000) }
+    }
+    LaunchedEffect(catalogueRevision) {
+        try { catalogue=withContext(Dispatchers.IO) { lifecycle.catalogue() };message="" }
+        catch(cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch(error: Exception) { message=error.message ?: "Catalogue unavailable" }
+    }
+    Page("Offline Road Data",back) { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom=24.dp)) {
+        Text("Verified regional packs",color=Muted,modifier=Modifier.padding(16.dp),fontSize=14.sp)
+        Surface(shape=RoundedCornerShape(20.dp),color=Panel,modifier=Modifier.padding(horizontal=16.dp,vertical=6.dp)) { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("Regional road data access",color=Ink,fontSize=18.sp,fontWeight=FontWeight.SemiBold)
+            if(configured) {
+                Text("Access is configured on this device. It is used only for Speed Buddy regional packs and live road-state requests.",color=Muted,fontSize=13.sp)
+                TextButton(onClick={ access.clear();configured=false;catalogue=emptyList();catalogueRevision++;message="Regional road data access removed. Installed packs remain available offline." }) { Text("Remove access") }
+            } else {
+                Text("Enter the access token provided for your Speed Buddy regional road data. It stays in this app’s private storage and is never shown here.",color=Muted,fontSize=13.sp)
+                OutlinedTextField(value=credentialInput,onValueChange={ credentialInput=it },singleLine=true,label={ Text("Access token") },visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),modifier=Modifier.fillMaxWidth())
+                Button(onClick={ runCatching { access.save(credentialInput) }.onSuccess { credentialInput="";configured=true;message="Checking the production catalogue…";catalogueRevision++ }.onFailure { message=it.message ?: "Could not save access token" } }) { Text("Save and check packs") }
+            }
+        } }
+        if(message.isNotBlank()) Text(message,color=Muted,modifier=Modifier.padding(horizontal=16.dp,vertical=8.dp))
+        if(!inventoryReady) Text(if(inventoryState is RegionalInventoryState.Checking) "Checking installed road packs…" else "Installed road pack inventory unavailable",color=Muted,modifier=Modifier.padding(16.dp))
+        storedBytes?.let { bytes -> Text("Stored regional files: ${"%.1f".format(Locale.UK,bytes/1_048_576.0)} MB",color=Muted,modifier=Modifier.padding(16.dp)) }
+        storageError?.let { Text(it,color=Muted,modifier=Modifier.padding(16.dp)) }
+        if(inventoryReady && installed.isEmpty() && catalogue.isEmpty()) Text("No installed regional packs",color=Muted,modifier=Modifier.padding(16.dp))
+        inventoryIssues.forEach { id ->
+            Text("Unavailable regional pack: $id · active metadata damaged",color=Muted,modifier=Modifier.padding(16.dp))
+            TextButton(enabled=!busy && inventoryReady,onClick={ deletePack(id,id) }) { Text("Delete unavailable pack $id") }
+        }
+        OfflinePackRows.merge(catalogue,installed.map { it.descriptor }).forEach { row ->
+            val pack=row.pack
+            val current=installed.firstOrNull { it.descriptor.id==pack.id }
+            Surface(shape=RoundedCornerShape(20.dp),color=Panel,modifier=Modifier.padding(horizontal=16.dp,vertical=6.dp)) { Column(Modifier.padding(16.dp)) {
+                Text(pack.displayName,color=Ink,fontSize=18.sp);Text("${pack.downloadBytes/1_048_576} MB · ${if(current!=null) "Installed ${current.descriptor.version}" else if(inventoryReady) "Not installed" else "Checking installation…"}",color=Muted,fontSize=13.sp)
+                current?.problem?.let { Text(it,color=Muted,fontSize=13.sp) }
+                progress?.takeIf { it.regionId==pack.id }?.let { currentProgress ->
+                    Spacer(Modifier.height(10.dp));LinearProgressIndicator(progress={ currentProgress.fraction },modifier=Modifier.fillMaxWidth())
+                    Text(currentProgress.label,color=Muted,fontSize=13.sp,modifier=Modifier.padding(top=6.dp))
+                }
+                Button(enabled=!busy && configured && inventoryReady,onClick={ busy=true;scope.launch {
+                    message="";var activated=false
+                    try {
+                        withContext(Dispatchers.IO) { lifecycle.download(pack) { downloadProgress.value=it } };activated=true
+                        refreshInstalled();message="${pack.displayName} is ready offline"
+                    } catch(cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch(error: Exception) {
+                        runCatching { refreshInstalled() }
+                        message=if(activated) "${pack.displayName} activated; storage display could not refresh" else "${pack.displayName}: ${error.message ?: "download failed"}"
+                    } finally { downloadProgress.value=null;busy=false }
+                } }) { Text(if(current==null) "Download" else if(current.descriptor.version!=pack.version) "Update" else "Re-download") }
+                if(current!=null) TextButton(enabled=!busy && inventoryReady,onClick={ deletePack(pack.id,pack.displayName) }) { Text("Delete") }
+            } }
+        }
+    } }
 }
 @Composable private fun MenuRow(title: String, subtitle: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -776,7 +887,7 @@ class MainActivity : ComponentActivity() {
                     Surface(shape=RoundedCornerShape(12.dp),color=Panel) { Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         val label=when(correction.mph) { OWNER_UNKNOWN->"Unknown";OWNER_NATIONAL->"National Speed Limit";else->"${correction.mph} mph" }
                         Text("$label · ${correction.road}",color=Ink)
-                        Text("Directed correction · ${correction.bearing.roundToInt()}°",color=Muted,style=MaterialTheme.typography.bodySmall)
+                        Text(if(correction.sharedAcrossDirections) "Both directions · local correction" else "Directed correction · ${correction.bearing.roundToInt()}°",color=Muted,style=MaterialTheme.typography.bodySmall)
                         TextButton(onClick={confirm="roadEdit:${correction.road}"},enabled=parked) { Text("Remove correction") }
                     } }
                 }
@@ -830,9 +941,28 @@ class MainActivity : ComponentActivity() {
     }
     Spacer(Modifier.height(20.dp))
 }
-@Composable private fun DiagnosticsScreen(state: DriveState, correction: (String, Int?) -> Unit, back: () -> Unit) = Page("Diagnostics", back) {
+@Composable internal fun DiagnosticsScreen(liveState: DriveState, correction: (String, Int?) -> Unit, back: () -> Unit) = Page("Diagnostics", back) {
+    val frozen by DiagnosticsInspection.state.collectAsState()
+    val revision by RoadDecisionFlight.recorder.changes.collectAsState()
+    var elapsed by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
+    var wall by remember { mutableStateOf(System.currentTimeMillis()) }
+    var monitorNow by remember { mutableStateOf(System.nanoTime()/1_000_000) }
+    LaunchedEffect(frozen) { while(frozen==null) {
+        kotlinx.coroutines.delay(1000)
+        elapsed=SystemClock.elapsedRealtime();wall=System.currentTimeMillis();monitorNow=System.nanoTime()/1_000_000
+    } }
+    val state=frozen?.state ?: liveState
+    val visibleElapsed=frozen?.elapsedMs ?: elapsed
+    val visibleWall=frozen?.wallMs ?: wall
+    val liveHistory=remember(revision) { RoadDecisionFlight.recorder.snapshot() }
+    val history=frozen?.history ?: liveHistory.copy(capturedAtMs=maxOf(monitorNow,liveHistory.capturedAtMs))
+    val context=androidx.compose.ui.platform.LocalContext.current
+    val scope=rememberCoroutineScope()
+    var retentionMessage by remember { mutableStateOf("") }
+    var clearing by remember { mutableStateOf(false) }
+    val identity=remember { runCatching { context.assets.open("owner-build.json").bufferedReader().use { JSONObject(it.readText()) } }.getOrNull() }
     val fix = state.fix
-    val fixAge = fix?.let { SystemClock.elapsedRealtime() - it.elapsedMs }
+    val fixAge = fix?.let { visibleElapsed - it.elapsedMs }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
         DiagnosticCard("GPS", listOf(
             "Status" to when {
@@ -848,30 +978,55 @@ class MainActivity : ComponentActivity() {
             "Speed" to fix?.speedMps?.let { "${(it * MPS_TO_MPH).roundToInt()} mph" },
             "Heading" to fix?.bearing?.let { "${it.roundToInt()}°" },
             "Fix age" to fixAge?.let { "${it / 1000} s" }))
+        RoadDecisionMonitor(state,history,frozen!=null,{
+            if(frozen==null) DriveBus.freezeDiagnostics()
+            else DiagnosticsInspection.unfreeze()
+        })
+        DiagnosticCard("ROAD DATA",state.roadData.rows(now=visibleWall,elapsed=visibleElapsed))
         DiagnosticCard("ROAD", listOf(
             "Matched road" to state.road?.road?.let { "${it.name ?: "Unnamed"} · ${it.id}" },
             "Confidence" to state.road?.let { String.format(Locale.UK, "%.2f", it.confidence) },
             "Displayed limit" to state.limitMph?.let { "$it mph" },
-            "Source limit" to state.sourceLimitMph?.let { "$it mph · saved OSM" },
+            "Source limit" to state.sourceLimitMph?.let { "$it mph · ${state.roadData.provider}" },
             "Owner correction" to state.limitDecision?.ownerApplied?.toString(),
-            "Assumed limit" to state.limitDecision?.assumed?.toString(),
+            "Assumed limit" to (state.limitPresentation ?: state.limitDecision)?.assumed?.toString(),
+            "Evidence assumed" to state.limitDecision?.assumed?.toString(),
+            "Limit changing" to state.limitPresentation?.changing?.toString(),
+            "Presentation reason" to state.limitPresentation?.reason,
             "Inherited from" to state.limitDecision?.inheritedFrom,
             "Learned boundary" to state.limitDecision?.boundaryApplied?.toString(),
             "Decision reason" to state.limitDecision?.reason,
-            "Coverage tiles" to "${state.coverageTiles} / ${state.targetTiles} in 20-mile target",
-            "Data mode" to if ((state.dataAgeMs ?: 0) > ROAD_FRESH_MS) "Older saved road data" else "Saved road data",
-            "Map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
-            "Map request" to state.mapStatus))
-        val parked = state.active && (state.speedMph ?: Double.MAX_VALUE) < 5.0
+            "Current-fix decision" to if(state.fix==null) "No GPS fix" else if(state.roadDecisionElapsedMs==state.fix.elapsedMs) "Current" else "Pending or stale",
+            "Legacy coverage tiles" to "${state.coverageTiles} / ${state.targetTiles} in 20-mile target",
+            "Legacy completed regions" to state.completedRoadRegions.toString(),
+            "Legacy road-data request" to state.roadRequestKind,
+            "Legacy subdivision" to (state.subdivisionLevel?.let { "level $it" } ?: "not required"),
+            "Legacy current-region status" to state.currentRegionStatus,
+            "Data mode" to state.roadData.provider,
+            "Legacy map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
+            "Legacy map request" to state.mapStatus))
+        val parked = frozen==null && liveState.active && (liveState.speedMph ?: Double.MAX_VALUE) < 5.0
         if (state.active) Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
             Column(Modifier.padding(16.dp)) {
                 Text("Local road corrections", fontWeight = FontWeight.Bold)
-                Text("Applies to this matched OSM way and travel direction. Source tags stay unchanged.", color = Muted, fontSize = 12.sp)
+                Text("Ordinary two-way corrections share both directions by default; asymmetric or explicit directional corrections remain separate. Source tags stay unchanged.", color = Muted, fontSize = 12.sp)
                 Text("Tap the main speed-limit sign to correct it.",color=Muted,fontSize=13.sp)
                 TextButton(onClick = { correction("RESET_ROAD", null) }, enabled = parked && state.road != null && state.fix?.bearing != null) { Text("Reset road") }
                 TextButton(onClick = { correction("RESET_CORRECTIONS", null) }, enabled = parked) { Text("Reset all learned limits & boundaries") }
             }
         }
+        DiagnosticCard("BUILD",listOf("Version" to identity?.let { "${it.optString("versionName")} / code ${it.optInt("versionCode")}" },"Source SHA" to identity?.optString("sourceSha"),"Physical acceptance" to "Pending owner road test"))
+        Surface(shape=RoundedCornerShape(20.dp),color=Panel) { Column(Modifier.padding(16.dp)) {
+            Text("Local diagnostic retention",fontWeight=FontWeight.Bold)
+            Text("Up to 500 recent records contain location, heading, time and road decisions. They survive restart until replaced or cleared; no fixed time expiry. They are not uploaded or included in owner exports.",color=Muted,fontSize=13.sp)
+            TextButton(enabled=!liveState.active && !clearing,onClick={ clearing=true;scope.launch {
+                try { withContext(Dispatchers.IO) { check(!DriveBus.state.value.active) { "Stop driving before clearing diagnostics" };RoadDb(context).use { it.clearDiagnostics() } };retentionMessage="Local diagnostics cleared. Owner data was kept." }
+                catch(error: Exception) { retentionMessage=error.message ?: "Could not clear diagnostics" }
+                finally { clearing=false }
+            } }) { Text("Clear local diagnostics") }
+            if(state.active) Text("Stop driving before clearing diagnostics",color=Muted,fontSize=13.sp)
+            if(retentionMessage.isNotBlank()) Text(retentionMessage,color=Muted,fontSize=13.sp)
+        } }
         DiagnosticCard("CAMERA", listOf(
             "Public records nearby" to state.publicCameraCount.toString(),
             "Lufop UK records" to state.importedCameraCount.toString(),
@@ -883,6 +1038,49 @@ class MainActivity : ComponentActivity() {
             "Approaching" to if (state.decision.accepted) "Yes" else "No",
             "Decision" to state.decision.reason))
     }
+}
+@Composable private fun RoadDecisionMonitor(state: DriveState,history: FlightHistory,frozen: Boolean,toggleFreeze: () -> Unit) {
+    val context=androidx.compose.ui.platform.LocalContext.current
+    val scope=rememberCoroutineScope()
+    var recent by rememberSaveable { mutableStateOf(false) }
+    var exporting by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("") }
+    val last=history.events.lastOrNull()
+    Column {
+        DiagnosticCard("Road Decision Monitor",listOf(
+            "Current decision" to (history.current?.decision?.label() ?: FlightDecision.from(state.limitDecision,state.fix?.elapsedMs ?: 0).label()),
+            "Previous decision" to history.previousDecision?.decision?.label(),
+            "Last meaningful change" to last?.let { "${(history.capturedAtMs-it.atMs).coerceAtLeast(0)} ms ago · #${it.sequence} · ${it.stage}" },
+            "Decision changes in 30 seconds" to history.decisionChanges().toString(),
+            "Active provider" to state.roadData.provider,
+            "Current road-match confidence" to state.road?.confidence?.let { String.format(Locale.UK,"%.2f",it) },
+            "Current presentation state" to (history.current?.presentation?.label() ?: FlightDecision.from(state.limitPresentation ?: state.limitDecision,state.fix?.elapsedMs ?: 0).label())))
+        Surface(shape=RoundedCornerShape(20.dp),color=Panel) { Column(Modifier.padding(16.dp)) {
+            Text("${if(frozen) "Frozen snapshot" else "Live diagnostics"} · Driving processing continues",color=Muted,fontSize=13.sp)
+            TextButton(onClick=toggleFreeze) { Text(if(frozen) "Unfreeze diagnostics" else "Freeze diagnostics") }
+            TextButton(onClick={ recent=true }) { Text("View recent changes") }
+            TextButton(enabled=!exporting,onClick={ exporting=true;scope.launch {
+                try { shareRoadDiagnosticReport(context,history);message="Redacted report prepared for sharing." }
+                catch(_: Exception) { message="Could not export diagnostic report." }
+                finally { exporting=false }
+            } }) { Text("Export diagnostic report") }
+            Text("Reports omit precise location, road names and credentials. History holds up to 500 source events in this process; Activity recreation keeps it, process exit clears it. Export creates one on-device cache report and opens your share chooser.",color=Muted,fontSize=12.sp)
+            TextButton(onClick={ RoadDecisionFlight.recorder.clear();DiagnosticsInspection.unfreeze();message="Road decision history cleared. Owner data was kept." }) { Text("Clear diagnostic history") }
+            if(message.isNotBlank()) Text(message,color=Muted,fontSize=13.sp)
+        } }
+    }
+    if(recent) AlertDialog(onDismissRequest={recent=false},title={Text("Recent road decision changes")},text={
+        if(history.events.isEmpty()) Text("No recorded changes") else LazyColumn(Modifier.heightIn(max=420.dp)) {
+            items(history.events.asReversed(),key={it.sequence}) { event -> Column(Modifier.padding(vertical=8.dp)) {
+                Text("#${event.sequence} · ${event.atMs} ms monotonic · ${event.stage}",fontWeight=FontWeight.Bold,fontSize=12.sp)
+                Text("${event.previous?.decision?.label() ?: "No previous state"} → ${event.new.decision.label()}",fontSize=12.sp)
+                Text("Presentation: ${event.new.presentation.label()} · shown ${if(event.new.displayRecorded) event.new.displayedMph ?: "Unknown" else "Not evaluated"}",fontSize=12.sp)
+                Text("${event.cause} · fix ${event.new.fixSequence ?: "—"} · confidence ${event.new.matchConfidence ?: "—"}",fontSize=12.sp)
+                event.speech?.let { speech -> Text("Speech: ${speech.category} · ${speech.mph} mph · ${speech.outcome} · ${speech.source}",fontSize=12.sp) }
+                Text(event.new.decision.reason,color=Muted,fontSize=12.sp)
+            } }
+        }
+    },confirmButton={TextButton(onClick={recent=false}) { Text("Close") }})
 }
 @Composable private fun CameraList(records: List<Camera>, moving: Boolean, back: () -> Unit,
     edit: (Camera) -> Unit, delete: (Camera) -> Unit) = Page("My cameras", back) {

@@ -2,6 +2,21 @@ package uk.co.traynor.speedbuddy
 
 import java.util.UUID
 
+/** A published enforcement area is useful map context, not evidence of an active mobile camera.
+ * It is deliberately separate from [MobileReport], which is the only mobile source allowed
+ * into the camera-warning detector. */
+data class MobileEnforcementZone(
+    val id: String, val point: GeoPoint, val roadId: String? = null, val note: String? = null,
+) : java.io.Serializable {
+    init {
+        require(id.startsWith("zone:") && id.length <= 100)
+        require(point.lat.isFinite() && point.lat in -90.0..90.0 && point.lon.isFinite() && point.lon in -180.0..180.0)
+        require(roadId == null || roadId.startsWith("way/") && roadId.length <= 100)
+        require((note?.length ?: 0) <= 200)
+    }
+    val known: Boolean get() = true
+}
+
 /** Local observations only. The direction is the reporting vehicle's travel bearing, not proof of enforcement. */
 data class MobileReport(
     val id: String, val point: GeoPoint, val reportedAtMs: Long, val observedAtMs: Long,

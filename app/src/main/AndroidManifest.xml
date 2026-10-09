@@ -16,5 +16,6 @@
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
         <service android:name=".DrivingService" android:exported="false" android:foregroundServiceType="location" />
+        <!-- Passive car experiment is not registered: it is not a navigation app. -->
     </application>
 </manifest>

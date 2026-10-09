@@ -5,6 +5,14 @@ internal object DrivingCacheFallback {
     fun needsRegion(completeTile: Boolean, local: LocalRoads): Boolean = !completeTile || local.roads.isEmpty()
 }
 
+/** Public OSM tiles are a last-resort cache; a covered verified pack must not refresh them. */
+internal object RegionalRefreshPolicy {
+    fun permitsAfterLive(state: RoadProviderState,live: LiveRoadState?) = permitsLegacyRefresh(state) &&
+        live!=null && live.state.permitsOverpass && live.fallbackAllowed
+    fun permitsLegacyRefresh(state: RoadProviderState) = state in setOf(
+        RoadProviderState.COVERAGE_UNAVAILABLE, RoadProviderState.SERVICE_UNAVAILABLE)
+}
+
 /** The driving service and tests use this same offline cache reconciliation path. */
 internal class DrivingRoadRepository(private val roads: RoadDb,
     private val savedRegion: (GeoPoint)->OsmSnapshot?) {

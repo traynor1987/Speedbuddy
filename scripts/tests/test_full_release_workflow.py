@@ -13,8 +13,15 @@ class FullReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('needs: [build, database-tests]', workflow)
         self.assertIn("docs/owner-signing-certificate.json", workflow)
         self.assertIn('scripts/verify_owner_apk.py', workflow)
-        self.assertIn('--version-code 13 --version-name 0.2.4', workflow)
+        self.assertIn('--version-code 20 --version-name 0.4.0', workflow)
+        self.assertIn("github.ref == 'refs/heads/feat/regional-offline-road-data-0.4.0'", workflow)
+        self.assertIn('v0.4.0-regional-offline-', workflow)
+        self.assertIn('scripts/render_acceptance_notes.py --source-sha', workflow)
+        self.assertIn('--notes-file "$RUNNER_TEMP/speedbuddy-acceptance-notes.md"', workflow)
+        self.assertIn('docs/OWNER_ACCEPTANCE.md', (ROOT/'scripts/render_acceptance_notes.py').read_text())
         self.assertIn('Remove temporary private key', workflow)
+        self.assertIn('head_sha=$SPEED_BUDDY_SOURCE_SHA', workflow)
+        self.assertNotIn('gh run list --commit', workflow)
 
 if __name__ == '__main__':
     unittest.main()

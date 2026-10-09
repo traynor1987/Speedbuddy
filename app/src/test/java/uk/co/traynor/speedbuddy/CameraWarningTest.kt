@@ -101,16 +101,16 @@ class CameraWarningTest {
     }
 
     @Test fun speedingSpeechPreservesCameraTypeAndKnownLimit() {
-        assertEquals("Warning, speeding. Speed camera ahead. Speed limit 30 miles per hour.",
+        assertEquals("Warning, speeding. Speed camera ahead. Camera limit 30 miles per hour.",
             CameraAnnouncement.text(camera, 40, speeding = true))
-        assertEquals("Warning, speeding. Mobile speed camera reported ahead. Speed limit 20 miles per hour.",
+        assertEquals("Warning, speeding. Mobile speed camera reported ahead. Camera limit 20 miles per hour.",
             CameraAnnouncement.text(camera.copy(type = CameraType.MOBILE, enforcedMph = null), 20, speeding = true))
     }
 
     @Test fun audioPlanUsesOneDoubleBeepThenOneSpeechForCombinedCue() {
         val plan = CameraAudioCue.from(camera, CameraWarning(true, true, true, 30), true)
         assertTrue(plan.doubleBeep)
-        assertEquals("Warning, speeding. Speed camera ahead. Speed limit 30 miles per hour.", plan.speech)
+        assertEquals("Warning, speeding. Speed camera ahead. Camera limit 30 miles per hour.", plan.speech)
     }
 
     @Test fun proximityIsBeepOnlyAndVoiceOffKeepsDoubleBeep() {
@@ -120,6 +120,6 @@ class CameraWarningTest {
         assertTrue(muted.doubleBeep); assertNull(muted.speech)
         val entry = CameraAudioCue.from(camera, CameraWarning(true, false, false, 30), true)
         assertFalse(entry.doubleBeep)
-        assertEquals("Speed camera ahead. Speed limit 30 miles per hour.", entry.speech)
+        assertEquals("Speed camera ahead. Camera limit 30 miles per hour.", entry.speech)
     }
 }

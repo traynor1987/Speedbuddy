@@ -26,6 +26,13 @@ class PhysicalRoadRegressionTest {
         val restored=drive(e,matcher,120.0,3000,listOf(old))
         assertEquals(60,restored.mph);assertFalse(restored.assumed)
     }
+    @Test fun `same-road geometry gap expires after the two second continuity window`() {
+        val e=LimitDecisionEngine();val matcher=RoadMatcher()
+        assertEquals(20,drive(e,matcher,100.0,1_000,listOf(old.copy(tags=old.tags+mapOf("maxspeed" to "20 mph")))).mph)
+        val gap=drive(e,matcher,120.0,3_001,emptyList())
+        assertNull(gap.mph)
+        assertFalse(gap.assumed)
+    }
     @Test fun compatibleSameRoadSourceGapAtNormalGpsAccuracyStaysAssumed() {
         val engine=LimitDecisionEngine();val matcher=RoadMatcher()
         val confirmed=road("same",0.0,1_000.0,30)
@@ -47,11 +54,11 @@ class PhysicalRoadRegressionTest {
         drive(e,matcher,230.0,4000,listOf(old,next))
         assertEquals(40,drive(e,matcher,250.0,5000,listOf(old,next)).mph)
     }
-    @Test fun longGpsStepAtBoundaryDoesNotEraseTrustworthyPrior() {
+    @Test fun longGpsStepAtBoundaryClearsTheBoundedAssumption() {
         val e=LimitDecisionEngine();val matcher=RoadMatcher()
         drive(e,matcher,180.0,1000,listOf(old,next))
         val candidate=drive(e,matcher,360.0,2000,listOf(old,next))
-        assertEquals(60,candidate.mph);assertTrue(candidate.assumed);assertEquals(40,candidate.upcoming?.mph)
+        assertNull(candidate.mph);assertFalse(candidate.assumed);assertEquals(40,candidate.upcoming?.mph)
     }
     @Test fun matchGapCannotInventLimitOutsidePriorGeometry() {
         val e=LimitDecisionEngine();val matcher=RoadMatcher()
@@ -72,7 +79,7 @@ class PhysicalRoadRegressionTest {
         val stale=pipeline.evaluate(fix(260.0,1000),listOf(old,next),listOf(RoadDb.Override(next.id,0.0,40)),emptyMap(),emptyList(),emptyList(),7000,17_000)
         assertNull(stale.decision.mph);assertTrue(stale.decision.reason.contains("stale"))
         val freshGap=pipeline.evaluate(fix(190.0,8000),emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),8000,18_000)
-        assertEquals(60,freshGap.decision.mph);assertTrue(freshGap.decision.assumed)
+        assertNull(freshGap.decision.mph);assertFalse(freshGap.decision.assumed)
     }
     @Test fun takingConnectedUnknownBranchDoesNotRetainAbandonedRoadPreview() {
         val junction=Geo.ahead(p,0.0,200.0)
@@ -81,7 +88,7 @@ class PhysicalRoadRegressionTest {
         assertEquals(40,pipeline.evaluate(fix(160.0,1000),listOf(old,next,branch),emptyList(),emptyMap(),emptyList(),emptyList(),1000,11_000).upcoming?.mph)
         val turned=fix(230.0,2000).copy(point=Geo.ahead(junction,20.0,30.0),bearing=20.0)
         val result=pipeline.evaluate(turned,listOf(old,next,branch),emptyList(),emptyMap(),emptyList(),emptyList(),2000,12_000)
-        assertEquals(branch.id,result.road?.road?.id);assertEquals(60,result.decision.mph)
+        assertEquals(branch.id,result.road?.road?.id);assertNull(result.decision.mph)
         assertNull(result.upcoming)
     }
     @Test fun singlePickerConfirmationDoesNotOverrideEntireLongRoad() {
@@ -132,5 +139,29 @@ class PhysicalRoadRegressionTest {
         assertEquals(40,live.limitMph);assertFalse(live.limitDecision!!.assumed)
         val future=DrivingLimitPipeline().evaluate(fix(285.0,1000),listOf(old,next),emptyList(),emptyMap(),listOf(second.boundary!!),emptyList(),1000,20_000)
         assertEquals(60,future.decision.mph);assertEquals(40,future.upcoming?.mph)
+    }
+    @Test fun liveRoadStateFeedsTheRealPipelineOnlyWhenRegionalAuthorityIsUnavailable() {
+        val unknown=road("regional-unknown",0.0,1_000.0,null)
+        val live=LiveRoadState(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,true,20,false,unknown.id)
+        val fallback=DrivingLimitPipeline().evaluate(fix(100.0,1_000),listOf(unknown),emptyList(),emptyMap(),emptyList(),emptyList(),1_000,11_000,
+            RegionalPackMatcher.Result(RoadProviderState.COVERAGE_UNAVAILABLE,null),live)
+        assertEquals(20,fallback.decision.mph)
+        val terminal=DrivingLimitPipeline().evaluate(fix(100.0,1_000),listOf(unknown),emptyList(),emptyMap(),emptyList(),emptyList(),1_000,11_000,
+            RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_UNKNOWN,RoadMatch(unknown,0.0,0.0,.95)),live)
+        assertNull(terminal.decision.mph)
+    }
+    @Test fun regionalWayBoundaryKeepsSameLimitAssumedUntilTheNextWayConfirmsIt() {
+        val first=road("osm:100",0.0,200.0,40)
+        val second=road("osm:101",200.0,1_000.0,40)
+        val pipeline=DrivingLimitPipeline()
+        val known=RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,RoadMatch(first,0.0,0.0,.95))
+        assertEquals(40,pipeline.evaluate(fix(180.0,1_000),emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),1_000,11_000,known).decision.mph)
+        // The regional RTree has found the connected next way, but cannot yet choose it
+        // authoritatively. It is context for bounded continuity only, never a new limit.
+        val gap=RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCH_UNCERTAIN,null,candidates=listOf(second))
+        val assumed=pipeline.evaluate(fix(205.0,1_500),emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),1_500,11_500,gap)
+        assertEquals(40,assumed.decision.mph);assertTrue(assumed.decision.assumed)
+        val confirmed=RegionalPackMatcher.Result(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,RoadMatch(second,0.0,0.0,.95))
+        assertEquals(40,pipeline.evaluate(fix(215.0,1_800),emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),1_800,11_800,confirmed).decision.mph)
     }
 }

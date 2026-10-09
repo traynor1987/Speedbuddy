@@ -13,14 +13,13 @@ class RoadCacheTest {
             assertTrue(RoadTile.at(Geo.ahead(point, it, 32_000.0)) in tiles)
         }
     }
-    @Test fun freshCoverageNeverDownloadsAgainAtFifteenMinuteCheck() {
+    @Test fun savedCoverageIsPermanentAndNeverRefreshesJustBecauseItIsOld() {
         val now = 10_000_000L
         val saved = RoadTiles.covering(point).associateWith { now }
         val planner = RoadRefreshPlanner()
         assertNull(planner.next(fix(speed = 0.0), saved, now))
-        assertNull(planner.next(fix(speed = 0.0), saved, now + 899_000))
-        assertNull(planner.next(fix(speed = 0.0), saved, now + 900_000))
-        assertEquals(now + 900_000, planner.lastCheckMs)
+        assertNull(planner.next(fix(speed = 0.0), saved, now + ROAD_FRESH_MS + 900_000))
+        assertEquals(now + ROAD_FRESH_MS + 900_000, planner.lastCheckMs)
     }
     @Test fun missingLocalTileComesFirstAndFailureBacksOff() {
         val planner = RoadRefreshPlanner()
@@ -48,16 +47,38 @@ class RoadCacheTest {
         val far=Geo.ahead(point,0.0,8000.0)
         assertNotNull(planner.next(fix(far),saved,903_000))
     }
-    @Test fun retentionLimitStillRefreshesRetainedStaleOuterData() {
+    @Test fun retentionLimitDoesNotRefreshPreviouslySavedOuterData() {
         val planner=RoadRefreshPlanner();val local=RoadTile.at(point)
         val outer=RoadTile.at(Geo.ahead(point,0.0,12000.0))
         planner.retentionLimited(point)
         val now=ROAD_FRESH_MS+2000
-        assertEquals(outer,planner.next(fix(speed=0.0),mapOf(local to now,outer to 1000L),now))
+        assertNull(planner.next(fix(speed=0.0),mapOf(local to now,outer to 1000L),now))
     }
-    @Test fun staleCoverageSchedulesRefreshWithoutInvalidatingData() {
+    @Test fun savedTilesDoNotKeepFillingTheTwentyMileCircle() {
         val planner = RoadRefreshPlanner()
-        val saved = RoadTiles.covering(point).associateWith { 1000L }
-        assertNotNull(planner.next(fix(speed = 0.0), saved, 1000 + ROAD_FRESH_MS + 1))
+        val local = RoadTile.at(point)
+        val ahead = RoadTile.at(Geo.ahead(point, 0.0, 1800.0))
+        val saved = mapOf(local to 1000L, ahead to 1000L)
+        assertNull(planner.next(fix(speed = 12.0), saved, 1001))
+    }
+    @Test fun denseParentSelectsTheCurrentChildBeforeAnyOtherQuadrant() {
+        val parent=RoadTile.at(point)
+        val current=GeoPoint(parent.south+.001,parent.east-.001)
+        val child=RoadSubdivision.next(parent,current,setOf(parent))
+        assertEquals(1,child.level)
+        assertTrue(child.contains(current))
+        assertEquals(parent,child.copy(path=""))
+    }
+    @Test fun denseSubdivisionIsBoundedAtTheMinimumRegionSize() {
+        val parent=RoadTile.at(point)
+        var tile=parent
+        repeat(MAX_ROAD_SUBDIVISION_DEPTH) { tile=tile.childContaining(point) }
+        assertNull(RoadSubdivision.afterOversize(tile,point))
+    }
+    @Test fun completedDenseChildCountsAsUsefulCurrentCoverageWithoutCompletingParent() {
+        val parent=RoadTile.at(point);val child=parent.childContaining(point)
+        val planner=RoadRefreshPlanner()
+        assertNull(planner.next(fix(),mapOf(child to 1000L),1000))
+        assertNotNull(planner.next(fix(Geo.ahead(point,180.0,20_000.0)),mapOf(child to 1000L),1001))
     }
 }

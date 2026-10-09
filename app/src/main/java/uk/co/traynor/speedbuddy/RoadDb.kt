@@ -9,10 +9,16 @@ import org.json.JSONObject
 import kotlin.math.cos
 
 /** Public tile storage is independent of owner cameras, settings and local corrections. */
-class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,4) {
-    override fun onConfigure(db: SQLiteDatabase) { db.execSQL("PRAGMA auto_vacuum=INCREMENTAL") }
+class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(context,name,null,5) {
+    private val diagnosticPreferences=context.getSharedPreferences("diagnostic-retention",Context.MODE_PRIVATE)
+    private val diagnosticKey=context.getDatabasePath(name).absolutePath
+    override fun onConfigure(db: SQLiteDatabase) {
+        db.execSQL("PRAGMA auto_vacuum=INCREMENTAL")
+        db.rawQuery("PRAGMA secure_delete=ON",null).use { it.moveToFirst() }
+    }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE tiles(id TEXT PRIMARY KEY,fetched INTEGER NOT NULL,bytes INTEGER NOT NULL,complete INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE tile_subdivisions(id TEXT PRIMARY KEY)")
         db.execSQL("CREATE TABLE roads(pk INTEGER PRIMARY KEY,tile TEXT NOT NULL,road_id TEXT NOT NULL,payload TEXT NOT NULL,UNIQUE(tile,road_id))")
         db.execSQL("CREATE INDEX road_tile ON roads(tile)")
         db.execSQL("CREATE TABLE road_cells(y INTEGER NOT NULL,x INTEGER NOT NULL,pk INTEGER NOT NULL,PRIMARY KEY(y,x,pk))")
@@ -33,12 +39,20 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         db.execSQL("CREATE TABLE average_sections(tile TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(tile,id))")
     }
     override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
+        if(oldVersion<5) db.execSQL("CREATE TABLE IF NOT EXISTS tile_subdivisions(id TEXT PRIMARY KEY)")
         if(oldVersion<4) createLearning(db)
         if(oldVersion<3) createSections(db)
         if(oldVersion<2) db.execSQL("ALTER TABLE overrides ADD COLUMN payload TEXT")
     }
     fun coverage(): Map<RoadTile,Long> = readableDatabase.rawQuery("SELECT id,fetched FROM tiles WHERE complete=1",null).use { c ->
         buildMap { while(c.moveToNext()) put(RoadTile.parse(c.getString(0)),c.getLong(1)) }
+    }
+    /** A subdivision marker has no road data itself: it records that its children are the truthful coverage units. */
+    fun subdivisions(): Set<RoadTile> = readableDatabase.rawQuery("SELECT id FROM tile_subdivisions",null).use { c ->
+        buildSet { while(c.moveToNext()) add(RoadTile.parse(c.getString(0))) }
+    }
+    fun markSubdivided(tile: RoadTile) {
+        writableDatabase.insertWithOnConflict("tile_subdivisions",null,ContentValues().apply { put("id",tile.id) },SQLiteDatabase.CONFLICT_IGNORE)
     }
     fun replace(data: RoadTileData) {
         require(data.fetchedAt > 0 && data.roads.size <= 30_000)
@@ -131,12 +145,16 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         val all=db.rawQuery("SELECT id,bytes FROM tiles ORDER BY fetched ASC",null).use { c -> buildList { while(c.moveToNext()) add(c.getString(0) to c.getLong(1)) } }
         var count=all.size;var bytes=all.sumOf { it.second }
         db.beginTransaction()
-        try { all.forEach { (id,size) -> if((count>maxTiles || bytes>maxBytes) && RoadTile.parse(id) !in protected) { deleteTile(db,id);count--;bytes-=size } };db.setTransactionSuccessful() }
+        try { all.forEach { (id,size) ->
+            val region=RoadTile.parse(id); val parent=region.copy(path="")
+            if((count>maxTiles || bytes>maxBytes) && region !in protected && parent !in protected) { deleteTile(db,id);count--;bytes-=size }
+        };db.setTransactionSuccessful() }
         finally { db.endTransaction() }
-        db.execSQL("PRAGMA incremental_vacuum(2048)")
+        maintainStorage()
     }
     data class Override(val road: String,val bearing: Double,val mph: Int,val sourceMph: Int? = null,
-        val point: GeoPoint? = null,val recordedAt: Long = 0,val accuracy: Double? = null)
+        val point: GeoPoint? = null,val recordedAt: Long = 0,val accuracy: Double? = null,
+        val sharedAcrossDirections: Boolean = false)
     fun overrides(): List<Override> = readableDatabase.rawQuery("SELECT road,bearing,mph,payload FROM overrides",null).use { c ->
         buildList { while(c.moveToNext()) add(if(c.isNull(3)) Override(c.getString(0),c.getDouble(1),c.getInt(2)) else RoadJson.decodeOverride(JSONObject(c.getString(3)))) }
     }
@@ -146,7 +164,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         require(road.isNotBlank() && bearing.isFinite() && bearing in 0.0..<360.0)
         val db=writableDatabase;db.beginTransaction()
         try {
-            overrides().filter { it.road==road && Geo.difference(it.bearing,bearing)<45 }.forEach { db.delete("overrides","road=? AND bearing=?",arrayOf(road,it.bearing.toString())) }
+            overrides().filter { RoadIdentity.same(it.road,road) && (it.sharedAcrossDirections || Geo.difference(it.bearing,bearing)<45) }.forEach { db.delete("overrides","road=? AND bearing=?",arrayOf(it.road,it.bearing.toString())) }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -157,7 +175,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         require(row.recordedAt>=0 && (row.accuracy==null || row.accuracy.isFinite() && row.accuracy in 0.0..20.0))
         val db=writableDatabase;db.beginTransaction()
         try {
-            overrides().filter { it.road==row.road && Geo.difference(it.bearing,row.bearing)<45 }.forEach {
+            overrides().filter { RoadIdentity.same(it.road,row.road) && Geo.difference(it.bearing,row.bearing)<45 }.forEach {
                 db.delete("overrides","road=? AND bearing=?",arrayOf(it.road,it.bearing.toString()))
             }
             db.insertOrThrow("overrides",null,ContentValues().apply {
@@ -170,7 +188,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         require(validPoint(b.predicted) && validPoint(b.observed) && b.oldMph in 5..100 && b.newMph in 5..100 && b.fromId!=b.toId)
         val db=writableDatabase;db.beginTransaction()
         try {
-            boundaries().filter { it.fromId==b.fromId && it.toId==b.toId && Geo.difference(it.bearing,b.bearing)<45 }.forEach {
+            boundaries().filter { RoadIdentity.same(it.fromId,b.fromId) && RoadIdentity.same(it.toId,b.toId) && Geo.difference(it.bearing,b.bearing)<45 }.forEach {
                 db.delete("boundaries","key=?",arrayOf(boundaryKey(it)))
             }
             db.insertOrThrow("boundaries",null,ContentValues().apply { put("key",boundaryKey(b));put("payload",RoadJson.boundary(b).toString()) })
@@ -191,7 +209,7 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         observations().filter { o.recordedAt-it.recordedAt>120_000 }.forEach {
             writableDatabase.delete("boundary_observations","key=?",arrayOf(observationKey(it)))
         }
-        observations().filter { it.from.id==o.from.id && it.to.id==o.to.id && Geo.difference(it.bearing,o.bearing)<45 }.forEach {
+        observations().filter { RoadIdentity.same(it.from.id,o.from.id) && RoadIdentity.same(it.to.id,o.to.id) && Geo.difference(it.bearing,o.bearing)<45 }.forEach {
             writableDatabase.delete("boundary_observations","key=?",arrayOf(observationKey(it)))
         }
         writableDatabase.insertOrThrow("boundary_observations",null,ContentValues().apply {
@@ -199,40 +217,65 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         })
     }
     /** Persist evidence and classification together before activating any live selection. */
-    fun saveSelection(plan: LimitSelectionPlan,diagnostic: String) {
+    fun saveSelection(plan: LimitSelectionPlan,diagnostic: String)=synchronized(diagnosticLock) {
         val db=writableDatabase;db.beginTransaction()
         try {
             plan.override?.let(::saveOverride);plan.observation?.let(::saveObservation)
             val retired=plan.boundary?.let { b -> overrides().filter {
-                it.road in b.viaIds+b.toId && Geo.difference(it.bearing,b.bearing)<45 &&
+                RoadIdentity.canonical(it.road) in (b.viaIds+b.toId).map(RoadIdentity::canonical) &&
+                    (it.sharedAcrossDirections && b.sharedAcrossDirections || Geo.difference(it.bearing,b.bearing)<45) &&
                     (it.point==null || Geo.distance(it.point,b.observed)<=600)
             } } ?: emptyList()
             plan.boundary?.let { b ->
                 // The owner's newer local boundary replaces the candidate's whole-segment tap.
                 retired.forEach { setOverride(it.road,it.bearing,null) };saveBoundary(b)
             }
-            plan.consumed?.let { db.delete("boundary_observations","key=?",arrayOf(observationKey(it))) }
+            plan.consumed?.let { consumed -> observations().filter {
+                RoadIdentity.same(it.from.id,consumed.from.id) && RoadIdentity.same(it.to.id,consumed.to.id) &&
+                    it.bearing==consumed.bearing && it.recordedAt==consumed.recordedAt
+            }.forEach { db.delete("boundary_observations","key=?",arrayOf(observationKey(it))) } }
             recordDiagnostic(JSONObject(diagnostic).put("retiredSegmentOverrides",JSONArray(retired.map(RoadJson::override))).toString())
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
-    fun recordDiagnostic(payload: String) {
-        require(payload.length<=32_000);JSONObject(payload)
+    /** Count-bounded recent locations, not a time-bounded or exported journey log. */
+    fun recordDiagnostic(payload: String)=synchronized(diagnosticLock) {
+        require(payload.length<=32_000);val json=JSONObject(payload)
+        val cutoff=diagnosticPreferences.getLong(diagnosticKey,0)
+        if(json.has("at") && json.optLong("at",0)<=cutoff) return@synchronized
         val db=writableDatabase
-        db.insertOrThrow("limit_diagnostics",null,ContentValues().apply { put("payload",payload) })
-        db.execSQL("DELETE FROM limit_diagnostics WHERE id NOT IN (SELECT id FROM limit_diagnostics ORDER BY id DESC LIMIT 500)")
+        db.beginTransaction()
+        try {
+            db.insertOrThrow("limit_diagnostics",null,ContentValues().apply { put("payload",payload) })
+            db.execSQL("DELETE FROM limit_diagnostics WHERE id NOT IN (SELECT id FROM limit_diagnostics ORDER BY id DESC LIMIT 500)")
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
     fun diagnostics(): List<String> = readableDatabase.rawQuery("SELECT payload FROM limit_diagnostics ORDER BY id DESC",null).use { c ->
         buildList { while(c.moveToNext()) add(c.getString(0)) }
     }
+    fun clearDiagnostics()=synchronized(diagnosticLock) {
+        check(diagnosticPreferences.edit().putLong(diagnosticKey,System.currentTimeMillis()).commit()) { "Could not save diagnostic clear boundary" }
+        writableDatabase.delete("limit_diagnostics",null,null)
+        maintainStorage()
+    }
+    /** Old databases need VACUUM once to enable incremental mode; never run inside a transaction. */
+    fun maintainStorage() {
+        val db=writableDatabase
+        check(!db.inTransaction()) { "Storage maintenance requires a closed transaction" }
+        val mode=db.rawQuery("PRAGMA auto_vacuum",null).use { it.moveToFirst();it.getInt(0) }
+        if(mode!=2) { db.execSQL("PRAGMA auto_vacuum=INCREMENTAL");db.execSQL("VACUUM") }
+        val free=db.rawQuery("PRAGMA freelist_count",null).use { it.moveToFirst();it.getInt(0) }
+        if(free>0) db.rawQuery("PRAGMA incremental_vacuum(2048)",null).use { c -> while(c.moveToNext()) { /* stepping executes maintenance */ } }
+    }
     fun deleteOwnerCorrections(road: String) {
         val db=writableDatabase;db.beginTransaction()
         try {
-            db.delete("overrides","road=?",arrayOf(road))
-            boundaries().filter { it.fromId==road || it.toId==road }.forEach {
+            overrides().filter { RoadIdentity.same(it.road,road) }.forEach { db.delete("overrides","road=? AND bearing=?",arrayOf(it.road,it.bearing.toString())) }
+            boundaries().filter { RoadIdentity.same(it.fromId,road) || RoadIdentity.same(it.toId,road) }.forEach {
                 db.delete("boundaries","key=?",arrayOf(boundaryKey(it)))
             }
-            observations().filter { it.from.id==road || it.to.id==road }.forEach {
+            observations().filter { RoadIdentity.same(it.from.id,road) || RoadIdentity.same(it.to.id,road) }.forEach {
                 db.delete("boundary_observations","key=?",arrayOf(observationKey(it)))
             }
             db.setTransactionSuccessful()
@@ -255,8 +298,13 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
         } finally { db.endTransaction() }
     }
     companion object {
-        fun selectOverride(overrides: List<Override>,road: String,bearing: Double?): Int? = bearing?.let { heading ->
-            overrides.filter { it.road==road && Geo.difference(it.bearing,heading)<45 }.minByOrNull { Geo.difference(it.bearing,heading) }?.mph
+        private val diagnosticLock=Any()
+        fun selectOverride(overrides: List<Override>,road: String,bearing: Double?): Int? {
+            val matching=overrides.filter { RoadIdentity.same(it.road,road) &&
+                (it.sharedAcrossDirections || bearing?.let { b -> Geo.difference(it.bearing,b)<45 }==true) }
+            // Explicit directional records retain priority in their own direction.
+            return matching.sortedWith(compareBy<Override> { it.sharedAcrossDirections }
+                .thenByDescending { it.recordedAt }.thenBy { bearing?.let { b -> Geo.difference(it.bearing,b) } ?: 0.0 }).firstOrNull()?.mph
         }
     }
 }
@@ -264,10 +312,10 @@ class RoadDb(context: Context,name: String = "roads.db") : SQLiteOpenHelper(cont
 internal object RoadJson {
     fun override(o: RoadDb.Override)=JSONObject().put("road",o.road).put("bearing",o.bearing).put("mph",o.mph)
         .put("source",o.sourceMph?:JSONObject.NULL).put("point",o.point?.let(::point)?:JSONObject.NULL)
-        .put("at",o.recordedAt).put("accuracy",o.accuracy?:JSONObject.NULL)
+        .put("at",o.recordedAt).put("accuracy",o.accuracy?:JSONObject.NULL).put("shared",o.sharedAcrossDirections)
     fun decodeOverride(j: JSONObject)=RoadDb.Override(j.getString("road"),j.getDouble("bearing"),j.getInt("mph"),
         if(j.isNull("source")) null else j.getInt("source"),if(j.isNull("point")) null else point(j.getJSONArray("point")),
-        j.optLong("at",0),if(j.isNull("accuracy")) null else j.getDouble("accuracy"))
+        j.optLong("at",0),if(j.isNull("accuracy")) null else j.getDouble("accuracy"),j.optBoolean("shared",false))
     fun point(p: GeoPoint)=JSONArray().put(p.lat).put(p.lon)
     fun point(a: JSONArray)=GeoPoint(a.getDouble(0),a.getDouble(1))
     fun encode(r: Road)=JSONObject().put("id",r.id).put("name",r.name?:JSONObject.NULL).put("points",JSONArray().apply { r.points.forEach { put(point(it)) } }).put("tags",JSONObject(r.tags))
@@ -308,5 +356,11 @@ class RoadCacheUpdater(private val db: RoadDb) {
         require(fresh.tile==tile && fresh.complete) { "Wrong or incomplete replacement tile" }
         db.replace(fresh)
         return fresh
+    }
+    /** Dense child regions are complete only for their exact bounds, never their parent. */
+    fun store(data: RoadTileData): RoadTileData {
+        require(data.complete)
+        db.replace(data)
+        return data
     }
 }

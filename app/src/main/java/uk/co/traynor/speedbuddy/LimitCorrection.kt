@@ -17,15 +17,26 @@ object OwnerLimit {
 
 /** The picker sends its road identity; the service validates it against a fresh live match. */
 object QuickLimitCorrection {
-    fun capture(fix: Fix,match: RoadMatch?,source: Int?,selected: Int,targetRoad: String,now: Long): RoadDb.Override? {
-        if(match==null || match.road.id!=targetRoad || !OwnerLimit.valid(selected) ||
-            now-fix.elapsedMs !in 0..5000 || !validPoint(fix.point) || !fix.accuracyM.isFinite() ||
-            fix.accuracyM !in 0.0..20.0 || match.confidence<.7 ||
-            (match.headingDifference ?: 90.0)>30 || fix.bearing==null || !fix.bearing.isFinite() ||
-            fix.bearing !in 0.0..<360.0 || Geo.projection(fix.point,match.road.points).first>25) return null
-        return RoadDb.Override(match.road.id,fix.bearing,selected,source,fix.point,System.currentTimeMillis(),fix.accuracyM)
+    fun capture(fix: Fix,match: RoadMatch?,source: Int?,selected: Int,targetRoad: String,now: Long,directionSpecific: Boolean = false): RoadDb.Override? {
+        if(match==null || !RoadIdentity.same(match.road.id,targetRoad) || !OwnerLimit.valid(selected) ||
+            !correctionReady(fix, match, now)) return null
+        return RoadDb.Override(match.road.id,fix.bearing ?: return null,selected,source,fix.point,System.currentTimeMillis(),fix.accuracyM,
+            sharedAcrossDirections=!directionSpecific && CorrectionDirectionPolicy.ordinaryTwoWay(match.road))
     }
 }
+
+/** The UI and service share this gate, so the owner is never asked to retry blind. */
+internal fun correctionReady(fix: Fix?, match: RoadMatch?, now: Long): Boolean {
+    val bearing = fix?.bearing
+    return fix != null && match != null && now-fix.elapsedMs in 0..5000 && validPoint(fix.point) &&
+        fix.accuracyM.isFinite() && fix.accuracyM in 0.0..20.0 && match.confidence >= .7 &&
+        (match.headingDifference ?: 90.0) <= 30 && bearing?.isFinite() == true &&
+        bearing in 0.0..<360.0 && Geo.projection(fix.point, match.road.points).first <= 25
+}
+
+/** Explain the real prerequisite rather than asking the owner to guess where to tap. */
+internal fun unmatchedCorrectionMessage() =
+    "Waiting for a reliable road match. The + control becomes available when Speed Buddy has identified this road; then, when safely stopped, tap the large round limit sign."
 
 /** One owner assertion, separate from road overrides and from downloaded data. */
 data class BoundaryObservation(val from: Road,val to: Road,val oldMph: Int,val newMph: Int,

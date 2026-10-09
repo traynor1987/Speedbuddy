@@ -22,7 +22,11 @@ class PhysicalRoadPipelineTest {
         assertEquals(60,gap.limitMph);assertTrue(gap.limitDecision!!.assumed)
         assertFalse(gap.status.contains("unknown"))
         val candidate=state(225.0,3000,listOf(old,next))
-        assertEquals(60,candidate.limitMph);assertEquals(40,candidate.upcoming!!.mph)
+        // Preserve the engine continuity contract, but the new junction UI must
+        // not present the previous road's assumed number as the current limit.
+        assertEquals(60,candidate.limitDecision!!.mph);assertEquals(40,candidate.limitDecision!!.upcoming!!.mph)
+        assertNull(candidate.limitMph);assertTrue(candidate.limitPresentation!!.changing)
+        assertNull(candidate.upcoming)
         state(240.0,4000,listOf(old,next))
         assertEquals(40,state(260.0,5000,listOf(old,next)).limitMph)
         assertNull(state(900.0,100_000,emptyList()).limitMph)
