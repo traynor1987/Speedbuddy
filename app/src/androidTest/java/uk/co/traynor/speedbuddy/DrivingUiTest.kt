@@ -128,14 +128,14 @@ class DrivingUiTest {
         compose.onNodeWithContentDescription("40 mph").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(Triple("SET_LIMIT",40,"way/ui-boundary"),correction) }
     }
-    @Test fun unknownWithoutCurrentRoadExplainsThatItMustFirstBeIdentified() {
+    @Test fun unknownWithoutCurrentRoadKeepsVerificationStatusAndCannotSubmitCorrection() {
         val elapsed=android.os.SystemClock.elapsedRealtime()
         val state=DriveState(active=true,fix=Fix(GeoPoint(53.5,-2.8),8.0,0.0,null,0.0,elapsed))
         var correction: Triple<String,Int?,String?>?=null
         compose.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{},
             onFeedback={action,mph,id->correction=Triple(action,mph,id)}) } }
         compose.onNodeWithContentDescription("Set this road's speed limit").performClick()
-        compose.onNodeWithText("Waiting to identify this road — + becomes available when ready").assertIsDisplayed()
+        compose.onNodeWithText("Waiting to verify this road").assertIsDisplayed()
         compose.onNodeWithText("Choose the real limit").assertDoesNotExist()
         compose.runOnIdle { assertNull(correction) }
     }
