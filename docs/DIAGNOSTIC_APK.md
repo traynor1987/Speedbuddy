@@ -8,6 +8,16 @@ The owner physically downloaded and installed Lancashire and Merseyside producti
 
 ## Diagnostic checks
 
+### Capture rapid changes
+
+This build adds **Road Decision Monitor** to Diagnostics. It records up to 500 meaningful events in memory before StateFlow or rendering can skip intermediate publications. Separate GPS, regional-match, pipeline-evidence, presentation and publication stages have monotonic timestamps, sequence/fix identifiers, previous/new state, matching confidence and privacy-safe reasons. An unevaluated stage is explicitly marked; it is not an Unknown road decision.
+
+Use **Freeze diagnostics** while stopped to inspect a fixed visible snapshot. GPS, road matching, camera alerts and audio continue. Frozen correction actions are disabled to avoid applying a displayed old road's action to a new live road. **Unfreeze diagnostics** returns to current values. **View recent changes** shows newest first. **Export diagnostic report** opens the share chooser for a redacted JSON report; no upload happens automatically. Export while the event is still in the rolling history, before force-closing the process. Activity recreation preserves history and freeze; process exit clears memory. One exported report remains in the app cache until replaced or the cache is cleared.
+
+Reports exclude precise coordinates, raw road IDs/names, credentials, headers and personal identifiers. Road identifiers are salted per process, and untrusted reason details are omitted. Precise-location export is not provided. **Clear diagnostic history** clears only this recorder and unfreezes inspection; existing local diagnostic receipts and all owner data remain separate.
+
+No underlying race has been established by the owner's screenshots. Code and deterministic tests establish that GPS pending and completed evaluations can produce rapid source publications; this recorder will distinguish those from recomposition-only changes. Capturing the flicker does not mean its underlying cause is fixed. The previous road-safety decisions are preserved.
+
 Operate the phone only while safely stopped; a passenger may observe during a drive. Follow posted road signs regardless of the app.
 
 1. **Without packs:** confirm your access token is retained. Start Driving without installed regional packs. Capture Diagnostics: live request status, response age, provider, fallback reason and GPS freshness. Verified regional data has authority when installed. Without it, fresh compatible live evidence precedes saved legacy OSM. Numeric-only live data requires reliable local road identity; conflicting identity stays uncertain. Saved legacy data may cover pending/unavailable live requests, with the actual failure shown. Authentication/rate-limit/uncertain responses do not trigger a public-network fallback bypass.

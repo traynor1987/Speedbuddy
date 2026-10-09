@@ -4,7 +4,7 @@ import org.json.JSONObject
 
 /** Drive mode and regressions share matching, source selection, owner priority and UI mapping. */
 internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecisionEngine(),
-    val matcher: RoadMatcher = RoadMatcher()) {
+    val matcher: RoadMatcher = RoadMatcher(),private val recorder: RoadFlightRecorder=RoadDecisionFlight.recorder) {
     private val presentation=LimitPresentation()
     private val upcomingDetector=UpcomingLimitDetector()
     private data class Preview(val upcoming: UpcomingLimit,val current: Int?,val roadId: String?,val fix: Fix,val at: Long)
@@ -24,8 +24,10 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
         boundaries: List<BoundaryCorrection>,observations: List<BoundaryObservation>,now: Long,wallNow: Long,
         regional: RegionalPackMatcher.Result? = null, live: LiveRoadState? = null): DriveLimitResult {
         // Reject before either matcher or engine can mutate state after delayed IO.
-        if(now-fix.elapsedMs !in 0..5000 || latestEvaluatedAt?.let { fix.elapsedMs<it }==true) return DriveLimitResult(fix,null,null,
-            LimitDecision(null,reason="Unavailable: stale GPS fix; decision history unchanged"),null)
+        if(now-fix.elapsedMs !in 0..5000 || latestEvaluatedAt?.let { fix.elapsedMs<it }==true) {
+            recorder.record(FlightStage.REJECTED,DriveState(fix=fix),"stale publication rejected",now)
+            return DriveLimitResult(fix,null,null,LimitDecision(null,reason="Unavailable: stale GPS fix; decision history unchanged"),null)
+        }
         // A covered regional pack is authoritative even when it says Unknown or uncertain.
         // Legacy cache is only considered when no usable regional provider participated.
         latestEvaluatedAt=fix.elapsedMs
@@ -58,7 +60,11 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
             return DriveLimitResult(fix,null,null,LimitDecision(null,reason="Unavailable: $reason"),null,
                 contextualRoads,false,RoadDataDiagnostics("Live server",resolved.state.name,
                     when(regional?.coverage) { true -> "Covered";false -> "Not covered";null -> "Not established" },
-                    sampleElapsedMs=fix.elapsedMs,error=reason,contextComplete=false))
+                    sampleElapsedMs=fix.elapsedMs,error=reason,contextComplete=false)).also { result ->
+                val raw=result.applyTo(DriveState())
+                recorder.record(FlightStage.DECISION,raw,"pipeline evidence",now,regional?.generation)
+                recorder.record(FlightStage.PRESENTATION,raw,"presentation resolved",now,regional?.generation)
+            }
         }
         val source=resolved.limitMph
         val direction=road?.takeIf { it.confidence>=.7 && fix.accuracyM<=20 &&
@@ -109,7 +115,12 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
             regional?.packDetails.orEmpty().map { RegionalPackInfo(it.displayName,it.id,it.version,it.osmTimestamp) },
             fix.elapsedMs,fallback,regional?.error ?: safeLive?.error ?: live?.error ?: live?.takeIf { it.state==RoadProviderState.SERVICE_UNAVAILABLE }?.let { "Live road service unavailable" },
             regional?.contextComplete)
+        val raw=DriveState(fix=fix,road=road,sourceLimitMph=source,limitDecision=decision,
+            roadData=details,roadDecisionElapsedMs=fix.elapsedMs)
+        recorder.record(FlightStage.DECISION,raw,"pipeline evidence",now,regional?.generation)
         val displayed=presentation.resolve(fix,road,decision,contextualRoads,geometryComplete)
+        recorder.record(FlightStage.PRESENTATION,raw.copy(limitPresentation=displayed,limitMph=displayed.mph),
+            "presentation resolved",now,regional?.generation)
         return DriveLimitResult(fix,road,source,decision,upcoming.takeUnless { displayed.changing },corrected,geometryComplete,details,displayed)
     }
 }

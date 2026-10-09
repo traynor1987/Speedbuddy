@@ -941,14 +941,28 @@ class MainActivity : ComponentActivity() {
     }
     Spacer(Modifier.height(20.dp))
 }
-@Composable internal fun DiagnosticsScreen(state: DriveState, correction: (String, Int?) -> Unit, back: () -> Unit) = Page("Diagnostics", back) {
+@Composable internal fun DiagnosticsScreen(liveState: DriveState, correction: (String, Int?) -> Unit, back: () -> Unit) = Page("Diagnostics", back) {
+    val frozen by DiagnosticsInspection.state.collectAsState()
+    val revision by RoadDecisionFlight.recorder.changes.collectAsState()
+    var elapsed by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
+    var wall by remember { mutableStateOf(System.currentTimeMillis()) }
+    var monitorNow by remember { mutableStateOf(System.nanoTime()/1_000_000) }
+    LaunchedEffect(frozen) { while(frozen==null) {
+        kotlinx.coroutines.delay(1000)
+        elapsed=SystemClock.elapsedRealtime();wall=System.currentTimeMillis();monitorNow=System.nanoTime()/1_000_000
+    } }
+    val state=frozen?.state ?: liveState
+    val visibleElapsed=frozen?.elapsedMs ?: elapsed
+    val visibleWall=frozen?.wallMs ?: wall
+    val liveHistory=remember(revision) { RoadDecisionFlight.recorder.snapshot() }
+    val history=frozen?.history ?: liveHistory.copy(capturedAtMs=maxOf(monitorNow,liveHistory.capturedAtMs))
     val context=androidx.compose.ui.platform.LocalContext.current
     val scope=rememberCoroutineScope()
     var retentionMessage by remember { mutableStateOf("") }
     var clearing by remember { mutableStateOf(false) }
     val identity=remember { runCatching { context.assets.open("owner-build.json").bufferedReader().use { JSONObject(it.readText()) } }.getOrNull() }
     val fix = state.fix
-    val fixAge = fix?.let { SystemClock.elapsedRealtime() - it.elapsedMs }
+    val fixAge = fix?.let { visibleElapsed - it.elapsedMs }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
         DiagnosticCard("GPS", listOf(
             "Status" to when {
@@ -964,7 +978,11 @@ class MainActivity : ComponentActivity() {
             "Speed" to fix?.speedMps?.let { "${(it * MPS_TO_MPH).roundToInt()} mph" },
             "Heading" to fix?.bearing?.let { "${it.roundToInt()}°" },
             "Fix age" to fixAge?.let { "${it / 1000} s" }))
-        DiagnosticCard("ROAD DATA",state.roadData.rows(elapsed=SystemClock.elapsedRealtime()))
+        RoadDecisionMonitor(state,history,frozen!=null,{
+            if(frozen==null) DriveBus.freezeDiagnostics()
+            else DiagnosticsInspection.unfreeze()
+        })
+        DiagnosticCard("ROAD DATA",state.roadData.rows(now=visibleWall,elapsed=visibleElapsed))
         DiagnosticCard("ROAD", listOf(
             "Matched road" to state.road?.road?.let { "${it.name ?: "Unnamed"} · ${it.id}" },
             "Confidence" to state.road?.let { String.format(Locale.UK, "%.2f", it.confidence) },
@@ -987,7 +1005,7 @@ class MainActivity : ComponentActivity() {
             "Data mode" to state.roadData.provider,
             "Legacy map data age" to state.dataAgeMs?.let { "${it / 60_000} min" },
             "Legacy map request" to state.mapStatus))
-        val parked = state.active && (state.speedMph ?: Double.MAX_VALUE) < 5.0
+        val parked = frozen==null && liveState.active && (liveState.speedMph ?: Double.MAX_VALUE) < 5.0
         if (state.active) Surface(shape = RoundedCornerShape(20.dp), color = Panel) {
             Column(Modifier.padding(16.dp)) {
                 Text("Local road corrections", fontWeight = FontWeight.Bold)
@@ -1001,7 +1019,7 @@ class MainActivity : ComponentActivity() {
         Surface(shape=RoundedCornerShape(20.dp),color=Panel) { Column(Modifier.padding(16.dp)) {
             Text("Local diagnostic retention",fontWeight=FontWeight.Bold)
             Text("Up to 500 recent records contain location, heading, time and road decisions. They survive restart until replaced or cleared; no fixed time expiry. They are not uploaded or included in owner exports.",color=Muted,fontSize=13.sp)
-            TextButton(enabled=!state.active && !clearing,onClick={ clearing=true;scope.launch {
+            TextButton(enabled=!liveState.active && !clearing,onClick={ clearing=true;scope.launch {
                 try { withContext(Dispatchers.IO) { check(!DriveBus.state.value.active) { "Stop driving before clearing diagnostics" };RoadDb(context).use { it.clearDiagnostics() } };retentionMessage="Local diagnostics cleared. Owner data was kept." }
                 catch(error: Exception) { retentionMessage=error.message ?: "Could not clear diagnostics" }
                 finally { clearing=false }
@@ -1020,6 +1038,48 @@ class MainActivity : ComponentActivity() {
             "Approaching" to if (state.decision.accepted) "Yes" else "No",
             "Decision" to state.decision.reason))
     }
+}
+@Composable private fun RoadDecisionMonitor(state: DriveState,history: FlightHistory,frozen: Boolean,toggleFreeze: () -> Unit) {
+    val context=androidx.compose.ui.platform.LocalContext.current
+    val scope=rememberCoroutineScope()
+    var recent by rememberSaveable { mutableStateOf(false) }
+    var exporting by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("") }
+    val last=history.events.lastOrNull()
+    Column {
+        DiagnosticCard("Road Decision Monitor",listOf(
+            "Current decision" to (history.current?.decision?.label() ?: FlightDecision.from(state.limitDecision,state.fix?.elapsedMs ?: 0).label()),
+            "Previous decision" to history.previousDecision?.decision?.label(),
+            "Last meaningful change" to last?.let { "${(history.capturedAtMs-it.atMs).coerceAtLeast(0)} ms ago · #${it.sequence} · ${it.stage}" },
+            "Decision changes in 30 seconds" to history.decisionChanges().toString(),
+            "Active provider" to state.roadData.provider,
+            "Current road-match confidence" to state.road?.confidence?.let { String.format(Locale.UK,"%.2f",it) },
+            "Current presentation state" to (history.current?.presentation?.label() ?: FlightDecision.from(state.limitPresentation ?: state.limitDecision,state.fix?.elapsedMs ?: 0).label())))
+        Surface(shape=RoundedCornerShape(20.dp),color=Panel) { Column(Modifier.padding(16.dp)) {
+            Text("${if(frozen) "Frozen snapshot" else "Live diagnostics"} · Driving processing continues",color=Muted,fontSize=13.sp)
+            TextButton(onClick=toggleFreeze) { Text(if(frozen) "Unfreeze diagnostics" else "Freeze diagnostics") }
+            TextButton(onClick={ recent=true }) { Text("View recent changes") }
+            TextButton(enabled=!exporting,onClick={ exporting=true;scope.launch {
+                try { shareRoadDiagnosticReport(context,history);message="Redacted report prepared for sharing." }
+                catch(_: Exception) { message="Could not export diagnostic report." }
+                finally { exporting=false }
+            } }) { Text("Export diagnostic report") }
+            Text("Reports omit precise location, road names and credentials. History holds up to 500 source events in this process; Activity recreation keeps it, process exit clears it. Export creates one on-device cache report and opens your share chooser.",color=Muted,fontSize=12.sp)
+            TextButton(onClick={ RoadDecisionFlight.recorder.clear();DiagnosticsInspection.unfreeze();message="Road decision history cleared. Owner data was kept." }) { Text("Clear diagnostic history") }
+            if(message.isNotBlank()) Text(message,color=Muted,fontSize=13.sp)
+        } }
+    }
+    if(recent) AlertDialog(onDismissRequest={recent=false},title={Text("Recent road decision changes")},text={
+        if(history.events.isEmpty()) Text("No recorded changes") else LazyColumn(Modifier.heightIn(max=420.dp)) {
+            items(history.events.asReversed(),key={it.sequence}) { event -> Column(Modifier.padding(vertical=8.dp)) {
+                Text("#${event.sequence} · ${event.atMs} ms monotonic · ${event.stage}",fontWeight=FontWeight.Bold,fontSize=12.sp)
+                Text("${event.previous?.decision?.label() ?: "No previous state"} → ${event.new.decision.label()}",fontSize=12.sp)
+                Text("Presentation: ${event.new.presentation.label()} · shown ${if(event.new.displayRecorded) event.new.displayedMph ?: "Unknown" else "Not evaluated"}",fontSize=12.sp)
+                Text("${event.cause} · fix ${event.new.fixSequence ?: "—"} · confidence ${event.new.matchConfidence ?: "—"}",fontSize=12.sp)
+                Text(event.new.decision.reason,color=Muted,fontSize=12.sp)
+            } }
+        }
+    },confirmButton={TextButton(onClick={recent=false}) { Text("Close") }})
 }
 @Composable private fun CameraList(records: List<Camera>, moving: Boolean, back: () -> Unit,
     edit: (Camera) -> Unit, delete: (Camera) -> Unit) = Page("My cameras", back) {

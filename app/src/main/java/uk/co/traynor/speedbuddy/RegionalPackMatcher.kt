@@ -20,7 +20,12 @@ internal class RegionalPackMatcher(context: Context) {
     private data class Batch(val roads: List<Road>,val complete: Boolean,val corrupt: Boolean)
 
     @Synchronized
-    fun match(fix: Fix): Result=packs.reading { matchReading(fix) }
+    fun match(fix: Fix): Result=packs.reading { matchReading(fix) }.also { result ->
+        RoadDecisionFlight.recorder.record(FlightStage.REGIONAL,DriveState(fix=fix,road=result.match,
+            sourceLimitMph=result.match?.let { PackSpeedLimits.mph(it.road.tags,fix.bearing,it) },
+            roadData=RoadDataDiagnostics("Regional offline",result.state.name,error=result.error)),
+            "regional result",android.os.SystemClock.elapsedRealtime(),result.generation)
+    }
     private fun matchReading(fix: Fix): Result {
         val snapshot=packs.snapshot()
         val generation=snapshot.generation

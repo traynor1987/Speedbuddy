@@ -44,33 +44,46 @@ data class DriveState(
 object DriveBus {
     private val mutable = MutableStateFlow(DriveState())
     val state = mutable.asStateFlow()
-    fun set(state: DriveState) {
-        if(state.fix!=null && mutable.value.fix?.let { it.elapsedMs>state.fix.elapsedMs }==true) return
-        mutable.value = state
+    @Synchronized internal fun freezeDiagnostics() {
+        DiagnosticsInspection.freeze(mutable.value,RoadDecisionFlight.recorder.snapshot(),SystemClock.elapsedRealtime(),System.currentTimeMillis())
+    }
+    @Synchronized fun set(state: DriveState) {
+        if(state.fix!=null && mutable.value.fix?.let { it.elapsedMs>state.fix.elapsedMs }==true) {
+            RoadDecisionFlight.recorder.record(FlightStage.REJECTED,state,"stale publication rejected",SystemClock.elapsedRealtime());return
+        }
+        publish(state,"state published")
+    }
+    private fun publish(state: DriveState,cause: String) {
+        // Capture before StateFlow conflation; no UI collector owns the history.
+        RoadDecisionFlight.recorder.record(FlightStage.PUBLISHED,state,cause,SystemClock.elapsedRealtime())
+        mutable.value=state
     }
 
-    fun expirePending(now: Long) {
+    @Synchronized fun expirePending(now: Long) {
         val current=mutable.value
         if(current.limitMph==null || current.limitDecision?.assumed!=true && current.limitPresentation?.assumed!=true ||
             PendingDrivingEvidence.anchor(current)?.let { now-it.elapsedMs>2000 }!=true) return
-        mutable.value=current.copy(limitMph=null,limitDecision=null,limitPresentation=null,road=null,alert=null,pendingConfirmedLimit=false,
+        publish(current.copy(limitMph=null,limitDecision=null,limitPresentation=null,road=null,alert=null,pendingConfirmedLimit=false,
             pendingLimitAnchor=null,pendingLimitDistanceM=0.0,upcoming=null,tooEarlyAvailable=false,boundaryAvailable=false,
-            alertPositionFresh=false)
+            alertPositionFresh=false),"pending expired")
     }
-    fun expireTransition(now: Long) {
+    @Synchronized fun expireTransition(now: Long) {
         val current=mutable.value
         if(current.limitPresentation?.changingUntilElapsedMs?.let { now>=it }!=true) return
-        mutable.value=current.copy(limitMph=null,limitPresentation=LimitDecision(null,reason="Unavailable: transition presentation expired"),upcoming=null)
+        publish(current.copy(limitMph=null,limitPresentation=LimitDecision(null,reason="Unavailable: transition presentation expired"),upcoming=null),"transition expired")
     }
     /** Location ownership remains in [DrivingService]; projection consumers get every useful speed promptly. */
-    fun publishLocationSpeed(speedMph: Double?, fix: Fix) {
-        if(mutable.value.fix?.let { it.elapsedMs>=fix.elapsedMs }==true) return
+    @Synchronized fun publishLocationSpeed(speedMph: Double?, fix: Fix) {
+        if(mutable.value.fix?.let { it.elapsedMs>=fix.elapsedMs }==true) {
+            RoadDecisionFlight.recorder.record(FlightStage.REJECTED,DriveState(fix=fix,speedMph=speedMph),"gps rejected",SystemClock.elapsedRealtime());return
+        }
+        RoadDecisionFlight.recorder.record(FlightStage.GPS,DriveState(active=true,fix=fix,speedMph=speedMph),"gps accepted",SystemClock.elapsedRealtime())
         // The displayed previous limit is pending fresh matching, never usable as a correction
         // target or a numeric warning for this new position.
         val prior=mutable.value
         val fits=PendingDrivingEvidence.fits(prior,fix)
         val pendingLimit=prior.limitMph.takeIf { fits }
-        mutable.value = prior.copy(active = true, speedMph = speedMph, fix = fix,limitMph=pendingLimit,
+        publish(prior.copy(active = true, speedMph = speedMph, fix = fix,limitMph=pendingLimit,
             road=prior.road.takeIf { fits },sourceLimitMph=prior.sourceLimitMph.takeIf { fits },
             pendingConfirmedLimit=fits && (prior.limitDecision?.assumed==false || prior.pendingConfirmedLimit),
             pendingLimitAnchor=PendingDrivingEvidence.anchor(prior).takeIf { fits },
@@ -80,7 +93,7 @@ object DriveBus {
             alertPositionFresh=fits && prior.alertPositionFresh,
             limitDecision=prior.limitDecision?.takeIf { pendingLimit!=null }?.copy(assumed=true,reason=PendingDrivingEvidence.reason),
             limitPresentation=prior.limitPresentation?.takeIf { it.changing && it.changingUntilElapsedMs?.let { at -> fix.elapsedMs<at }==true }
-                ?: prior.limitDecision?.takeIf { pendingLimit!=null }?.copy(assumed=true,reason=PendingDrivingEvidence.reason))
+                ?: prior.limitDecision?.takeIf { pendingLimit!=null }?.copy(assumed=true,reason=PendingDrivingEvidence.reason)),"pending GPS matching")
     }
 }
 
@@ -259,10 +272,13 @@ class DrivingService : Service(), LocationListener {
             if (location.hasSpeed()) location.speed.toDouble() else null,
             if (Build.VERSION.SDK_INT >= 26 && location.hasSpeedAccuracy()) location.speedAccuracyMetersPerSecond.toDouble() else null,
             if (location.hasBearing()) location.bearing.toDouble() else null, location.elapsedRealtimeNanos / 1_000_000)
-        if (stopped || !fixQueue.accepts(fix,now)) return
+        if (stopped || !fixQueue.accepts(fix,now)) {
+            RoadDecisionFlight.recorder.record(FlightStage.REJECTED,DriveState(fix=fix),"gps rejected",now);return
+        }
         val speed = speedFilter.update(fix, now)
         fixQueue.offer(fix,speed)
         if (!ready) {
+            RoadDecisionFlight.recorder.record(FlightStage.GPS,DriveState(active=true,fix=fix,speedMph=speed),"gps accepted",now)
             DriveBus.set(DriveBus.state.value.copy(active=true,speedMph=speed,fix=fix,status="Loading saved road data",mapStatus=mapStatus))
             return
         }
@@ -298,7 +314,10 @@ class DrivingService : Service(), LocationListener {
             // Geometry and directional matching belong to this GPS frame, even while
             // reusable legacy road/camera candidates remain within their cache window.
             val freshRegional=withContext(Dispatchers.IO) { regionalMatcher.match(fix) }
-            if(!fixQueue.current(fix,SystemClock.elapsedRealtime())) return
+            if(!fixQueue.current(fix,SystemClock.elapsedRealtime())) {
+                RoadDecisionFlight.recorder.record(FlightStage.REJECTED,DriveState(fix=fix,road=freshRegional.match,
+                    roadData=RoadDataDiagnostics("Regional offline",freshRegional.state.name)),"regional superseded",SystemClock.elapsedRealtime(),freshRegional.generation);return
+            }
             regional=freshRegional;regionalFixElapsedMs=fix.elapsedMs
             if (localGeneration != generation || cameraRevision!=OwnerDataRevision.cameras || now-localAt > 5000 || localPoint?.let { Geo.distance(it,fix.point)>150 } != false) {
                 val snapshot = readCurrentOwnerSnapshot({OwnerDataRevision.cameras}) { withContext(Dispatchers.IO) {

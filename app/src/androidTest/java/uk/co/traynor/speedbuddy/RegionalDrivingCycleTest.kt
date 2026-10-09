@@ -153,20 +153,26 @@ class RegionalDrivingCycleTest {
         install();startService()
         val first=send(Geo.ahead(origin,0.0,30.0),0.0)
         await { DriveBus.state.value.road?.road?.id=="way/101" }
-        val second=send(Geo.ahead(junction,90.0,30.0),90.0)
-        assertTrue(second-first<5000)
-        await { DriveBus.state.value.road?.road?.id=="way/102" }
-        assertEquals(50,DriveBus.state.value.sourceLimitMph)
-        assertEquals(second,DriveBus.state.value.fix!!.elapsedMs)
+        DriveBus.freezeDiagnostics()
+        try {
+            val second=send(Geo.ahead(junction,90.0,30.0),90.0)
+            assertTrue(second-first<5000)
+            await { DriveBus.state.value.road?.road?.id=="way/102" }
+            assertEquals(50,DriveBus.state.value.sourceLimitMph)
+            assertEquals(second,DriveBus.state.value.fix!!.elapsedMs)
+            assertEquals("way/101",DiagnosticsInspection.state.value!!.state.road!!.road.id)
+            assertEquals(first,DiagnosticsInspection.state.value!!.state.fix!!.elapsedMs)
+        } finally { DiagnosticsInspection.unfreeze() }
     }
     @Test fun actualServiceNeverPublishesDelayedOldFrameAndDrainsNewestPendingFix() {
         install();startService()
+        RoadDecisionFlight.recorder.clear()
         val matcher=field("regionalMatcher").get(service)!!
         val entered=CountDownLatch(1);val release=CountDownLatch(1)
         val blocker=Thread { synchronized(matcher) { entered.countDown();release.await(10,TimeUnit.SECONDS) } }.apply { start() }
         assertTrue(entered.await(2,TimeUnit.SECONDS))
         try {
-            send(Geo.ahead(origin,0.0,30.0),0.0)
+            val delayed=send(Geo.ahead(origin,0.0,30.0),0.0)
             Thread.sleep(50)
             val newest=send(Geo.ahead(junction,90.0,40.0),90.0,12f)
             val currentSpeed=DriveBus.state.value.speedMph
@@ -174,6 +180,10 @@ class RegionalDrivingCycleTest {
             await { DriveBus.state.value.road?.road?.id=="way/102" }
             assertEquals(newest,DriveBus.state.value.fix!!.elapsedMs)
             assertEquals(currentSpeed,DriveBus.state.value.speedMph)
+            val events=RoadDecisionFlight.recorder.snapshot().events
+            assertTrue(events.any { it.stage==FlightStage.REGIONAL && it.new.fixId==delayed })
+            assertTrue(events.any { it.stage==FlightStage.REJECTED && it.new.fixId==delayed && it.cause=="regional superseded" })
+            assertEquals(newest,RoadDecisionFlight.recorder.snapshot().current!!.fixId)
         } finally { release.countDown() }
     }
     @Test fun delayedNetworkResponseCannotOverwriteNewRegionalDecisionOrBlockGpsMatching() {
