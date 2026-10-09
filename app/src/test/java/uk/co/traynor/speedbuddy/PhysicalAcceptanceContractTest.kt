@@ -52,7 +52,8 @@ class PhysicalAcceptanceContractTest {
                 val result=pipeline.evaluate(fix,if(gap) emptyList() else listOf(road),emptyList(),emptyMap(),emptyList(),emptyList(),t,10000+t)
                 assertEquals(mph,result.decision.mph)
                 assertEquals(gap,result.decision.assumed)
-                assertEquals(gap || t%3000L==0L,result.presentation.assumed)
+                // Fresh completed evidence clears the former presentation recovery latch immediately.
+                assertEquals(gap,result.presentation.assumed)
             }
         }
         val p=GeoPoint(53.0,-2.0);val boundary=Geo.ahead(p,0.0,200.0)

@@ -43,6 +43,35 @@ class DrivingUiTest {
         compose.onNodeWithText("⚠ ASSUMED").assertDoesNotExist()
         compose.onNodeWithText("30 mph").assertIsDisplayed()
     }
+    @Test fun unknownSupportingTextDoesNotToggleWithPendingCorrectionReadiness() {
+        val p=GeoPoint(53.5,-2.8)
+        val road=Road("way/status",null,listOf(p,Geo.ahead(p,0.0,100.0)),emptyMap())
+        val fix=Fix(p,5.0,0.0,1.0,null,1000)
+        var state by mutableStateOf(DriveState(active=true,fix=fix))
+        val restoration=StateRestorationTester(compose)
+        restoration.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{}) } }
+        val text="Waiting to verify this road"
+        compose.onNodeWithText(text).performScrollTo().assertIsDisplayed()
+        repeat(3) {
+            compose.runOnIdle { state=state.copy(road=RoadMatch(road,0.0,null,1.0),roadDecisionElapsedMs=1000) }
+            compose.onNodeWithText(text).performScrollTo().assertIsDisplayed()
+            compose.runOnIdle { state=state.copy(roadDecisionElapsedMs=999) }
+            compose.onNodeWithText(text).performScrollTo().assertIsDisplayed()
+        }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText(text).performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { state=state.copy(limitMph=30,limitDecision=LimitDecision(30,reason="Confirmed")) }
+        compose.onNodeWithText(text).assertDoesNotExist()
+    }
+    @Test fun sameNumberConfirmationRemovesAssumedBadgeImmediately() {
+        var state by mutableStateOf(DriveState(limitMph=30,limitDecision=LimitDecision(30,reason="Gap",assumed=true)))
+        compose.setContent { MaterialTheme { DriveScreen(state,{},{},{},{},{},{},{},{}) } }
+        compose.onNodeWithText("⚠ ASSUMED").assertIsDisplayed()
+        compose.runOnIdle { state=state.copy(limitDecision=LimitDecision(30,reason="Confirmed")) }
+        compose.onNodeWithText("!").assertDoesNotExist()
+        compose.onNodeWithText("⚠ ASSUMED").assertDoesNotExist()
+        compose.onNodeWithText("30 mph").assertIsDisplayed()
+    }
     @Test fun mainMapEntryAndNaturalSignCorrectionCoexist() {
         val point=GeoPoint(53.5,-2.8)
         val road=Road("way/ui-coexist","Test road",listOf(point,Geo.ahead(point,0.0,400.0)),mapOf("maxspeed" to "30 mph"))

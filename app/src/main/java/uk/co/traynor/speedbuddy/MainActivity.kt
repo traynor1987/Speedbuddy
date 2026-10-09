@@ -504,8 +504,8 @@ class MainActivity : ComponentActivity() {
         }, color = Muted, fontSize = 15.sp)
         if (state.roadDataStatus.isNotBlank()) Text(state.roadDataStatus, color = Muted, fontSize = 11.sp)
         if(state.awaitingBoundary) Text("Tap the limit at the real sign",color=Accent,fontSize=13.sp)
-        if(state.limitMph == null && displayDecision?.changing!=true && state.active && !correctionAvailable)
-            Text("Waiting to identify this road — + becomes available when ready",color=Accent,fontSize=13.sp)
+        if(state.limitMph == null && displayDecision?.changing!=true && state.active)
+            Text("Waiting to verify this road",color=Accent,fontSize=13.sp)
         if(state.correctionMessage.isNotBlank()) Text(state.correctionMessage,color=Accent,fontSize=13.sp)
         if(compact) Spacer(Modifier.height(12.dp)) else Spacer(Modifier.weight(1f))
         state.averageSection?.let { section->

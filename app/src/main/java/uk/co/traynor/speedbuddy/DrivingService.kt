@@ -267,7 +267,6 @@ class DrivingService : Service(), LocationListener {
             return
         }
         DriveBus.publishLocationSpeed(speed, fix)
-        limitPipeline.observePending(DriveBus.state.value.limitDecision)
         schedulePresentationExpiry()
         startProcessing()
     }

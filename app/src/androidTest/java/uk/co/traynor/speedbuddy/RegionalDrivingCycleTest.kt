@@ -28,7 +28,7 @@ class RegionalDrivingCycleTest {
         RegionalPackStore(context).delete("lancashire")
     }
     private fun digest(file: File)=MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString(""){"%02x".format(it)}
-    private fun install(directional: Boolean=false) {
+    private fun install(directional: Boolean=false,sameLimit: Boolean=false) {
         RegionalPackStore(context).delete("lancashire")
         RegionalPackStore(context).delete("merseyside")
         val raw=File(context.cacheDir,"cycle1.sqlite").apply { delete() }
@@ -45,7 +45,7 @@ class RegionalDrivingCycleTest {
             }
             insert(101,listOf(origin,junction),mapOf("highway" to "residential","name" to "Test Road","maxspeed" to "30 mph")+
                 if(directional) mapOf("maxspeed:forward" to "30 mph","maxspeed:backward" to "50 mph") else emptyMap())
-            if(!directional) insert(102,listOf(junction,Geo.ahead(junction,90.0,500.0)),mapOf("highway" to "residential","name" to "Test Road","maxspeed" to "50 mph"))
+            if(!directional) insert(102,listOf(junction,Geo.ahead(junction,90.0,500.0)),mapOf("highway" to "residential","name" to "Test Road","maxspeed" to if(sameLimit) "30 mph" else "50 mph"))
         }
         val gzip=File(context.cacheDir,"cycle1.gz")
         GZIPOutputStream(gzip.outputStream()).use { raw.inputStream().use { input -> input.copyTo(it) } }
@@ -95,6 +95,39 @@ class RegionalDrivingCycleTest {
         val forward=fix(point,0.0,5000)
         val changed=pipeline.evaluate(forward,emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),5000,15_000,matcher.match(forward))
         assertEquals(30,changed.source);assertEquals(30,changed.decision.mph);assertFalse(changed.decision.assumed)
+    }
+    @Test fun installedMatcherConfirmationClearsPendingCautionAcrossSameLimitTurn() {
+        install(sameLimit=true)
+        val matcher=RegionalPackMatcher(context);val pipeline=DrivingLimitPipeline();val voice=DeferredLimitVoice()
+        fun evaluate(point: GeoPoint,bearing: Double?,at: Long,speed: Double=8.0): DriveLimitResult {
+            val f=Fix(point,5.0,speed,1.0,bearing,at)
+            val regional=matcher.match(f)
+            assertEquals(RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN,regional.state)
+            return pipeline.evaluate(f,emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),at,at,regional)
+        }
+        val first=evaluate(Geo.ahead(origin,0.0,30.0),0.0,1000)
+        assertEquals(30,first.presentation.mph);assertFalse(first.presentation.assumed)
+        assertNull(voice.update(first.presentation.mph,false,true))
+        val turned=evaluate(Geo.ahead(junction,90.0,30.0),90.0,2000)
+        assertEquals("way/102",turned.road!!.road.id);assertEquals(30,turned.presentation.mph)
+        assertFalse(turned.presentation.assumed);assertFalse(turned.presentation.changing)
+        assertNull(voice.update(turned.presentation.mph,false,true))
+        for(t in listOf(3000L,4000L,5000L)) {
+            val stopped=evaluate(Geo.ahead(junction,90.0,30.0),null,t,0.0)
+            assertEquals(30,stopped.presentation.mph);assertFalse(stopped.presentation.assumed)
+        }
+    }
+    @Test fun installedMatcherDisplaysDifferentLimitImmediatelyBeyondConnectedBoundary() {
+        install()
+        val matcher=RegionalPackMatcher(context);val pipeline=DrivingLimitPipeline()
+        val before=fix(Geo.ahead(origin,0.0,30.0),0.0,1000)
+        val first=pipeline.evaluate(before,emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),1000,1000,matcher.match(before))
+        assertEquals(30,first.presentation.mph)
+        val after=fix(Geo.ahead(junction,90.0,30.0),90.0,2000)
+        val regional=matcher.match(after)
+        assertEquals("way/102",regional.match!!.road.id)
+        val next=pipeline.evaluate(after,emptyList(),emptyList(),emptyMap(),emptyList(),emptyList(),2000,2000,regional)
+        assertEquals(50,next.presentation.mph);assertFalse(next.presentation.changing);assertFalse(next.presentation.assumed)
     }
     private fun field(name: String)=DrivingService::class.java.getDeclaredField(name).apply { isAccessible=true }
     private fun startService() {

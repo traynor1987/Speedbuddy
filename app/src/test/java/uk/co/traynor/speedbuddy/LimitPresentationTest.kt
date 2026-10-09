@@ -11,25 +11,27 @@ class LimitPresentationTest {
     private fun fix(point: GeoPoint,time: Long,b: Double?=0.0,speed: Double=8.0)=Fix(point,5.0,speed,1.0,b,time)
     private fun match(r: Road)=RoadMatch(r,0.0,0.0,.95,0.0)
     private fun known(mph: Int)=LimitDecision(mph,reason="Confirmed")
-    @Test fun alternatingRealConfidenceKeepsWarningUntilTwoFreshConfirmations() {
+    @Test fun freshConfirmationClearsWarningWithoutPresentationTimer() {
         val display=LimitPresentation()
         val a=fix(Geo.ahead(p,0.0,30.0),1000)
         assertFalse(display.resolve(a,match(old),known(20),listOf(old),true).assumed)
         assertTrue(display.resolve(a.copy(elapsedMs=2000),match(old),known(20).copy(assumed=true),listOf(old),true).assumed)
-        assertTrue(display.resolve(a.copy(elapsedMs=3000),match(old),known(20),listOf(old),true).assumed)
+        assertFalse(display.resolve(a.copy(elapsedMs=3000),match(old),known(20),listOf(old),true).assumed)
         assertTrue(display.resolve(a.copy(elapsedMs=4000),match(old),known(20).copy(assumed=true),listOf(old),true).assumed)
-        assertTrue(display.resolve(a.copy(elapsedMs=5000),match(old),known(20),listOf(old),true).assumed)
+        assertFalse(display.resolve(a.copy(elapsedMs=5000),match(old),known(20),listOf(old),true).assumed)
         assertFalse(display.resolve(a.copy(elapsedMs=6000),match(old),known(20),listOf(old),true).assumed)
     }
-    @Test fun serviceStylePendingAndCompletedFramesDoNotFlashConfirmation() {
+    @Test fun servicePendingFramesCannotDowngradeCompletedConfirmation() {
         val pipeline=DrivingLimitPipeline();val a=fix(Geo.ahead(p,0.0,30.0),1000)
         fun evaluate(f: Fix, roads: List<Road> = listOf(old))=pipeline.evaluate(f,roads,emptyList(),emptyMap(),emptyList(),emptyList(),f.elapsedMs,f.elapsedMs)
         assertFalse(evaluate(a).decision.assumed)
         for(t in listOf(2000L,3000L,4000L)) {
-            pipeline.observePending(known(20).copy(assumed=true,reason=PendingDrivingEvidence.reason))
+            val prior=evaluate(a.copy(elapsedMs=t-1000)).applyTo(DriveState(active=true,speedMph=20.0))
+            DriveBus.set(prior);DriveBus.publishLocationSpeed(20.0,a.copy(elapsedMs=t))
+            assertTrue(DriveBus.state.value.limitDecision!!.assumed)
             val result=evaluate(a.copy(elapsedMs=t))
             assertEquals(20,result.decision.mph);assertFalse(result.decision.assumed)
-            assertTrue(result.presentation.assumed)
+            assertFalse(result.presentation.assumed)
         }
         // UI caution cannot extend the real engine's expired numeric evidence.
         assertNull(evaluate(a.copy(elapsedMs=7001),emptyList()).decision.mph)

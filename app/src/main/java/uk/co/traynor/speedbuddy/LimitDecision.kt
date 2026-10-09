@@ -39,7 +39,7 @@ class LimitDecisionEngine {
     private var assumptionDropReason = "No recent confirmed limit"
     var pendingFeedback: Boolean = false; private set
     fun decide(fix: Fix,match: RoadMatch?,source: Int?,owner: Int?,boundaries: List<BoundaryCorrection>,now: Long,
-        observations: List<BoundaryObservation> = emptyList(),wallNow: Long = System.currentTimeMillis()): LimitDecision {
+        observations: List<BoundaryObservation> = emptyList(),wallNow: Long = System.currentTimeMillis(),verifiedCurrentRoad: Boolean=false): LimitDecision {
         currentRoadId = match?.road?.id
         val accepted = match?.takeIf { it.confidence >= .35 && fix.accuracyM <= 35 }
         currentMatch=accepted;reportable=fix.accuracyM<=25 && (accepted?.confidence ?: 0.0)>=.6
@@ -122,6 +122,23 @@ class LimitDecisionEngine {
             if(candidateTransition?.to?.road?.id!=accepted.road.id || candidateTransition?.new!=raw)
                 candidateTransition=Transition(lastMatch!!,accepted,previous,raw,fix,now)
         } else candidateTransition=null
+        // The regional matcher establishes the applicable number on a fresh, reliable
+        // new road. Clear only the extra numeric timer once GPS is beyond a shared
+        // boundary's uncertainty margin; owner observations above remain authoritative.
+        val priorRoad=lastMatch
+        if(verifiedCurrentRoad && accepted!=null && priorRoad!=null && previous!=null && previous!=raw &&
+            accepted.road.id!=priorRoad.road.id && accepted.confidence>=.9 && fix.accuracyM<=8 &&
+            accepted.distanceM<=fix.accuracyM && fix.bearing!=null && (accepted.headingDifference ?: 90.0)<=15) {
+            val crossedBoundary=listOf(priorRoad.road.points.first(),priorRoad.road.points.last()).any { boundary ->
+                listOf(accepted.road.points.first(),accepted.road.points.last()).any { Geo.distance(boundary,it)<12 } &&
+                    RoadLookAhead.outgoing(accepted.road,boundary)?.let { heading ->
+                        Geo.difference(heading,fix.bearing)<=15 && passedBoundary(fix,boundary,heading) &&
+                            Geo.distance(boundary,fix.point)*kotlin.math.cos(Math.toRadians(
+                                Geo.difference(heading,Geo.bearing(boundary,fix.point))))>maxOf(8.0,fix.accuracyM*2)
+                    }==true
+            }
+            if(crossedBoundary) stabilizer.reset()
+        }
         val displayed = stabilizer.resolve(fix,accepted,raw,now)
         if (displayed != null && accepted != null && displayed == raw) {
             if (previous != null && previous != displayed && lastMatch != null &&

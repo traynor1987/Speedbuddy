@@ -6,7 +6,6 @@ import org.json.JSONObject
 internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecisionEngine(),
     val matcher: RoadMatcher = RoadMatcher()) {
     private val presentation=LimitPresentation()
-    fun observePending(decision: LimitDecision?)=presentation.noteAssumption(decision)
     private val upcomingDetector=UpcomingLimitDetector()
     private data class Preview(val upcoming: UpcomingLimit,val current: Int?,val roadId: String?,val fix: Fix,val at: Long)
     private var preview: Preview? = null
@@ -77,7 +76,8 @@ internal class DrivingLimitPipeline(val engine: LimitDecisionEngine = LimitDecis
             if(fix.bearing!=null) (it.headingDifference ?: 90.0)<=30
             else fix.accuracyM<=8 && it.distanceM<=fix.accuracyM && it.confidence>=.85 }
         val owner=OwnerRoadLimits.select(ownerRoad?.road,fix.bearing,overrides,corrections,fix.point)
-        val decision=engine.decide(fix,road,source,owner?.mph,boundaries.map(RoadIdentity::boundary),now,observations.map(RoadIdentity::observation),wallNow).let {
+        val decision=engine.decide(fix,road,source,owner?.mph,boundaries.map(RoadIdentity::boundary),now,observations.map(RoadIdentity::observation),wallNow,
+            verifiedCurrentRoad=covered && regional?.state==RoadProviderState.ROAD_MATCHED_LIMIT_KNOWN).let {
             if(owner?.national==true || !it.ownerApplied && road!=null && source==it.mph &&
                 PackSpeedLimits.national(road.road.tags,fix.bearing,road)) it.copy(national=true) else it
         }
